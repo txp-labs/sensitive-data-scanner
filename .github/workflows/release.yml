@@ -156,6 +156,8 @@ jobs:
           DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           set -euo pipefail
+          # The estate rollout templates (docs/ARCHITECTURE.md, Estate rollout).
+          cp deploy/scanner.yaml deploy/estate-stackset.yaml dist/
           cd dist
           sha256sum -- * > SHA256SUMS
           echo "ghcr.io/txp-labs/sensitive-data-scanner@${DIGEST}" > IMAGE_DIGEST

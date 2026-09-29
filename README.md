@@ -115,6 +115,11 @@ FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
 
 - Every setting, and the permissions it needs:
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Every account and region of an organization:** `deploy/estate-stackset.yaml`
+  deploys `deploy/scanner.yaml` through a service-managed StackSet to the
+  organizational units and regions you name, with read-only IAM per source,
+  and findings pushed to one central EventBridge bus
+  ([Estate rollout](docs/ARCHITECTURE.md#estate-rollout)).
 - The results: `findings/latest.json` in the results bucket
   ([docs/FINDINGS.md](docs/FINDINGS.md)).
 
@@ -164,6 +169,7 @@ not on npm yet.
 | `packages/spec-ts/` | The TypeScript package |
 | `scanner/` | The Python runner: Presidio recognizers, AWS adapters (S3, CloudWatch Logs, DynamoDB), findings |
 | `schema/` | The findings JSON Schema |
+| `deploy/` | CloudFormation for the estate rollout: `scanner.yaml` (one account and region) and `estate-stackset.yaml` (a service-managed StackSet) |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [findings](docs/FINDINGS.md), [releasing](docs/RELEASING.md) |
 
 ## License

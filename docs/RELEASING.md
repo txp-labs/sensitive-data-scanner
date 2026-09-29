@@ -12,6 +12,7 @@ pinned by digest.
 | `ghcr.io/txp-labs/sensitive-data-scanner:X.Y.Z` | The Lambda container image. Python 3.12 slim, the Lambda runtime interface client, and pyarrow for the columnar formats; handler `sensitive_data_scanner.handler.handler`. The release notes and `IMAGE_DIGEST` give its digest. **The recommended package** |
 | `sensitive-data-scanner-X.Y.Z-lambda-python3.12-x86_64.zip` | The same scanner as a Lambda zip for the managed `python3.12` runtime (x86_64), with the same handler, **without pyarrow**: with it the zip would pass Lambda's 250 MB unzipped limit. It reads every text format, gzip, and Avro with the standard library's codecs, and counts Parquet, ORC, zstd and snappy or zstandard Avro as skipped `columnar` |
 | `sensitive_data_scanner-X.Y.Z-py3-none-any.whl` | The Python package, with the spec, the findings schema and the licenses inside. There is no sdist: the source release is the tag |
+| `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout) |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the image (syft) |
 | `SHA256SUMS` | SHA-256 of every file above |
 
