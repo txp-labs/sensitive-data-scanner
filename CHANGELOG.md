@@ -13,7 +13,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - Test vectors: every Stugum live-run case, and
   txp-labs/mermera-attestation-app#1067's fixtures as conversations (Connect
   chat, Contact Lens, Lex V2 logs, Connect flow logs, spoken and split-turn
-  forms, near-misses, redacted turns), plus normalization pairs.
+  forms, near-misses, redacted turns), plus normalization pairs. An emoji case
+  checks that offsets are UTF-16 code units in both implementations.
 
 ### Feature
 - `@txp-labs/sensitive-data-spec` (`packages/spec-ts`, not yet published):
@@ -21,6 +22,14 @@ bumps the minor version. Spec changes are listed under **Spec**.
   text, classifies conversations (prompt carryover, split turns, shape and
   context), and redacts matches in memory. No runtime dependencies. Tested
   against every vector.
+
+- The Python runner's detection (`scanner/`): Presidio Analyzer with no NLP
+  model. It adds the spec's card and SSN rules to Presidio's recognizers, and
+  a DOB recognizer. Custom recognizers cover spoken digits and conversations:
+  question-then-answer prompt carryover and split same-speaker turns. A
+  context enhancer works without an NLP model. It is tested against every
+  vector through the spec engine and through Presidio, and a parity test
+  fails if the Python and TypeScript implementations disagree on any vector.
 
 ### Internal
 - CI: Python (ruff, mypy, pytest), Node (typecheck, tests), gitleaks and
