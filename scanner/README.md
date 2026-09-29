@@ -22,10 +22,12 @@ detector = Detector()
 detector.analyze_text("SSN: 512-43-7788").detections
 # [Detection(cls='us_ssn', via='context', confidence='high')]
 
-detector.analyze_conversation([
-    Turn("bot", "Please enter or say your nine digit Social Security number."),
-    Turn("customer", "123456789#", channel="dtmf"),
-]).detections
+detector.analyze_conversation(
+    [
+        Turn("bot", "Please enter or say your nine digit Social Security number."),
+        Turn("customer", "123456789#", channel="dtmf"),
+    ]
+).detections
 # [Detection(cls='us_ssn', via='prompt', confidence='high')]
 ```
 
