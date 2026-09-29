@@ -1,4 +1,4 @@
-"""The batch runner: one scheduled scan of the S3 prefixes and log groups named.
+"""The batch runner: one scheduled scan of the S3 prefixes, log groups and DynamoDB tables named.
 
 It runs in the account it scans. It reads the stores it was given, and writes
 to its results bucket only:
@@ -31,9 +31,11 @@ from .findings import Coverage, findings_document
 from .safety import ScanError, error_name, log_event
 from .sources.base import Budget, FindingStore, SourceRun
 from .sources.cloudwatch_logs import CloudWatchLogsSource
+from .sources.dynamodb import DynamoDBSource
 from .sources.s3 import S3Source
 
 if TYPE_CHECKING:
+    from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_events import EventBridgeClient
     from mypy_boto3_logs import CloudWatchLogsClient
     from mypy_boto3_s3 import S3Client
@@ -62,6 +64,7 @@ class Clients:
     s3: S3Client
     logs: CloudWatchLogsClient
     events: EventBridgeClient | None = None
+    dynamodb: DynamoDBClient | None = None
 
 
 class Keys:
@@ -137,6 +140,19 @@ def build_sources(config: Config, clients: Clients, region: str) -> list[Any]:
         )
         for g in config.log_groups
     )
+    if config.dynamodb_targets and clients.dynamodb is None:
+        raise ValueError("no DynamoDB client")
+    if clients.dynamodb is not None:
+        sources.extend(
+            DynamoDBSource(
+                clients.dynamodb,
+                target=t,
+                region=region,
+                page_size=config.dynamodb_page_size,
+                max_pages=config.dynamodb_max_pages,
+            )
+            for t in config.dynamodb_targets
+        )
     return sources
 
 

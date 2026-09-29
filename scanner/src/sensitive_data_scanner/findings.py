@@ -124,6 +124,39 @@ def log_resource(group: str, stream: str, timestamp_ms: int) -> dict[str, Any]:
     return out
 
 
+def dynamodb_link(region: str, table: str) -> str:
+    """The table's item explorer. It names no key: the reviewer queries by the masked key."""
+    return (
+        f"https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}"
+        f"#item-explorer?table={urllib.parse.quote(table, safe='')}"
+    )
+
+
+def dynamodb_resource(
+    table: str,
+    key: dict[str, str],
+    key_hash: str,
+    attribute_path: str,
+    *,
+    planted: bool = False,
+) -> dict[str, Any]:
+    """An item by its key hash, with the key's values masked like an S3 object key."""
+    masked = {name: redact_digits(value) for name, value in sorted(key.items())}
+    path = redact_digits(attribute_path)
+    out: dict[str, Any] = {
+        "type": "dynamodb_item",
+        "table": table,
+        "keyHash": key_hash,
+        "key": masked,
+        "attributePath": path,
+    }
+    if masked != dict(sorted(key.items())) or path != attribute_path:
+        out["keyMasked"] = True
+    if planted:
+        out["planted"] = True
+    return out
+
+
 def finding_id(resource: dict[str, Any], cls: str) -> str:
     """Stable across runs for the same location and class (and object version)."""
     basis = "|".join(f"{k}={resource[k]}" for k in sorted(resource)) + f"|class={cls}"
@@ -167,7 +200,7 @@ def finding_json(
 class Coverage:
     """What one source's pass read, sampled, skipped and could not read."""
 
-    kind: str  # s3 | cloudwatch_logs
+    kind: str  # s3 | cloudwatch_logs | dynamodb
     target: str
     listed: int = 0
     eligible: int = 0

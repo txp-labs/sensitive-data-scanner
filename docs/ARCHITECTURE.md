@@ -34,6 +34,8 @@ Lambda: sensitive_data_scanner.handler.handler   (container image or zip)
         │     named buckets/prefixes                  findings/latest.json
         ├── CloudWatch Logs: FilterLogEvents          findings/runs/<runId>.json
         │     named log groups                        state/ (cursors, lock)
+        ├── DynamoDB: DescribeTable, Query / Scan
+        │     named tables
         │
         └── optional: events:PutEvents ────────────► consumer-owned EventBridge bus
                                                        (another account)
@@ -61,11 +63,13 @@ One run:
      exceeds the budget, it is cut and reported as partial, and the run
      moves on. Lex V2 records are grouped by session, so a bot's prompt in
      one record classes the customer's answer in the next.
+   - **DynamoDB.** See [The DynamoDB source](#the-dynamodb-source).
 4. **Items.**
    - Connect chat and Contact Lens transcripts, Lex V2 logs and Connect flow
      logs are read as **conversations**. That means prompt carryover, split
      turns and spoken digits.
    - Other JSON is read field by field, with the key path as context.
+   - A DynamoDB item is read attribute by attribute (below).
    - CSV is read with its header as context. Everything else is read as text.
 5. **Findings.**
    - The run writes the document to `findings/runs/<runId>.json` and
@@ -97,6 +101,91 @@ One run:
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES` | Per-object read and gunzip limits | 20 MiB, 100 MiB |
 | `S3_CLOCK_SKEW_SECONDS` | How far before the last pass an object is still re-read | 300 |
 | `FINDINGS_EVENT_BUS_ARN` | Also push findings to this EventBridge bus | off |
+| `SCAN_DYNAMODB` | DynamoDB tables to read, as a JSON list (below) | none |
+| `DYNAMODB_PAGE_SIZE` | Items per Query or Scan page (`Limit`) | 100 |
+| `DYNAMODB_MAX_PAGES` | Pages per table per run (the page cap) | 200 |
+
+### The DynamoDB source
+
+`SCAN_DYNAMODB` is a JSON list with one entry per read:
+
+```json
+[
+  {
+    "table": "stugum",
+    "partition": "T#t_0123abcd",
+    "sortPrefix": "R#",
+    "include": ["stepResults[].observedDtmf", "stepResults[].heard", "steps"],
+    "exclude": [],
+    "keypad": ["stepResults[].observedDtmf", "steps[].digits"],
+    "prompts": ["stepResults[].heard", "steps[].text"],
+    "planted": ["steps"]
+  }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `table` | The table name (required) |
+| `partition` | A partition key value: the read is a `Query` of that partition. Without it, the read is a `Scan` of the table |
+| `sortPrefix` | With `partition`: only items whose sort key begins with this (`begins_with`) |
+| `include` | Attribute paths to read. The request projects their top-level attributes and the key; the paths then pick the leaves. Empty: every attribute |
+| `exclude` | Attribute paths never read |
+| `keypad` | Paths that hold keypad (DTMF) entries |
+| `prompts` | Paths that hold what the IVR said: the prompts |
+| `planted` | Paths that hold test inputs planted on purpose, such as a test script's steps |
+
+**Paths.** A `.` goes between map keys, and `[]` stands for every element of
+a list (or set): `stepResults[].observedDtmf`. A path covers everything
+under it, so `steps` covers `steps[].digits`. The key names and types come
+from `DescribeTable`, so the entry names values only.
+
+**How an item is read.**
+- Each string or number leaf is read **on its own**. A finding names the
+  leaf's path with `[]` for each list index (`stepResults[].observedDtmf`),
+  and its offsets carry the exact leaf as a JSON Pointer
+  (`/stepResults/3/observedDtmf`). Binary values, booleans and nulls are
+  not read.
+- A **keypad** leaf is a customer turn on the `dtmf` channel. It goes
+  through the spec's normalization like every other source (`123456789#`
+  loses its terminator), and it is never joined to another turn.
+- A **prompt** leaf is a bot turn. Prompt and keypad leaves under one
+  top-level attribute form one conversation, in list order, with a list
+  element's prompt before its keypad entry. So a prompt classes the entry
+  that follows it, as in a Connect flow log: `010180#` after "enter your
+  date of birth" is a date of birth, and a Luhn-failing number after a card
+  prompt is a card with low confidence.
+- A keypad leaf with **no prompt paths configured** takes its own map's other
+  short strings and key names as its prompt (a step labeled "Enter SSN").
+- Every other leaf is read as stored text, with its path and its map's short
+  strings as context.
+- A **planted** path's findings carry `planted: true`, so a reviewer can
+  tell data a test put there on purpose from a leak. Leave `planted` paths
+  out with `exclude` to see leaks only.
+- `[REDACTED]` and `[REDACTED:<label>]` count as redaction markers, not
+  findings. A negative-control run whose entries are redacted labels has
+  zero findings.
+
+**Paging, rate limits and budget.**
+- Each run reads at most `DYNAMODB_MAX_PAGES` pages of `DYNAMODB_PAGE_SIZE`
+  items per entry, within its share of the run's budget. The cursor keeps
+  the last item read, and the next run resumes there, so a large table is
+  covered over several runs (`backlog` says so).
+- A throttled request (`ProvisionedThroughputExceededException`,
+  `ThrottlingException`, `RequestLimitExceeded`) is retried with exponential
+  backoff and jitter, up to five times. Past that, the source records the
+  error name and the next run resumes at the same key.
+- When a pass reaches the last page, findings for items the pass no longer
+  found (deleted, or clean now) drop out. There is no change feed: every
+  pass reads the whole partition or table again.
+- Reads are eventually consistent, the cheaper kind.
+
+**Keys.** A finding names the item by `keyHash`, an HMAC-SHA256 of its key
+under a random salt kept in the scanner's state, so a short key (a nine-digit
+number) cannot be recovered by hashing guesses. It also gives the key's
+values masked the way S3 object keys are. Like the S3 source's resume key,
+the cursor in `state/` holds the last key read, and `state/` is the
+scanner's own.
 
 ### Permissions (least privilege)
 
@@ -104,16 +193,47 @@ One run:
   - `s3:ListBucket`, conditioned on the named prefixes;
   - `s3:GetObject` and `s3:GetObjectVersion` on those prefixes;
   - `kms:Decrypt` where the objects use SSE-KMS;
-  - `logs:FilterLogEvents` on the named log groups.
+  - `logs:FilterLogEvents` on the named log groups;
+  - `dynamodb:DescribeTable`, `dynamodb:Query` and `dynamodb:Scan` on the
+    named tables (grant `Scan` only where an entry names no partition);
+  - `kms:Decrypt` on a table's customer managed key, where it has one,
+    conditioned on `kms:ViaService` `dynamodb.<region>.amazonaws.com`.
+    Tables with an AWS owned or AWS managed key need no KMS permission.
 - **Write**: `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on the
   results bucket only.
 - **Optional**: `events:PutEvents` on the one consumer bus ARN.
 - **No inbound access.** A consumer reads `findings/*` in the results
   bucket, or receives events. It never needs `state/*`.
 
+For DynamoDB, the statements look like this (a table `stugum` in
+`us-west-2`, with a customer managed key):
+
+```json
+[
+  {
+    "Sid": "ReadNamedTables",
+    "Effect": "Allow",
+    "Action": ["dynamodb:DescribeTable", "dynamodb:Query", "dynamodb:Scan"],
+    "Resource": "arn:aws:dynamodb:us-west-2:111122223333:table/stugum"
+  },
+  {
+    "Sid": "DecryptCustomerKeyThroughDynamoDB",
+    "Effect": "Allow",
+    "Action": "kms:Decrypt",
+    "Resource": "arn:aws:kms:us-west-2:111122223333:key/<key-id>",
+    "Condition": {
+      "StringEquals": { "kms:ViaService": "dynamodb.us-west-2.amazonaws.com" }
+    }
+  }
+]
+```
+
+No write action (`PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`)
+and no index ARN is needed. The scanner reads the base table only.
+
 The IAM policy and the schedule belong to whoever deploys the scanner, for
 example Mermera's customer template. This repository creates no AWS
-resources.
+resources, and it holds no CloudFormation or Terraform.
 
 ## Event-driven mode (phase 2, design only)
 

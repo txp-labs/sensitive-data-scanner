@@ -6,6 +6,34 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- A DynamoDB source adapter (`SCAN_DYNAMODB`). It reads named tables with a
+  paginated Query (a partition key value, optionally a sort-key prefix) or a
+  Scan, read-only, with a projection on the configured attribute paths
+  (`stepResults[].observedDtmf`, `[]` for list elements). Throttled requests
+  back off and retry; a page cap and the run budget bound each run, and the
+  next run resumes at the last item read. Each string leaf is read on its
+  own. Keypad (DTMF) leaves are read as `dtmf` turns after the prompt that
+  asked for them, with the spec's normalization, so `123456789#` after an
+  SSN prompt is an SSN. Planted test inputs (`planted` paths) are marked in
+  their findings. A finding names the table, a salted hash of the item key,
+  the key masked like an S3 object key, and the attribute path; never a
+  value. The no-leak suite covers the adapter, and positive and negative
+  control fixtures in a call-test result's shape prove findings on one and
+  none on the other.
+- The findings schema gains the `dynamodb_item` resource and format and the
+  `dynamodb` coverage kind. They are additive and appear only when a
+  DynamoDB source is configured; `schemaVersion` stays `1.0`.
+- `[REDACTED]` and `[REDACTED:<label>]` count as redaction markers in
+  coverage, like `[PII]`.
+
+### Docs
+- README and `docs/ARCHITECTURE.md`: the DynamoDB source, its configuration
+  and its IAM permissions (`dynamodb:Query`, `dynamodb:Scan`,
+  `dynamodb:DescribeTable` on the named tables, and `kms:Decrypt` where a
+  table uses a customer managed key). `docs/FINDINGS.md`: the DynamoDB
+  resource.
+
 ### Internal
 - Release: build the wheel only (the sdist could not carry the spec and
   licenses), and allow re-running the release of an existing tag by hand.

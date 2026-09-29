@@ -1,0 +1,222 @@
+{
+  "_comment": "Synthetic. Made-up values only, in the shape of a Stugum call-test result item (DynamoDB JSON).",
+  "Item": {
+    "pk": {
+      "S": "T#t_0000example"
+    },
+    "sk": {
+      "S": "R#2026-09-29T15:00:00Z#r_0000positive"
+    },
+    "testId": {
+      "S": "t_0000example"
+    },
+    "runId": {
+      "S": "r_0000positive"
+    },
+    "control": {
+      "S": "positive"
+    },
+    "status": {
+      "S": "completed"
+    },
+    "startedAt": {
+      "S": "2026-09-29T15:00:00Z"
+    },
+    "callDurationSeconds": {
+      "N": "48"
+    },
+    "passed": {
+      "BOOL": true
+    },
+    "steps": {
+      "L": [
+        {
+          "M": {
+            "action": {
+              "S": "expect"
+            },
+            "text": {
+              "S": "Please enter your date of birth as m m d d y y, then press pound."
+            }
+          }
+        },
+        {
+          "M": {
+            "action": {
+              "S": "dtmf"
+            },
+            "digits": {
+              "S": "010180#"
+            }
+          }
+        },
+        {
+          "M": {
+            "action": {
+              "S": "expect"
+            },
+            "text": {
+              "S": "Please enter or say your nine digit Social Security number."
+            }
+          }
+        },
+        {
+          "M": {
+            "action": {
+              "S": "dtmf"
+            },
+            "digits": {
+              "S": "123456789#"
+            }
+          }
+        },
+        {
+          "M": {
+            "action": {
+              "S": "expect"
+            },
+            "text": {
+              "S": "Please enter your credit card number, then press pound."
+            }
+          }
+        },
+        {
+          "M": {
+            "action": {
+              "S": "dtmf"
+            },
+            "digits": {
+              "S": "5555666677778888#"
+            }
+          }
+        },
+        {
+          "M": {
+            "action": {
+              "S": "expect"
+            },
+            "text": {
+              "S": "Thank you. Goodbye."
+            }
+          }
+        }
+      ]
+    },
+    "stepResults": {
+      "L": [
+        {
+          "M": {
+            "stepIndex": {
+              "N": "0"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1200"
+            },
+            "heard": {
+              "S": "Please enter your date of birth as m m d d y y, then press pound."
+            }
+          }
+        },
+        {
+          "M": {
+            "stepIndex": {
+              "N": "1"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1210"
+            },
+            "observedDtmf": {
+              "S": "010180#"
+            }
+          }
+        },
+        {
+          "M": {
+            "stepIndex": {
+              "N": "2"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1220"
+            },
+            "heard": {
+              "S": "Please enter or say your nine digit Social Security number."
+            }
+          }
+        },
+        {
+          "M": {
+            "stepIndex": {
+              "N": "3"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1230"
+            },
+            "observedDtmf": {
+              "S": "123456789#"
+            }
+          }
+        },
+        {
+          "M": {
+            "stepIndex": {
+              "N": "4"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1240"
+            },
+            "heard": {
+              "S": "Please enter your credit card number, then press pound."
+            }
+          }
+        },
+        {
+          "M": {
+            "stepIndex": {
+              "N": "5"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1250"
+            },
+            "observedDtmf": {
+              "S": "5555666677778888#"
+            }
+          }
+        },
+        {
+          "M": {
+            "stepIndex": {
+              "N": "6"
+            },
+            "status": {
+              "S": "passed"
+            },
+            "durationMs": {
+              "N": "1260"
+            },
+            "heard": {
+              "S": "Thank you. Goodbye."
+            }
+          }
+        }
+      ]
+    }
+  }
+}
