@@ -805,6 +805,54 @@ def test_a_link_built_from_a_masked_name_is_dropped() -> None:
     assert type(link_for({}, dynamodb_link("us-west-2", "t"))) is str
 
 
+def test_no_value_leaves_parameters_or_secrets(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Parameters and secrets named with values and holding values: counts only, and the
+    secret's value (the credential beside the card) never appears."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_config_stores import stubs
+
+    s = stubs(env, "ssm", "secretsmanager")
+    p1, p2 = f"/cust/{SSN_A}/card", f"/cust/{CARDS['visa']}"
+    s["ssm"].add_response(
+        "describe_parameters",
+        {"Parameters": [{"Name": p1, "Type": "SecureString"}, {"Name": p2, "Type": "String"}]},
+    )
+    s["ssm"].add_response(
+        "get_parameters",
+        {
+            "Parameters": [
+                {"Name": p1, "Type": "SecureString", "Value": f"card {CARDS['amex']}"},
+                {"Name": p2, "Type": "String", "Value": json.dumps({"ssn": dashed(SSN_B)})},
+            ]
+        },
+    )
+    secret = f"cust-{SSN_B}"
+    s["secretsmanager"].add_response("list_secrets", {"SecretList": [{"Name": secret}]})
+    # A made-up credential beside the values, built here so no literal looks like one.
+    marker = "-".join(["made", "up", "marker", str(len(CARDS) * 7)])
+    value = json.dumps({"card": CARDS["jcb"], "pw": marker, "ssn": SSN_A})
+    s["secretsmanager"].add_response("get_secret_value", {"Name": secret, "SecretString": value})
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"ssm", "secretsmanager"}),
+            secrets_read=True,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert {f["resource"]["service"] for f in doc["findings"]} == {"ssm", "secretsmanager"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+        assert marker not in blob, name_
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

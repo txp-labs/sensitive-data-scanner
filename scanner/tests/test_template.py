@@ -87,7 +87,8 @@ READ = re.compile(
     r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List"
     r"|kinesis:(List|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
     r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$"
-    r"|ssm:GetParameter$)"
+    r"|ssm:(DescribeParameters|GetParameters|GetParameter|ListTagsForResource)$"
+    r"|secretsmanager:ListSecrets$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -211,10 +212,22 @@ def test_the_scanner_may_list_its_own_bucket() -> None:
 
 
 def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
-    ssm = [s for s in statements() if any(a.startswith("ssm:") for a in actions(s))]
-    assert [s["Sid"] for s in ssm] == ["ReadOwnConfigParameter"]
-    assert actions(ssm[0]) == ["ssm:GetParameter"]
-    assert in_account(ssm[0]["Resource"], "ssm", "parameter/sensitive-data-scanner/")
+    ssm = [
+        s
+        for s in statements()
+        if s["Effect"] == "Allow" and any(a.startswith("ssm:") for a in actions(s))
+    ]
+    # Its own configuration parameter, and the Parameter Store source's reads: no write.
+    assert [s["Sid"] for s in ssm] == [
+        "ReadOwnConfigParameter",
+        "ListConfigStores",
+        "ReadParameters",
+    ]
+    own = ssm[0]
+    assert actions(own) == ["ssm:GetParameter"]
+    assert in_account(own["Resource"], "ssm", "parameter/sensitive-data-scanner/")
+    assert actions(ssm[2]) == ["ssm:GetParameters"]
+    assert in_account(ssm[2]["Resource"], "ssm", "parameter/")
     stmts = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
     gated = [s for s in stmts if isinstance(s, dict) and "Fn::If" in s]
     assert any(s["Fn::If"][0] == "ConfigInSsm" for s in gated)
@@ -272,6 +285,7 @@ SERVICES = {
     "kinesis": "kinesis",
     "firehose": "firehose",
     "sqs": "sqs",
+    "secretsmanager": "secretsmanager",
 }
 
 
@@ -422,6 +436,24 @@ def test_queues_are_received_from_never_consumed() -> None:
     source = (PACKAGE / "sources" / "streams.py").read_text()
     assert "VisibilityTimeout=0" in source
     assert "delete_message" not in source and "change_message_visibility" not in source
+
+
+def test_config_stores_are_read_never_written_and_secrets_are_opt_in() -> None:
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "ssm:PutParameter",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret*",
+    } <= (denied)
+    secrets = next(s for s in statements() if s.get("Sid") == "ReadSecretValues")
+    assert in_account(secrets["Resource"], "secretsmanager", "secret:")
+    wrapped = [
+        s["Fn::If"]
+        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        if isinstance(s, dict) and "Fn::If" in s
+    ]
+    assert [c for c, st, _ in wrapped if st.get("Sid") == "ReadSecretValues"] == ["SecretsValues"]
+    assert SCANNER["Parameters"]["SecretsRead"]["Default"] == "false"
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:

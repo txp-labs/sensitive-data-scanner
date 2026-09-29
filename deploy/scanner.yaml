@@ -28,6 +28,8 @@ Metadata:
         Parameters: [EbsDirectRead]
       - Label: { default: SQS dead-letter queues (opt-in receives) }
         Parameters: [SqsDlqRead]
+      - Label: { default: Parameter Store and Secrets Manager }
+        Parameters: [SsmDecrypt, SecretsRead]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -57,7 +59,7 @@ Parameters:
     Description: >-
       DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
       opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
-      firehose, sqs.
+      firehose, sqs, ssm, secretsmanager.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -157,6 +159,21 @@ Parameters:
       SQS_DLQ_READ - receive from dead-letter queues with VisibilityTimeout=0,
       never deleting. A receive raises each message's receive count, so a DLQ
       with its own redrive policy is never read. Live queues are never read.
+  SsmDecrypt:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: >-
+      SSM_DECRYPT - read SecureString parameters, decrypted through SSM
+      (kms:Decrypt with kms:ViaService ssm.<region>). Off: they are counted,
+      not read.
+  SecretsRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      SECRETS_READ - read each secret's value for sensitive data (reported as
+      counts, never the value). Off: secrets are listed and reported.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -198,6 +215,8 @@ Conditions:
   ConfigInSsm: !Equals [!Select [0, !Split [":", !Sub "${ConfigLocation}:"]], ssm]
   EbsRead: !Equals [!Ref EbsDirectRead, "true"]
   SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
+  SsmSecureStrings: !Equals [!Ref SsmDecrypt, "true"]
+  SecretsValues: !Equals [!Ref SecretsRead, "true"]
 
 Resources:
   ResultsBucket:
@@ -442,6 +461,45 @@ Resources:
                     StringEquals:
                       kms:ViaService: !Sub sqs.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
+              # --- Parameter Store and Secrets Manager
+              - Sid: ListConfigStores
+                Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                  - ssm:ListTagsForResource
+                  - secretsmanager:ListSecrets
+                Resource: "*"
+              - Sid: ReadParameters
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*
+              - !If
+                - SsmSecureStrings
+                - Sid: DecryptParametersThroughSsm
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+                - !Ref AWS::NoValue
+              - !If
+                - SecretsValues
+                - Sid: ReadSecretValues
+                  Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*
+                - !Ref AWS::NoValue
+              - !If
+                - SecretsValues
+                - Sid: DecryptSecretsThroughSecretsManager
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
+                - !Ref AWS::NoValue
               # --- Push findings to the central sink
               - !If
                 - HasBus
@@ -585,6 +643,22 @@ Resources:
                   - sqs:DeleteQueue
                   - sqs:StartMessageMoveTask
                   - sqs:CancelMessageMoveTask
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter*
+                  - ssm:LabelParameterVersion
+                  - ssm:UnlabelParameterVersion
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecret*
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:RestoreSecret
+                  - secretsmanager:RotateSecret
+                  - secretsmanager:CancelRotateSecret
+                  - secretsmanager:PutResourcePolicy
+                  - secretsmanager:DeleteResourcePolicy
+                  - secretsmanager:ReplicateSecretToRegions
+                  - secretsmanager:RemoveRegionsFromReplication
+                  - secretsmanager:StopReplicationToReplica
                 Resource: "*"
               - Sid: NeverAskLakeFormation
                 Effect: Deny
@@ -801,6 +875,8 @@ Resources:
           CONFIG_LOCATION: !Ref ConfigLocation
           EBS_DIRECT_READ: !Ref EbsDirectRead
           SQS_DLQ_READ: !Ref SqsDlqRead
+          SSM_DECRYPT: !Ref SsmDecrypt
+          SECRETS_READ: !Ref SecretsRead
 
   ScheduleRole:
     Type: AWS::IAM::Role

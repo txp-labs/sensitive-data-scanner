@@ -141,6 +141,8 @@ One run:
 | `KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS` | Records sampled per shard from `TRIM_HORIZON`, and shards per stream | 100 and 50 |
 | `SQS_DLQ_READ` | Receive from dead-letter queues ([below](#streams-and-queues)) | off: reported `read_not_configured` |
 | `SQS_MESSAGES_PER_QUEUE` | Messages received per dead-letter queue per run | 100 |
+| `SSM_DECRYPT` | Read `SecureString` parameters, decrypted through SSM ([below](#parameter-store-and-secrets-manager)) | on |
+| `SECRETS_READ` | Read Secrets Manager secrets' values for sensitive data | off: listed and reported `read_not_configured` |
 | `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
 
 #### Configuration beyond 4 KB
@@ -211,6 +213,8 @@ region, and a bucket in another region is left to that region's scanner.
 | `kinesis` | `ListStreams`, `ListShards` | each shard sampled from `TRIM_HORIZON`, never checkpointed ([below](#streams-and-queues)) |
 | `firehose` | `ListDeliveryStreams`, `DescribeDeliveryStream` | each S3 location it delivers to, by the S3 source |
 | `sqs` | `ListQueues`, `GetQueueAttributes` | dead-letter queues only, received from and left in place, opt-in |
+| `ssm` | `DescribeParameters` | one store, `parameter-store`: each parameter's value (`GetParameters`, ten at a time) |
+| `secretsmanager` | `ListSecrets` | one store, `secrets-manager`: each secret's value, opt-in (`GetSecretValue`) |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -669,6 +673,38 @@ Every other queue is live traffic and is **never read** (`live_queue`).
   `store_field` with `service: sqs`, the queue as `store`,
   `field: messages` and `readBy: receive`.
 
+### Parameter Store and Secrets Manager
+
+Each is **one store** per account and region (`parameter-store`,
+`secrets-manager`) holding many values, so the run summary stays short. The
+allow and deny rules apply to **each parameter or secret by its name** or
+its tags (`ssm:/prod/*`, `secretsmanager:rds!*`, `secretsmanager:tag:pii=no`),
+and the store's `excluded` counts what they left out by reason. `items`
+counts what was listed, and `itemTypes` counts parameters by type or secrets
+managed by another service (RDS, for example) against the account's own.
+
+A finding names **one parameter or secret** (`store_field` with the name as
+`store`, `field: value`) with counts only, and never the value, a key or a
+fragment of it.
+
+- **SSM Parameter Store** (`ssm`): `DescribeParameters`, then
+  `GetParameters` ten names at a time, resumable by name within the budget.
+  `SecureString` values are decrypted through SSM (`SSM_DECRYPT`, on by
+  default: `kms:Decrypt` with `kms:ViaService` `ssm.<region>`). With it off,
+  they are counted as `excluded.secure_string` and not read. Only the current
+  version is read, not the history. The scanner's own configuration
+  parameters (under `/sensitive-data-scanner/`, see `CONFIG_LOCATION`) are
+  never read as data (`excluded.self`).
+- **Secrets Manager** (`secretsmanager`): `ListSecrets` always, so every
+  secret is counted in the summary. Reading is **off by default**
+  (`SECRETS_READ`), because a secret holds credentials and each read is an
+  event its owner audits in CloudTrail. When on, `GetSecretValue` is called
+  for each secret the rules let through, and its value (JSON by key, or
+  text) is read for sensitive data: a card number or an SSN kept in a secret
+  is a finding. A secret the scanner may not read (its resource policy, its
+  key) is counted `unreadable`, and the pass goes on. Binary secrets that are
+  not text are counted `unreadable`.
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -859,6 +895,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `opensearch` | `es:ListDomainNames`, `es:DescribeDomains`, `aoss:ListCollections`, `aoss:BatchGetCollection`; `es:ListTags`, `aoss:ListTagsForResource` only with tag rules; `es:ESHttpGet` on the domains; with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on the collections | `*`; this account's domains and collections |
 | `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx` | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `rds:DescribeDBClusters`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`; with `EbsDirectRead`, `ebs:ListSnapshotBlocks` and `ebs:GetSnapshotBlock` on this region's snapshots, and `kms:Decrypt` through EBS | `*`; `snapshot/*` |
 | `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
+| `ssm`, `secretsmanager` | `ssm:DescribeParameters`, `ssm:GetParameters` (on this account's parameters), `secretsmanager:ListSecrets`; `ssm:ListTagsForResource` only with tag rules; with `SsmDecrypt`, `kms:Decrypt` through SSM; with `SecretsRead`, `secretsmanager:GetSecretValue` on this account's secrets and `kms:Decrypt` through Secrets Manager | `*`; the ARNs named |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
@@ -1011,6 +1048,11 @@ several things:
 | Streams and queues | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:ListTagsForStream`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sqs:ListQueueTags` | `*` | Firehose destinations are read with the S3 statements |
 | SQS dead-letter queues (opt-in) | `sqs:ReceiveMessage` | this account's queues in the region (`sqs:<region>:<account>:*`) | only with `SqsDlqRead`; the code receives from dead-letter queues only |
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `sqs.<region>`; only with `SqsDlqRead` |
+| Parameter Store and Secrets Manager (listing) | `ssm:DescribeParameters`, `ssm:ListTagsForResource`, `secretsmanager:ListSecrets` | `*` | |
+| Parameter values | `ssm:GetParameters` | this account's `parameter/*` in the region | |
+| | `kms:Decrypt` | `*` | `kms:ViaService` is `ssm.<region>`; only with `SsmDecrypt` (on by default) |
+| Secret values (opt-in) | `secretsmanager:GetSecretValue` | this account's `secret:*` in the region | only with `SecretsRead` |
+| | `kms:Decrypt` | `*` | `kms:ViaService` is `secretsmanager.<region>`; only with `SecretsRead` |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And three explicit denies, as defense in depth against any other policy the
@@ -1019,7 +1061,7 @@ role might gain:
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 
 The RDS **export role** (`RdsExportRole`, trusted by

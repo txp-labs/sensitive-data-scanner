@@ -101,19 +101,26 @@ bumps the minor version. Spec changes are listed under **Spec**.
     with `VisibilityTimeout=0` and never deleted; a DLQ with its own redrive
     policy is never read (`redrive_would_change`), and live queues never
     (`live_queue`).
+- Parameter Store and Secrets Manager ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  one store each per account and region, with the allow and deny rules
+  applied to each parameter or secret by name or tag. Parameter values are
+  read ten at a time, `SecureString` decrypted through SSM (`SSM_DECRYPT`, on
+  by default). Secrets are always listed, and read only with `SECRETS_READ`
+  (off by default); sensitive data in a secret is a finding, and the secret
+  is never reported.
 - The adapter interface (`sources/base.py`, `Adapter`) and the generic
   sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
   discovery, the budget and the run summary through them, with no cloud in
   the core. The RDS Data API mode now runs on the same SQL pass.
 - Findings schema **1.3** (additive): the `store_field` resource, the
   `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`,
-  `fsx`, `kinesis`, `firehose` and `sqs` kinds, the `block` format, the store
-  reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `fsx`, `kinesis`, `firehose`, `sqs`, `ssm` and `secretsmanager` kinds,
+  the `block` format, the store reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
   `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
   `live_queue`, `redrive_would_change` and `no_s3_destination`, and the store
   fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
-  `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue` and
-  `approximateMessages`.
+  `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue`,
+  `approximateMessages`, `items`, `itemTypes` and `excluded`.
 - `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
   describe permissions, and, only when reading, the Data API on this
   account's clusters and workgroups, its own statements only, and the
@@ -128,7 +135,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   describe and Kinesis `GetShardIterator`/`GetRecords`; `kms:Decrypt` through
   Kinesis; only with `SqsDlqRead`, `sqs:ReceiveMessage` and `kms:Decrypt`
   through SQS; message deletes, visibility changes, sends, purges and every
-  stream and queue write are denied.
+  stream and queue write are denied. Parameter Store and Secrets Manager:
+  list; `ssm:GetParameters` on this account's parameters and, with
+  `SsmDecrypt`, `kms:Decrypt` through SSM; only with `SecretsRead`,
+  `secretsmanager:GetSecretValue` on this account's secrets and
+  `kms:Decrypt` through Secrets Manager; parameter and secret writes denied.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.
