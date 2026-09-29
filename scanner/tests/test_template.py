@@ -82,7 +82,12 @@ READ = re.compile(
     r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$"
     r"|redshift:DescribeClusters$|redshift-serverless:List"
     r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$"
-    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet))"
+    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet)"
+    r"|ec2:Describe(Volumes|Snapshots)$|ebs:(ListSnapshotBlocks|GetSnapshotBlock)$|backup:List"
+    r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List"
+    r"|kinesis:(List|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
+    r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$"
+    r"|ssm:GetParameter$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -130,6 +135,13 @@ AIMED: dict[str, Any] = {
     "ClusterDbUserCredentials": _db_user_credentials,
     # Data-plane access to collections; each collection's data access policy grants
     # the role aoss:ReadDocument only (docs/ARCHITECTURE.md).
+    # Receive only, from this account's queues; the code receives from dead-letter queues
+    # alone, with VisibilityTimeout=0, and never deletes (the Deny below).
+    "ReceiveFromDeadLetterQueues": lambda s, a: (
+        a == "sqs:ReceiveMessage"
+        and s["Resource"]
+        == {"Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*"}
+    ),
     "ReadServerlessCollections": lambda s, a: (
         a == "aoss:APIAccessAll" and in_account(s["Resource"], "aoss", "collection/")
     ),
@@ -185,6 +197,31 @@ def test_denies_keep_writes_home_and_lake_formation_out() -> None:
         assert not any(re.fullmatch(d.replace("*", ".*"), a) for d in denied), a
 
 
+def test_the_scanner_may_list_its_own_bucket() -> None:
+    """Without s3:ListBucket on the results bucket, S3 answers the first run's missing
+    state file with 403, not 404 (#24). The runner copes, but the grant stays."""
+    own = [
+        s
+        for s in statements()
+        if s["Effect"] == "Allow"
+        and "s3:ListBucket" in actions(s)
+        and s["Resource"] == {"Fn::GetAtt": ["ResultsBucket", "Arn"]}
+    ]
+    assert own, "s3:ListBucket on the results bucket"
+
+
+def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
+    ssm = [s for s in statements() if any(a.startswith("ssm:") for a in actions(s))]
+    assert [s["Sid"] for s in ssm] == ["ReadOwnConfigParameter"]
+    assert actions(ssm[0]) == ["ssm:GetParameter"]
+    assert in_account(ssm[0]["Resource"], "ssm", "parameter/sensitive-data-scanner/")
+    stmts = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+    gated = [s for s in stmts if isinstance(s, dict) and "Fn::If" in s]
+    assert any(s["Fn::If"][0] == "ConfigInSsm" for s in gated)
+    env = RES["Function"]["Properties"]["Environment"]["Variables"]
+    assert env["CONFIG_LOCATION"] == {"Ref": "ConfigLocation"}
+
+
 def test_the_export_role_writes_only_the_exports_prefix() -> None:
     role = RES["RdsExportRole"]["Properties"]
     assert role["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {
@@ -223,6 +260,18 @@ SERVICES = {
     "redshift-data": "redshift-data",
     "opensearch": "es",
     "opensearchserverless": "aoss",
+    "ssm": "ssm",
+    "docdb": "rds",
+    "neptune": "rds",
+    "docdb-elastic": "docdb-elastic",
+    "ec2": "ec2",
+    "ebs": "ebs",
+    "backup": "backup",
+    "efs": "elasticfilesystem",
+    "fsx": "fsx",
+    "kinesis": "kinesis",
+    "firehose": "firehose",
+    "sqs": "sqs",
 }
 
 
@@ -340,6 +389,39 @@ def test_opensearch_is_read_with_get_only() -> None:
     serverless = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
     gated = [s for s in serverless if isinstance(s, dict) and "Fn::If" in s]
     assert any(s["Fn::If"][0] == "OpenSearchServerless" for s in gated)
+
+
+def test_snapshots_are_read_in_place_never_copied_or_attached() -> None:
+    blocks = next(s for s in statements() if s.get("Sid") == "ReadEbsSnapshotBlocks")
+    assert actions(blocks) == ["ebs:ListSnapshotBlocks", "ebs:GetSnapshotBlock"]
+    assert blocks["Resource"] == {"Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"}
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "ebs:StartSnapshot",
+        "ebs:PutSnapshotBlock",
+        "ec2:CreateVolume",
+        "ec2:AttachVolume",
+        "ec2:CreateSnapshot*",
+        "backup:Start*",
+        "elasticfilesystem:ClientWrite",
+    } <= denied
+
+
+def test_queues_are_received_from_never_consumed() -> None:
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "sqs:DeleteMessage*",
+        "sqs:ChangeMessageVisibility*",
+        "sqs:PurgeQueue",
+        "sqs:StartMessageMoveTask",
+        "kinesis:PutRecord*",
+        "kinesis:RegisterStreamConsumer",
+    } <= denied
+    # The scanner is not a Kinesis consumer: no lease table, no checkpoint.
+    assert not any(a.startswith("dynamodb:PutItem") for a in ALLOWED)
+    source = (PACKAGE / "sources" / "streams.py").read_text()
+    assert "VisibilityTimeout=0" in source
+    assert "delete_message" not in source and "change_message_visibility" not in source
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:

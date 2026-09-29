@@ -580,6 +580,231 @@ def test_no_value_leaves_opensearch(
         assert leaks(blob) == [], name_
 
 
+def test_no_value_leaves_snapshots_backups_or_clusters(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """EBS blocks holding values, and a Backup vault and DocumentDB cluster named with them."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_snapshots import T2, blocks, snapshot, stubs
+
+    s = stubs(env, "ec2", "ebs", "backup", "docdb", "docdb-elastic")
+    s["ec2"].add_response("describe_volumes", {"Volumes": [{"VolumeId": "vol-0a1", "Size": 1}]})
+    s["ec2"].add_response(
+        "describe_snapshots", {"Snapshots": [snapshot("snap-new", "vol-0a1", T2)]}
+    )
+    s["backup"].add_response(
+        "list_backup_vaults",
+        {"BackupVaultList": [{"BackupVaultName": f"vault-{SSN_A}", "BackupVaultArn": "arn:v"}]},
+    )
+    s["backup"].add_response("list_recovery_points_by_backup_vault", {"RecoveryPoints": []})
+    s["docdb"].add_response(
+        "describe_db_clusters",
+        {"DBClusters": [{"DBClusterIdentifier": f"docs-{SSN_B}", "Engine": "docdb"}]},
+    )
+    s["docdb-elastic"].add_response(
+        "list_clusters",
+        {"clusters": [{"clusterName": f"e-{CARDS['visa']}", "clusterArn": "a", "status": "x"}]},
+    )
+    blocks(
+        s["ebs"],
+        "snap-new",
+        0,
+        [f"card {CARDS['jcb']} ssn {dashed(SSN_B)}", f"{CARDS['amex']} and {SSN_A}"],
+    )
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"ebs", "backup", "documentdb"}),
+            ebs_direct_read=True,
+            ebs_blocks_per_snapshot=4,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert {f["class"] for f in doc["findings"]} >= {"card", "us_ssn"}
+    assert sum(1 for x in doc["discovery"]["stores"] if x.get("nameMasked")) == 3
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
+def test_no_value_leaves_streams_or_queues(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Kinesis stream, a Firehose stream and its prefix, and a dead-letter queue, named with
+    values and carrying values."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_streams import describe, stubs
+
+    s = stubs(env, "kinesis", "firehose", "sqs")
+    stream = f"clicks-{SSN_A}"
+    s["kinesis"].add_response(
+        "list_streams",
+        {
+            "StreamNames": [stream],
+            "HasMoreStreams": False,
+            "StreamSummaries": [
+                {"StreamName": stream, "StreamARN": "arn:k", "StreamStatus": "ACTIVE"}
+            ],
+        },
+    )
+    s["kinesis"].add_response(
+        "list_shards",
+        {
+            "Shards": [
+                {
+                    "ShardId": "shardId-000000000000",
+                    "HashKeyRange": {"StartingHashKey": "0", "EndingHashKey": "1"},
+                    "SequenceNumberRange": {"StartingSequenceNumber": "1"},
+                }
+            ]
+        },
+    )
+    s["kinesis"].add_response("get_shard_iterator", {"ShardIterator": "it"})
+    data = json.dumps({f"k_{CARDS['mir']}": CARDS["visa"], "ssn": dashed(SSN_B)}).encode()
+    s["kinesis"].add_response(
+        "get_records",
+        {"Records": [{"SequenceNumber": "1", "Data": data, "PartitionKey": SSN_A}]},
+    )
+    env.put(f"fh/{SSN_B}/part-1", json.dumps({"card": CARDS["jcb"]}))
+    s["firehose"].add_response(
+        "list_delivery_streams",
+        {"DeliveryStreamNames": [f"fh-{SSN_B}"], "HasMoreDeliveryStreams": False},
+    )
+    s["firehose"].add_response(
+        "describe_delivery_stream",
+        describe(
+            f"fh-{SSN_B}",
+            [
+                {
+                    "DestinationId": "d",
+                    "S3DestinationDescription": {
+                        "BucketARN": f"arn:aws:s3:::{DATA}",
+                        "Prefix": f"fh/{SSN_B}/",
+                        "RoleARN": "arn:aws:iam::123456789012:role/r",
+                        "BufferingHints": {},
+                        "CompressionFormat": "UNCOMPRESSED",
+                        "EncryptionConfiguration": {},
+                    },
+                }
+            ],
+        ),
+    )
+    dlq = f"dlq-{CARDS['amex']}"
+    url = f"https://sqs.us-west-2.amazonaws.com/123456789012/{dlq}"
+    src = "https://sqs.us-west-2.amazonaws.com/123456789012/src"
+    s["sqs"].add_response("list_queues", {"QueueUrls": [url, src]})
+    s["sqs"].add_response(
+        "get_queue_attributes", {"Attributes": {"QueueArn": f"arn:aws:sqs:us-west-2:1:{dlq}"}}
+    )
+    s["sqs"].add_response(
+        "get_queue_attributes",
+        {
+            "Attributes": {
+                "QueueArn": "arn:aws:sqs:us-west-2:1:src",
+                "RedrivePolicy": json.dumps(
+                    {"deadLetterTargetArn": f"arn:aws:sqs:us-west-2:1:{dlq}"}
+                ),
+            }
+        },
+    )
+    body = json.dumps({"pan": CARDS["discover"], "dob": "DOB 7/4/1981", "n": SSN_A})
+    s["sqs"].add_response("receive_message", {"Messages": [{"MessageId": SSN_B, "Body": body}]})
+    s["sqs"].add_response("receive_message", {"Messages": []})
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"kinesis", "firehose", "sqs"}),
+            sqs_dlq_read=True,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    services = {f["resource"].get("service", f["resource"]["type"]) for f in doc["findings"]}
+    assert services == {"kinesis", "sqs", "s3_object"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
+# A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
+# tables (#24). The run passes the SSN structure rules, so it is masked however
+# masking is tuned; the finding keeps its link because the link names the table only.
+TENANT = "T#t_314159265"
+
+
+def test_a_masked_key_keeps_a_link_that_holds_no_value(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+
+    item = load_item("stugum-positive")
+    item["pk"] = {"S": TENANT}
+    item["sk"] = {"S": f"CALL#{CARDS['mastercard']}"}
+    ddb = Ddb()
+    ddb.describe()
+    ddb.query(page([item]))
+    env.clients.dynamodb = ddb.client
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            dynamodb_targets=[target(partition=TENANT)],
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert doc["findings"]
+    for f in doc["findings"]:
+        assert f["resource"]["key"]["pk"] == "T#t_#########"
+        assert f["resource"]["keyMasked"] is True
+        assert f["link"] == (
+            "https://us-west-2.console.aws.amazon.com/dynamodbv2/home?region=us-west-2"
+            "#item-explorer?table=example-call-tests"
+        )
+    for name, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name
+        assert "314159265" not in blob, name
+        assert CARDS["mastercard"] not in blob, name
+
+
+def test_a_link_built_from_a_masked_name_is_dropped() -> None:
+    from sensitive_data_scanner.findings import (
+        console_link,
+        dynamodb_link,
+        dynamodb_resource,
+        link_for,
+        s3_link,
+        s3_resource,
+    )
+
+    table = f"orders-{SSN_A}"
+    res = dynamodb_resource(table, {"pk": "a"}, "h", "x")
+    assert link_for(res, dynamodb_link("us-west-2", table)) is None
+    # The object's key is in its link: a masked key drops it.
+    key = f"receipts/{SSN_B}.txt"
+    assert link_for(s3_resource("b", key, None), s3_link("us-west-2", "b", key, None)) is None
+    # A masked column is not in the object's link: it stays.
+    res = s3_resource("b", "t.parquet", None, column=f"c_{SSN_B}")
+    assert res["keyMasked"] is True
+    assert link_for(res, s3_link("us-west-2", "b", "t.parquet", None)) is not None
+    # A link that does not say what it was built from is dropped when anything is masked.
+    assert link_for({"keyMasked": True}, console_link("us-west-2", "x")) is None
+    assert (
+        link_for({}, console_link("us-west-2", "x")) == "https://us-west-2.console.aws.amazon.com/x"
+    )
+    assert type(link_for({}, dynamodb_link("us-west-2", "t"))) is str
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

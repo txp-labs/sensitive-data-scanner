@@ -78,14 +78,42 @@ bumps the minor version. Spec changes are listed under **Spec**.
   read field by field (`store_field`, `readBy: search`). VPC-only domains
   (`vpc_only`), refused domains (`access_denied`) and Serverless collections
   (opt-in, `OPENSEARCH_SERVERLESS_READ`) are reported.
+- Snapshots, backups and file systems ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - EBS (`DISCOVER` kind `ebs`): volumes and this account's snapshots; each
+    volume read through its latest snapshot with the EBS direct APIs
+    (`EBS_DIRECT_READ`, opt-in; `EBS_BLOCKS_PER_SNAPSHOT`), sampled blocks'
+    printable text, no volume created or attached. Volumes with no snapshot,
+    archived snapshots and older snapshots are reported.
+  - AWS Backup (`backup`): vaults with their recovery points by type, reported
+    as `backup_copy` (EBS points are read as EBS snapshots).
+  - DocumentDB (including elastic clusters) and Neptune (`documentdb`,
+    `neptune`): reported as `no_snapshot_export`.
+  - EFS and FSx (`efs`, `fsx`): reported as `needs_task`; the opt-in Fargate
+    file-system task is designed in docs/ARCHITECTURE.md, not built.
+- Streams and queues ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - Kinesis Data Streams (`kinesis`): each shard sampled from `TRIM_HORIZON`
+    (`KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS`), never checkpointed:
+    no lease, no sequence number kept.
+  - Firehose (`firehose`): every S3 location a delivery stream writes to
+    (destination, error output, backup) is read by the S3 source, once; the
+    bucket's own source leaves those prefixes to it.
+  - SQS (`sqs`): dead-letter queues only, opt-in (`SQS_DLQ_READ`), received
+    with `VisibilityTimeout=0` and never deleted; a DLQ with its own redrive
+    policy is never read (`redrive_would_change`), and live queues never
+    (`live_queue`).
 - The adapter interface (`sources/base.py`, `Adapter`) and the generic
   sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
   discovery, the budget and the run summary through them, with no cloud in
   the core. The RDS Data API mode now runs on the same SQL pass.
 - Findings schema **1.3** (additive): the `store_field` resource, the
-  `redshift` and `opensearch` kinds, the store reasons
-  `read_not_configured`, `paused`, `no_grant` and `vpc_only`, and the store
-  fields `deployment`, `database` and `state`.
+  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`,
+  `fsx`, `kinesis`, `firehose` and `sqs` kinds, the `block` format, the store
+  reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
+  `live_queue`, `redrive_would_change` and `no_s3_destination`, and the store
+  fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
+  `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue` and
+  `approximateMessages`.
 - `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
   describe permissions, and, only when reading, the Data API on this
   account's clusters and workgroups, its own statements only, and the
@@ -93,7 +121,14 @@ bumps the minor version. Spec changes are listed under **Spec**.
   batch statements are denied. OpenSearch: describe and list,
   `es:ESHttpGet` on this account's domains (every other HTTP verb denied),
   and, only with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on its
-  collections.
+  collections. Snapshots, backups and file systems: describe and list, and,
+  only with `EbsDirectRead`, `ebs:ListSnapshotBlocks`/`GetSnapshotBlock` on
+  this region's snapshots and `kms:Decrypt` through EBS; every snapshot,
+  volume, backup and file-system write is denied. Streams and queues: list,
+  describe and Kinesis `GetShardIterator`/`GetRecords`; `kms:Decrypt` through
+  Kinesis; only with `SqsDlqRead`, `sqs:ReceiveMessage` and `kms:Decrypt`
+  through SQS; message deletes, visibility changes, sends, purges and every
+  stream and queue write are denied.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.
@@ -162,6 +197,40 @@ bumps the minor version. Spec changes are listed under **Spec**.
   every region named, including accounts that join later, with findings
   pushed to the existing central EventBridge bus. Releases attach both
   templates.
+
+### Fixed
+From the first run in a real account (stugum-dev,
+[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)):
+- **A missing state file on the first run.** Without `s3:ListBucket`, S3
+  answers a missing object with 403, not 404, and the first run failed.
+  - The runner now counts a 403 on the state file as "no state yet" when the
+    lock it has just written can be read. A KMS denial, or a denial that also
+    covers the lock, still fails the run.
+  - `docs/ARCHITECTURE.md` now lists `s3:ListBucket` on the results bucket
+    (on the results prefix, if there is one). `scanner.yaml` already
+    granted it; `test_template.py` now keeps it there.
+- **Configuration beyond Lambda's 4 KB of environment variables.** The
+  settings can also come from a JSON document: the invoke payload's
+  `config`, or a file named by `CONFIG_LOCATION` (or the payload's
+  `configLocation`), either an S3 object or an SSM parameter.
+  - The document uses the variable names. The payload wins over the file,
+    and the file over the environment.
+  - A name the scanner does not read is an error.
+  - Environment variables alone work as before.
+  - `scanner.yaml` takes `ConfigLocation`, with `ssm:GetParameter` only
+    under `/sensitive-data-scanner/`.
+- **Console links on findings with a masked key.** A finding now loses its
+  link only when a name the link carries was masked.
+  - A DynamoDB item keyed by a tenant id with a bare nine-digit run keeps
+    its link to the table. The link names the table, never the key.
+  - The same holds for a masked column (S3 table objects, RDS, Redshift) or
+    index (OpenSearch).
+  - The no-leak suite covers a `T#t_…` key.
+- **`SHA256SUMS` names every asset as GitHub serves it.** buildx's
+  `owner~repo~id.dockerbuild` record is served as
+  `owner.repo.id.dockerbuild`, so `sha256sum -c` reported it missing. The
+  release workflow renames such files before checksumming, then checks the
+  published names against the list.
 
 ### Findings schema
 - `schemaVersion` is now **1.2**, additive: the `discovery` summary,

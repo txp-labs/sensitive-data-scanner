@@ -14,7 +14,8 @@ pinned by digest.
 | `sensitive_data_scanner-X.Y.Z-py3-none-any.whl` | The Python package, with the spec, the findings schema and the licenses inside. There is no sdist: the source release is the tag |
 | `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout) |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the image (syft) |
-| `SHA256SUMS` | SHA-256 of every file above |
+| `owner.repo.<id>.dockerbuild` | buildx's record of the image build (its inputs and timings), attached as it comes |
+| `SHA256SUMS` | SHA-256 of every file above, under the names GitHub serves them by. The workflow renames any file whose name GitHub would change (it replaces characters other than letters, digits, `-`, `_` and `.` with `.`), and checks the published names against the list |
 
 ## Cutting a release
 

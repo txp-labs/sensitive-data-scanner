@@ -136,6 +136,57 @@ One run:
 | `REDSHIFT_STATEMENT_TIMEOUT_SECONDS` | How long the run waits for one Data API statement before counting the table unreadable | 60 |
 | `OPENSEARCH_DOCS_PER_INDEX`, `OPENSEARCH_MAX_INDICES` | Documents sampled per index (`_search?size=`), and indices per domain or collection | 100 and 500 |
 | `OPENSEARCH_SERVERLESS_READ` | Read OpenSearch Serverless collections ([below](#opensearch-domains-and-serverless-collections)) | off: reported `read_not_configured` |
+| `EBS_DIRECT_READ` | Sample each EBS volume's latest snapshot with the EBS direct APIs ([below](#ebs-snapshots-backups-and-file-systems)) | off: reported `read_not_configured` |
+| `EBS_BLOCKS_PER_SNAPSHOT` | 512 KiB blocks read per snapshot, in runs of four spread across the volume | 256 (128 MiB) |
+| `KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS` | Records sampled per shard from `TRIM_HORIZON`, and shards per stream | 100 and 50 |
+| `SQS_DLQ_READ` | Receive from dead-letter queues ([below](#streams-and-queues)) | off: reported `read_not_configured` |
+| `SQS_MESSAGES_PER_QUEUE` | Messages received per dead-letter queue per run | 100 |
+| `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
+
+#### Configuration beyond 4 KB
+
+Lambda holds at most 4 KB of environment variables, and a list of DynamoDB
+tables passes that quickly: 16 entries came to about 7.2 KB in the first
+real-account run. So the same settings can also come from a **configuration
+document**, a JSON object whose keys are the variable names above:
+
+```json
+{
+  "SCAN_DYNAMODB": [{ "table": "example-calls", "partition": "T#t_0000example" }],
+  "DISCOVER": ["s3", "dynamodb"],
+  "MAX_RUN_SECONDS": 600,
+  "DYNAMODB_EXPORT": true
+}
+```
+
+- `SCAN_DYNAMODB`, `DISCOVER_SAMPLING` and `RDS_DATA_API` take their JSON
+  directly; a list of strings is joined with commas; numbers and booleans are
+  written as themselves; `null` unsets.
+- A name the scanner does not read is an error, so a typo is never silently
+  ignored. A document cannot set `CONFIG_LOCATION` or
+  `AWS_LAMBDA_LOG_GROUP_NAME`.
+
+It can come from three places. Each one wins over the ones before it:
+
+1. **Environment variables**, as before.
+2. **A file**, named by `CONFIG_LOCATION` or by the invoke payload's
+   `configLocation`:
+   - an S3 object (`s3://bucket/key`, up to 1 MiB), read with `s3:GetObject`;
+   - or an SSM parameter (`ssm:/sensitive-data-scanner/config`, or its ARN),
+     read with `ssm:GetParameter`. A standard parameter holds 4 KB and an
+     advanced one 8 KB, so S3 is the place for anything larger.
+3. **The invoke payload's `config`**: `{"config": {...}}`, for example as the
+   EventBridge Scheduler target's input. Several schedules can then share one
+   function, each with its own batch of tables.
+
+The payload's other keys are ignored, so a schedule that sends nothing, or
+sends its own event, leaves the configuration as it was. Nothing in the
+configuration is secret.
+
+`scanner.yaml` takes `ConfigLocation`. It grants `ssm:GetParameter` only on
+parameters under `/sensitive-data-scanner/`, and only when the location is
+in SSM. An S3 location is read with the same `s3:GetObject` the S3 source
+already holds.
 
 ### Discovery
 
@@ -153,6 +204,13 @@ region, and a bucket in another region is left to that region's scanner.
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 | `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
 | `opensearch` | `ListDomainNames`, `DescribeDomains`; Serverless `ListCollections`, `BatchGetCollection` | sampled documents per index over signed HTTPS GETs ([below](#opensearch-domains-and-serverless-collections)) |
+| `ebs` | `DescribeVolumes`, `DescribeSnapshots` (this account's) | each volume's latest snapshot, sampled block by block with the EBS direct APIs, opt-in ([below](#ebs-snapshots-backups-and-file-systems)) |
+| `backup` | `ListBackupVaults`, `ListRecoveryPointsByBackupVault` | reported with its recovery points by type (`backup_copy`) |
+| `documentdb`, `neptune` | `DescribeDBClusters` by engine; DocumentDB elastic `ListClusters` | reported (`no_snapshot_export`) |
+| `efs`, `fsx` | `DescribeFileSystems` | reported (`needs_task`) |
+| `kinesis` | `ListStreams`, `ListShards` | each shard sampled from `TRIM_HORIZON`, never checkpointed ([below](#streams-and-queues)) |
+| `firehose` | `ListDeliveryStreams`, `DescribeDeliveryStream` | each S3 location it delivers to, by the S3 source |
+| `sqs` | `ListQueues`, `GetQueueAttributes` | dead-letter queues only, received from and left in place, opt-in |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -230,6 +288,14 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `paused` | A paused Redshift cluster: a query would not resume it |
 | `skipped` | `no_grant` | Signed in, but the database user can see no table: grant it `SELECT` |
 | `skipped` | `vpc_only` | An OpenSearch domain reachable only inside its VPC, which the scanner's Lambda is not in |
+| `skipped` | `no_snapshot_export` | DocumentDB or Neptune: no snapshot export to S3 exists, and the scanner holds no database credentials |
+| `skipped` | `needs_task` | EFS or FSx: read only by mounting it inside its VPC (the opt-in file-system task) |
+| `skipped` | `archived` | An EBS snapshot in the archive tier, which the EBS direct APIs cannot read |
+| `skipped` | `no_snapshot` | (EBS) a volume with no completed snapshot; creating one would be a write |
+| `skipped` | `backup_copy` | An AWS Backup vault: its EBS points are read as EBS snapshots, the rest are copies of stores read where they live |
+| `skipped` | `live_queue` | An SQS queue that is not a dead-letter queue: never read, a receive would reach live consumers |
+| `skipped` | `redrive_would_change` | A dead-letter queue with its own redrive policy: a receive raises the receive count, which could move messages on |
+| `skipped` | `no_s3_destination` | A Firehose stream with no S3 location (its destination's own kind reads it, or it is outside AWS) |
 
 Each store's `gaps` counts what was listed but not read: `kmsDenied`
 (objects under a KMS key the scanner may not use), `unreadable` and
@@ -470,6 +536,139 @@ Not read, and reported:
   read-only: grant its role `aoss:ReadDocument` (and `aoss:DescribeIndex`)
   and nothing else. A collection whose policy does not is `access_denied`.
 
+### EBS snapshots, backups and file systems
+
+**EBS.** With `DISCOVER` including `ebs`, the run lists the volumes
+(`DescribeVolumes`) and this account's completed snapshots
+(`DescribeSnapshots`, `OwnerIds=self`). Each volume is one store, read
+through its latest snapshot. The latest snapshot of a volume that no longer
+exists is a store of its own (`resource: snapshot`). Earlier snapshots of a
+volume are copies of it, counted (`olderSnapshots`) and not read. AWS Backup's
+EBS recovery points are EBS snapshots in the account, so they are covered
+here.
+
+- **Reading is opt-in** (`EBS_DIRECT_READ`). The EBS direct APIs read a
+  snapshot's blocks with no volume created or attached and nothing written:
+  `ListSnapshotBlocks` from evenly spread starting points, then
+  `GetSnapshotBlock` for four consecutive blocks at each, up to
+  `EBS_BLOCKS_PER_SNAPSHOT` (512 KiB each) per snapshot. A snapshot is read
+  across as many runs as the budget needs, and read again only when a newer
+  snapshot appears.
+- **What is read.** The runs of printable text in the raw blocks (ASCII and
+  UTF-16), those that could hold a value, read as text. The file system is
+  not parsed: a file compressed or encrypted on disk is not read, and a
+  finding names the volume (`store_field`, `service: ebs`, `field: blocks`,
+  `readBy: ebs_direct`, with the snapshot's time), not a file. A sample is
+  counted as `partial`.
+- **Within Lambda's limits.** Each block is 512 KiB in memory, and the
+  budget's bytes cap the run. The default reads 128 MiB of a volume.
+- **Not read, and reported:** a volume with no completed snapshot
+  (`no_snapshot`; creating one would be a write), a snapshot in the archive
+  tier (`archived`), and everything while reading is off
+  (`read_not_configured`). An encrypted snapshot needs `kms:Decrypt` through
+  EBS; without it the store is `kms_access`.
+
+**AWS Backup.** With `backup`, each vault is listed with its recovery points
+counted by resource type (`recoveryPoints`), and reported as `backup_copy`.
+Its EBS points are read as EBS snapshots (above). The rest are copies of
+stores the other adapters read where they live (S3, DynamoDB, RDS, EFS, ...).
+Restoring a copy to read it would be a write, and the scanner makes none.
+
+**DocumentDB and Neptune.** With `documentdb` or `neptune`, the clusters are
+listed (`DescribeDBClusters` by engine, and DocumentDB elastic clusters by
+`ListClusters`) and reported as `no_snapshot_export`. RDS's snapshot export
+takes Aurora MySQL and PostgreSQL, and RDS MySQL, MariaDB and PostgreSQL,
+only, and the scanner holds no database credentials. When these kinds are
+discovered, the `rds` listing leaves their clusters to them.
+
+**EFS and FSx.** With `efs` or `fsx`, each file system is listed
+(`DescribeFileSystems`, with its size) and reported as `needs_task`: a file
+system is read by mounting it inside its VPC, which the scanner's Lambda
+does not do.
+
+#### The opt-in file-system task (design, not built)
+
+EFS, FSx, and EBS read by file rather than by block, need a mount. The
+design is an ECS task on Fargate, deployed only where it is turned on:
+
+- **Where.** One task definition per account and region, run in the VPC and
+  subnets of the file system (a parameter per file system), with a security
+  group that allows NFS (2049) or SMB (445) outbound to it only.
+- **How it mounts.** EFS: a Fargate EFS volume with an access point whose
+  POSIX user can only read, `readOnly: true`, and IAM authorization with
+  `elasticfilesystem:ClientMount` only (never `ClientWrite` or
+  `ClientRootAccess`, which the scanner's role denies). FSx for OpenZFS and
+  ONTAP (NFS): a read-only mount. FSx for Windows and ONTAP (SMB): a domain
+  account with read permissions, kept in Secrets Manager. FSx for Lustre: the
+  Lustre client, read-only. EBS by file: a volume created from the snapshot
+  in the task's zone and attached read-only; this is a write
+  (`ec2:CreateVolume`, `AttachVolume`, then `DeleteVolume`), so it is its own
+  opt-in and its own role.
+- **What it runs.** The same image and scanner code, with a file-tree source
+  in place of the S3 source: it walks the mount by path, reads each file as
+  an S3 object is read (formats, sizes, sampling per directory), and writes
+  findings to the same results bucket, named by path.
+- **Triggered** by the batch run, one task per file system at most per
+  `EXPORT_MIN_INTERVAL_DAYS`, like the exports.
+
+Until it is built, these stores stay in the run summary as `needs_task`.
+
+### Streams and queues
+
+**Kinesis Data Streams.** With `DISCOVER` including `kinesis`, the run lists
+the streams (`ListStreams`; one not `ACTIVE` or `UPDATING` is `unsupported`),
+and for each stream its shards (`ListShards`, up to `KINESIS_MAX_SHARDS`).
+For each shard it gets an iterator at `TRIM_HORIZON` and makes at most three
+`GetRecords` calls, up to `KINESIS_RECORDS_PER_SHARD` records.
+
+- **Never a consumer.** No lease table, no checkpoint, and no sequence
+  number is kept: the cursor names only the next shard of the pass. Each
+  pass samples the oldest records the stream still holds.
+- **Shared limits.** A shard serves five `GetRecords` calls and 2 MB a
+  second to all its consumers together. The scanner makes at most three
+  calls per shard per run, so a consumer near the limit may see a throttle.
+  Enhanced fan-out consumers are not affected.
+- Each record is read as text (gunzipped when it is gzip, as CloudWatch Logs
+  subscriptions are; binary records counted as skipped). Findings are
+  `store_field` with `service: kinesis`, the stream as `store`,
+  `field: records` and `readBy: shard_sample`, counted across the pass.
+- A stream encrypted with a customer managed key needs `kms:Decrypt` through
+  Kinesis (`AllowKmsDecrypt` includes it).
+
+**Firehose.** With `firehose`, the run lists the delivery streams and reads
+every S3 location each one writes to: the destination prefix, the error
+output prefix, and the S3 backup of a Redshift, OpenSearch, Splunk, HTTP
+endpoint or Snowflake destination. A prefix is cut at its first expression
+(`fh/!{timestamp:yyyy}/` is read as `fh/`). Each location is an S3 source,
+so findings name the objects, and a discovered bucket's own source leaves
+those prefixes to the stream: each object is read once. The stream's
+`destinations` are listed in the summary. Redshift and OpenSearch
+destinations are read by their own kinds. A stream with no S3 location is
+`no_s3_destination`.
+
+**SQS dead-letter queues.** With `sqs`, the run lists the queues and their
+attributes. A queue that another queue's redrive policy names as its
+`deadLetterTargetArn` is a dead-letter queue (`deadLetterQueue: true`).
+Every other queue is live traffic and is **never read** (`live_queue`).
+
+- **Off by default** (`SQS_DLQ_READ`), because a receive is not invisible:
+  every `ReceiveMessage` raises each message's `ApproximateReceiveCount`.
+- **When on**, the run calls `ReceiveMessage` with `VisibilityTimeout=0`
+  (each message is visible again at once) and `WaitTimeSeconds=0`, up to
+  `SQS_MESSAGES_PER_QUEUE` messages, and stops at the first batch it has
+  already seen. It never deletes a message or changes its visibility; the
+  role denies both.
+- **A DLQ with a redrive policy of its own is never read**
+  (`redrive_would_change`): past its `maxReceiveCount`, SQS would move the
+  message to the next queue. A redrive back to the source queue
+  (`StartMessageMoveTask`) moves all messages whatever their receive count,
+  so it is unchanged.
+- **FIFO.** A receive briefly holds the message group of a FIFO queue. With
+  `VisibilityTimeout=0` the hold ends at once.
+- The body and the message attributes' string values are read. Findings are
+  `store_field` with `service: sqs`, the queue as `store`,
+  `field: messages` and `readBy: receive`.
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -604,6 +803,15 @@ scanner's own.
   results bucket only: `findings/`, `state/`, and the exports the scanner
   starts under `exports/`, which it deletes once read. Nothing else is ever
   written. A test holds `delete` to the `exports/` prefix.
+- **List**: `s3:ListBucket` on the results bucket, conditioned on the results
+  prefix if it has one (`s3:prefix` `<prefix>/*`).
+  - The scanner lists its own `exports/`.
+  - Without this permission, S3 answers a missing object with 403
+    AccessDenied instead of 404. The first run's state file is missing.
+  - The runner copes: a 403 on the state file counts as "no state yet" when
+    the lock the run has just written can be read, which shows its access is
+    otherwise fine.
+  - Grant it anyway, so a real denial is never confused with a missing file.
 - **Optional**: `events:PutEvents` on the one consumer bus ARN.
 - **No inbound access.** A consumer reads `findings/*` in the results
   bucket, or receives events. It never needs `state/*`.
@@ -649,6 +857,8 @@ named resources because the stores are not known in advance. They are read-only:
 | DynamoDB export | `dynamodb:DescribeContinuousBackups`, `dynamodb:ExportTableToPointInTime`, `dynamodb:DescribeExport`; `s3:PutObject` and `s3:AbortMultipartUpload` on `exports/dynamodb/`; with a key, `kms:GenerateDataKey` and `kms:Decrypt` via S3 | tables `*`; the results bucket |
 | `redshift` | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `redshift-serverless:ListNamespaces`; `redshift-serverless:ListTagsForResource` only with tag rules | `*` |
 | `opensearch` | `es:ListDomainNames`, `es:DescribeDomains`, `aoss:ListCollections`, `aoss:BatchGetCollection`; `es:ListTags`, `aoss:ListTagsForResource` only with tag rules; `es:ESHttpGet` on the domains; with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on the collections | `*`; this account's domains and collections |
+| `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx` | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `rds:DescribeDBClusters`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`; with `EbsDirectRead`, `ebs:ListSnapshotBlocks` and `ebs:GetSnapshotBlock` on this region's snapshots, and `kms:Decrypt` through EBS | `*`; `snapshot/*` |
+| `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
@@ -768,14 +978,15 @@ several things:
 
 | Source | Actions | Resource | Condition |
 |---|---|---|---|
-| Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` | the results bucket and its objects | |
+| Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` (it lists `exports/`, and it makes a missing state file a 404, not a 403) | the results bucket and its objects | |
+| Its configuration document, with `ConfigLocation` in SSM | `ssm:GetParameter` | parameters under `/sensitive-data-scanner/` in this account and region | |
 | Its own logs | `logs:CreateLogStream`, `logs:PutLogEvents` | its log group | |
 | S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
 | CloudWatch Logs | `logs:DescribeLogGroups`, `logs:FilterLogEvents`, `logs:ListTagsForResource` | `*` | |
 | DynamoDB | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`, `dynamodb:Query`, `dynamodb:ListTagsOfResource` | `*` | |
 | Glue Data Catalog | `glue:GetDatabases`, `glue:GetTables`, `glue:GetTags` | `*` | |
 | RDS and Aurora (discovery) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBClusterSnapshots`, `rds:DescribeDBSnapshots`, `rds:DescribeExportTasks` | `*` | |
-| KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>` or `dynamodb.<region>` (`AllowKmsDecrypt`) |
+| KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>`, `dynamodb.<region>` or `kinesis.<region>` (`AllowKmsDecrypt`) |
 | Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
 | RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
 | | `iam:PassRole` | the export role only | `iam:PassedToService` is `export.rds.amazonaws.com` |
@@ -794,6 +1005,12 @@ several things:
 | | `redshift:GetClusterCredentials` | the one `dbuser:*/<RedshiftDbUser>`, and `dbname:*/*` | only with `RedshiftRead` `db-user` |
 | OpenSearch (discovery) | `es:ListDomainNames`, `es:DescribeDomains`, `es:ListTags`, `aoss:ListCollections`, `aoss:BatchGetCollection`, `aoss:ListTagsForResource` | `*` | |
 | OpenSearch domains | `es:ESHttpGet` (the read verb; `ESHttpPost`, `Put`, `Patch` and `Delete` are denied) | this account's `domain/*/*` in the region | |
+| Snapshots, backups, file systems (discovery) | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource` (DocumentDB and Neptune clusters use `rds:DescribeDBClusters`, above) | `*` | |
+| EBS snapshot blocks (opt-in) | `ebs:ListSnapshotBlocks`, `ebs:GetSnapshotBlock` | this region's `snapshot/*` | only with `EbsDirectRead` |
+| | `kms:Decrypt` | `*` | `kms:ViaService` is `ebs.<region>` or `ec2.<region>`; only with `EbsDirectRead` |
+| Streams and queues | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:ListTagsForStream`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sqs:ListQueueTags` | `*` | Firehose destinations are read with the S3 statements |
+| SQS dead-letter queues (opt-in) | `sqs:ReceiveMessage` | this account's queues in the region (`sqs:<region>:<account>:*`) | only with `SqsDlqRead`; the code receives from dead-letter queues only |
+| | `kms:Decrypt` | `*` | `kms:ViaService` is `sqs.<region>`; only with `SqsDlqRead` |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And three explicit denies, as defense in depth against any other policy the
@@ -802,7 +1019,7 @@ role might gain:
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 
 The RDS **export role** (`RdsExportRole`, trusted by

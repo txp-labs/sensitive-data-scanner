@@ -36,7 +36,7 @@ from .discovery import Discovery, Store, discover, settle, summary
 from .engine.spec import load_spec
 from .events import put_findings_events
 from .findings import Coverage, findings_document
-from .safety import ScanError, error_name, log_event
+from .safety import ScanError, error_name, is_kms_denial, log_event
 from .sources.base import Budget, Context, FindingStore, SourceRun
 from .sources.cloudwatch_logs import CloudWatchLogsSource
 from .sources.dynamodb import DynamoDBSource
@@ -106,11 +106,28 @@ class Keys:
         self.lock = f"{prefix}state/lock.json"
 
 
-def _read_json(s3: S3Client, bucket: str, key: str) -> Any:
+def _read_json(s3: S3Client, bucket: str, key: str, *, probe: str | None = None) -> Any:
+    """The JSON object at `key`, or None when there is none.
+
+    Without `s3:ListBucket` on the bucket, S3 answers a missing object with 403
+    AccessDenied, not 404 (the first run, before any state exists). With
+    `probe`, the key of an object known to exist under the same grant (the run's
+    lock, just written), a 403 counts as missing when the probe can be read: the
+    scanner's access is otherwise fine. If the probe cannot be read either, the
+    denial is real and is raised, as is a KMS denial.
+    """
     try:
         body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
     except Exception as err:
-        if error_name(err) in ("NoSuchKey", "404", "NotFound"):
+        name = error_name(err)
+        if name in ("NoSuchKey", "404", "NotFound"):
+            return None
+        denied = name in ("AccessDenied", "403", "Forbidden") and not is_kms_denial(err)
+        if probe is not None and denied:
+            try:
+                s3.head_object(Bucket=bucket, Key=probe)
+            except Exception:
+                raise err from None
             return None
         raise
     return json.loads(body)
@@ -269,6 +286,10 @@ def plan(
     for st in discovery.stores:
         if st.table is not None and st.status == "pending":
             tables.setdefault(st.table.bucket, []).append(st.table.prefix)
+        # A store read at S3 locations of its own (a Firehose destination) claims them too.
+        for loc in st.extra.get("s3Locations") or [] if st.status == "pending" else []:
+            b, _, p = str(loc).partition("/")
+            tables.setdefault(b, []).append(p)
     for store in sorted(discovery.stores, key=lambda s: (s.kind, s.name)):
         known = by_key.get((store.kind, store.name))
         if known is not None:
@@ -338,8 +359,9 @@ def plan(
             add(store, _dynamodb_source(config, clients, region, store, DynamoTarget(store.name)))
         elif store.kind in ADAPTERS:
             found_source = ADAPTERS[store.kind].source(ctx, store)
-            if found_source is not None:
-                add(store, found_source)
+            for one in found_source if isinstance(found_source, list) else [found_source]:
+                if one is not None:
+                    add(store, one)
     return sources, stores
 
 
@@ -391,7 +413,7 @@ def run_scan(
         found = discover(config, clients, region, account) if config.discover else None
         sources, stores = plan(config, clients, region, found, account)
         log_event("run.start", sources=len(sources))
-        state = _read_json(clients.s3, bucket, keys.state) or {}
+        state = _read_json(clients.s3, bucket, keys.state, probe=keys.lock) or {}
         if state and state.get("version") != STATE_VERSION:
             log_event("state.reset")
             state = {}
