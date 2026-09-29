@@ -39,7 +39,7 @@ SCHEMA = Draft202012Validator(
 )
 ALL = frozenset({"s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds"})
 # `all` is every kind, including the adapters' (sources/aws.py).
-EVERY = ALL | {"redshift"}
+EVERY = ALL | {"redshift", "opensearch"}
 THREE = frozenset({"s3", "cloudwatch_logs", "dynamodb"})
 SELF_GROUP = "/aws/lambda/sensitive-data-scanner"
 

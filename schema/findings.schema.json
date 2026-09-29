@@ -38,7 +38,7 @@
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "storeKind": {
       "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3).",
-      "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift"]
+      "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift", "opensearch"]
     },
     "maskedName": {
       "description": "A name from the account (bucket, key, log group or stream, DynamoDB key value or attribute path). Any run that could be a card number or an SSN is masked with '#'.",
@@ -291,7 +291,7 @@
         "denied", "not_allowed", "self", "too_large", "unsupported", "unsupported_format",
         "kms_access", "access_denied", "lake_formation", "tags_unreadable", "budget", "error",
         "export_not_configured", "export_pending", "export_failed", "no_snapshot", "pitr_off",
-        "read_not_configured", "paused", "no_grant"
+        "read_not_configured", "paused", "no_grant", "vpc_only"
       ]
     },
     "discovery": {
@@ -337,8 +337,8 @@
               },
               "pitr": { "const": false },
               "deployment": {
-                "description": "Redshift: a provisioned cluster or a Serverless workgroup (1.3).",
-                "enum": ["provisioned", "serverless"]
+                "description": "Redshift: a provisioned cluster or a Serverless workgroup; OpenSearch: a managed domain or a Serverless collection (1.3).",
+                "enum": ["provisioned", "managed", "serverless"]
               },
               "database": {
                 "description": "The database a store is connected to by default (1.3).",

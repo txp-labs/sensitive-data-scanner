@@ -21,6 +21,8 @@ Metadata:
         Parameters: [DataApiTargets, DataApiClusterArns, DataApiSecretArns]
       - Label: { default: "Redshift and Redshift Serverless (opt-in reads)" }
         Parameters: [RedshiftRead, RedshiftDbUser]
+      - Label: { default: OpenSearch }
+        Parameters: [OpenSearchServerlessRead]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -47,7 +49,7 @@ Parameters:
   Discover:
     Type: String
     Default: all
-    Description: DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift.
+    Description: DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift, opensearch.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -113,6 +115,15 @@ Parameters:
     Default: ""
     AllowedPattern: "^([A-Za-z_][A-Za-z0-9_$]{0,126})?$"
     Description: REDSHIFT_DB_USER - the existing read-only database user, for RedshiftRead db-user.
+  OpenSearchServerlessRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      OPENSEARCH_SERVERLESS_READ - read Serverless collections. IAM's
+      aoss:APIAccessAll cannot be narrowed to reads: give the scanner's role
+      aoss:ReadDocument (and nothing more) in each collection's data access
+      policy. Managed domains are read with es:ESHttpGet only, always.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -150,6 +161,7 @@ Conditions:
   RedshiftReads: !Not [!Equals [!Ref RedshiftRead, "off"]]
   RedshiftIam: !Equals [!Ref RedshiftRead, iam]
   RedshiftDbUserMode: !Equals [!Ref RedshiftRead, db-user]
+  OpenSearchServerless: !Equals [!Ref OpenSearchServerlessRead, "true"]
 
 Resources:
   ResultsBucket:
@@ -295,6 +307,28 @@ Resources:
                   - redshift-serverless:ListNamespaces
                   - redshift-serverless:ListTagsForResource
                 Resource: "*"
+              # --- OpenSearch: discover domains and collections; read with GET only
+              - Sid: DescribeOpenSearch
+                Effect: Allow
+                Action:
+                  - es:ListDomainNames
+                  - es:DescribeDomains
+                  - es:ListTags
+                  - aoss:ListCollections
+                  - aoss:BatchGetCollection
+                  - aoss:ListTagsForResource
+                Resource: "*"
+              - Sid: ReadOpenSearchDomains
+                Effect: Allow
+                Action: es:ESHttpGet
+                Resource: !Sub arn:${AWS::Partition}:es:${AWS::Region}:${AWS::AccountId}:domain/*/*
+              - !If
+                - OpenSearchServerless
+                - Sid: ReadServerlessCollections
+                  Effect: Allow
+                  Action: aoss:APIAccessAll
+                  Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+                - !Ref AWS::NoValue
               # --- Push findings to the central sink
               - !If
                 - HasBus
@@ -374,6 +408,16 @@ Resources:
                   - redshift-serverless:Delete*
                   - redshift-serverless:Restore*
                   - redshift-data:BatchExecuteStatement
+                  - es:ESHttpPost
+                  - es:ESHttpPut
+                  - es:ESHttpPatch
+                  - es:ESHttpDelete
+                  - es:Create*
+                  - es:Delete*
+                  - es:Update*
+                  - aoss:Create*
+                  - aoss:Update*
+                  - aoss:Delete*
                 Resource: "*"
               - Sid: NeverAskLakeFormation
                 Effect: Deny
@@ -586,6 +630,7 @@ Resources:
           RDS_DATA_API: !Ref DataApiTargets
           REDSHIFT_READ: !Ref RedshiftRead
           REDSHIFT_DB_USER: !Ref RedshiftDbUser
+          OPENSEARCH_SERVERLESS_READ: !Ref OpenSearchServerlessRead
 
   ScheduleRole:
     Type: AWS::IAM::Role

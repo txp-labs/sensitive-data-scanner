@@ -81,7 +81,8 @@ READ = re.compile(
     r"^(s3:(List|Get)|logs:(Describe|FilterLogEvents|ListTags)|dynamodb:(List|Describe|Scan|Query)"
     r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$"
     r"|redshift:DescribeClusters$|redshift-serverless:List"
-    r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$)"
+    r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$"
+    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet))"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -127,6 +128,11 @@ AIMED: dict[str, Any] = {
     ),
     "ClusterIamCredentials": lambda s, a: in_account(s["Resource"], "redshift", "dbname:"),
     "ClusterDbUserCredentials": _db_user_credentials,
+    # Data-plane access to collections; each collection's data access policy grants
+    # the role aoss:ReadDocument only (docs/ARCHITECTURE.md).
+    "ReadServerlessCollections": lambda s, a: (
+        a == "aoss:APIAccessAll" and in_account(s["Resource"], "aoss", "collection/")
+    ),
 }
 
 
@@ -215,6 +221,8 @@ SERVICES = {
     "redshift": "redshift",
     "redshift-serverless": "redshift-serverless",
     "redshift-data": "redshift-data",
+    "opensearch": "es",
+    "opensearchserverless": "aoss",
 }
 
 
@@ -231,6 +239,11 @@ def operations() -> dict[str, list[str]]:
     return out
 
 
+def _is_session(node: ast.expr) -> bool:
+    """`boto3.Session()`: calls on it are the SDK's (credentials), not AWS operations."""
+    return isinstance(node, ast.Call) and ast.unparse(node.func) == "boto3.Session"
+
+
 def calls() -> set[str]:
     """Every AWS operation the package calls: `x.op(...)` and `get_paginator("op")`."""
     ops = operations()
@@ -240,6 +253,8 @@ def calls() -> set[str]:
             if not isinstance(node, ast.Call):
                 continue
             f = node.func
+            if isinstance(f, ast.Attribute) and _is_session(f.value):
+                continue
             if isinstance(f, ast.Attribute) and f.attr == "get_paginator" and node.args:
                 arg = node.args[0]
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -292,6 +307,8 @@ def test_each_adapter_calls_only_its_own_services() -> None:
                 continue
             f = node.func
             op = f.attr
+            if _is_session(f.value):
+                continue  # boto3.Session().get_credentials(): the SDK's own, not an API call
             if op == "get_paginator" and node.args and isinstance(node.args[0], ast.Constant):
                 op = str(node.args[0].value)
             if op not in every or op in ("client", "get"):
@@ -312,6 +329,17 @@ def test_redshift_reads_cannot_create_users_or_run_batches() -> None:
         "redshift-data:statement-owner-iam-userid": "${aws:userid}"
     }
     assert RES["RedshiftReadPolicy"]["Condition"] == "RedshiftReads"
+
+
+def test_opensearch_is_read_with_get_only() -> None:
+    domains = next(s for s in statements() if s.get("Sid") == "ReadOpenSearchDomains")
+    assert actions(domains) == ["es:ESHttpGet"]
+    assert in_account(domains["Resource"], "es", "domain/")
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {"es:ESHttpPost", "es:ESHttpPut", "es:ESHttpPatch", "es:ESHttpDelete"} <= denied
+    serverless = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+    gated = [s for s in serverless if isinstance(s, dict) and "Fn::If" in s]
+    assert any(s["Fn::If"][0] == "OpenSearchServerless" for s in gated)
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:
