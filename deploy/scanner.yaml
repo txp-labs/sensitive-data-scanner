@@ -1,0 +1,545 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  sensitive-data-scanner in one account and region: a scheduled Lambda that
+  discovers the data stores here and reports findings only, never values. It
+  reads with read-only IAM and writes nothing but its own results bucket
+  (findings, state, and the exports it starts and deletes). Deployed to every
+  account and region of an organizational unit by estate-stackset.yaml.
+  No IAM resource has a fixed name, so one account can hold it in many regions.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Code }
+        Parameters: [ImageUri, CodeS3BucketPrefix, CodeS3Key]
+      - Label: { default: What to read }
+        Parameters: [Discover, DiscoverAllow, DiscoverDeny, DiscoverSampling, AllowKmsDecrypt]
+      - Label: { default: "Exports: RDS, Aurora, large DynamoDB tables" }
+        Parameters:
+          [RdsExportKmsKeyArn, EnableDynamoDBExport, DynamoDBExportKmsKeyArn]
+      - Label: { default: Opt-in read-only SQL (Data API) }
+        Parameters: [DataApiTargets, DataApiClusterArns, DataApiSecretArns]
+      - Label: { default: Delivery and schedule }
+        Parameters:
+          [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
+
+Parameters:
+  ImageUri:
+    Type: String
+    Default: ""
+    Description: >-
+      The container image in ECR in this region (Lambda pulls only from ECR,
+      replicated to each region, cross-account pull allowed for the
+      organization). Recommended: the image reads Parquet and ORC; the zip
+      does not. Leave empty to use the zip.
+  CodeS3BucketPrefix:
+    Type: String
+    Default: ""
+    Description: >-
+      For the zip: a bucket per region named <prefix>-<region>, readable by
+      the organization, holding CodeS3Key.
+  CodeS3Key:
+    Type: String
+    Default: ""
+    Description: For the zip, e.g. sensitive-data-scanner-0.3.0-lambda-python3.12-x86_64.zip
+  Discover:
+    Type: String
+    Default: all
+    Description: DISCOVER - all, or any of s3, logs, dynamodb, glue, rds.
+  DiscoverAllow:
+    Type: String
+    Default: ""
+    Description: DISCOVER_ALLOW - comma-separated rules (s3:prod-*, tag:pii-scan=yes).
+  DiscoverDeny:
+    Type: String
+    Default: ""
+    Description: >-
+      DISCOVER_DENY - comma-separated rules. A configuration rule, not an IAM
+      boundary: to keep the scanner out of a store for certain, deny it in IAM too.
+  DiscoverSampling:
+    Type: String
+    Default: ""
+    Description: DISCOVER_SAMPLING - a JSON list of per-store sampling rules.
+  AllowKmsDecrypt:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: >-
+      Allow kms:Decrypt through S3 and DynamoDB only (kms:ViaService), so the
+      scanner can read stores encrypted with customer managed keys whose key
+      policy allows the account. Without it, those stores are reported as
+      kms_access.
+  RdsExportKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: >-
+      The customer's symmetric KMS key for RDS snapshot exports. Setting it
+      turns on RDS and Aurora reading and creates the export role.
+  EnableDynamoDBExport:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: DYNAMODB_EXPORT - read tables too large to Scan from an Export to S3 (needs PITR).
+  DynamoDBExportKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: Optional KMS key for DynamoDB exports (else SSE-S3).
+  DataApiTargets:
+    Type: String
+    Default: ""
+    Description: RDS_DATA_API - opt-in JSON list of Aurora clusters to read with read-only SQL.
+  DataApiClusterArns:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: The cluster ARNs named in DataApiTargets (for IAM).
+  DataApiSecretArns:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: The Secrets Manager secret ARNs named in DataApiTargets (read-only database users).
+  FindingsEventBusArn:
+    Type: String
+    Default: ""
+    Description: >-
+      The central sink: a consumer-owned EventBridge bus whose policy allows
+      events:PutEvents from the organization. Empty: findings stay in the
+      results bucket.
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 day)
+  MemorySize:
+    Type: Number
+    Default: 3008
+    MinValue: 1024
+    MaxValue: 10240
+  LogRetentionInDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [7, 14, 30, 60, 90, 180, 365]
+  RunHistoryDays:
+    Type: Number
+    Default: 90
+    Description: Days to keep findings/runs/<runId>.json documents.
+
+Conditions:
+  UseImage: !Not [!Equals [!Ref ImageUri, ""]]
+  HasBus: !Not [!Equals [!Ref FindingsEventBusArn, ""]]
+  KmsDecrypt: !Equals [!Ref AllowKmsDecrypt, "true"]
+  RdsExport: !Not [!Equals [!Ref RdsExportKmsKeyArn, ""]]
+  DynamoDBExport: !Equals [!Ref EnableDynamoDBExport, "true"]
+  DynamoDBExportKey: !And
+    - !Condition DynamoDBExport
+    - !Not [!Equals [!Ref DynamoDBExportKmsKeyArn, ""]]
+  DataApi: !Not [!Equals [!Ref DataApiTargets, ""]]
+
+Resources:
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub sds-results-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          # The scanner deletes each export once read; this is the backstop.
+          - Id: exports-backstop
+            Status: Enabled
+            Prefix: exports/
+            ExpirationInDays: 14
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+          - Id: run-history
+            Status: Enabled
+            Prefix: findings/runs/
+            ExpirationInDays: !Ref RunHistoryDays
+
+  ResultsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResultsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ResultsBucket.Arn
+              - !Sub ${ResultsBucket.Arn}/*
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/sensitive-data-scanner
+      RetentionInDays: !Ref LogRetentionInDays
+
+  ScannerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: sensitive-data-scanner - read-only discovery and reads; writes to its own results bucket only
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: scanner
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # --- its own results bucket: findings/, state/, exports/
+              - Sid: OwnResultsBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                Resource: !Sub ${ResultsBucket.Arn}/*
+              - Sid: OwnResultsBucketList
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ResultsBucket.Arn
+              - Sid: OwnLogs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${LogGroup.Arn}
+              # --- S3: discover the buckets, read the objects
+              - Sid: DiscoverS3
+                Effect: Allow
+                Action: [s3:ListAllMyBuckets, s3:GetBucketTagging]
+                Resource: "*"
+              - Sid: ReadS3
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: arn:aws:s3:::*
+              - Sid: ReadS3Objects
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: arn:aws:s3:::*/*
+              # --- CloudWatch Logs
+              - Sid: ReadLogs
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:FilterLogEvents
+                  - logs:ListTagsForResource
+                Resource: "*"
+              # --- DynamoDB
+              - Sid: ReadDynamoDB
+                Effect: Allow
+                Action:
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeTable
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - dynamodb:ListTagsOfResource
+                Resource: "*"
+              # --- Glue Data Catalog (Lake Formation: nothing; see the Deny below)
+              - Sid: ReadGlueCatalog
+                Effect: Allow
+                Action: [glue:GetDatabases, glue:GetTables, glue:GetTags]
+                Resource: "*"
+              # --- RDS and Aurora: describe, to discover and report every store
+              - Sid: DescribeRds
+                Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusterSnapshots
+                  - rds:DescribeDBSnapshots
+                  - rds:DescribeExportTasks
+                Resource: "*"
+              # --- Push findings to the central sink
+              - !If
+                - HasBus
+                - Sid: PushFindings
+                  Effect: Allow
+                  Action: events:PutEvents
+                  Resource: !Ref FindingsEventBusArn
+                - !Ref AWS::NoValue
+              # --- Customer managed keys, only through S3 and DynamoDB
+              - !If
+                - KmsDecrypt
+                - Sid: DecryptThroughS3AndDynamoDB
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService:
+                        - !Sub s3.${AWS::Region}.amazonaws.com
+                        - !Sub dynamodb.${AWS::Region}.amazonaws.com
+                - !Ref AWS::NoValue
+              # --- Defense in depth: never write anywhere else, never escalate
+              - Sid: NoWritesOutsideOwnBucket
+                Effect: Deny
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:PutObjectTagging
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:RestoreObject
+                  - s3:ReplicateObject
+                  - s3:PutBucket*
+                  - s3:DeleteBucket*
+                NotResource:
+                  - !GetAtt ResultsBucket.Arn
+                  - !Sub ${ResultsBucket.Arn}/*
+              - Sid: NoDataStoreWrites
+                Effect: Deny
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:PartiQLInsert
+                  - dynamodb:PartiQLUpdate
+                  - dynamodb:PartiQLDelete
+                  - dynamodb:Create*
+                  - dynamodb:Delete*
+                  - dynamodb:Update*
+                  - dynamodb:Restore*
+                  - rds:Create*
+                  - rds:Delete*
+                  - rds:Modify*
+                  - rds:Reboot*
+                  - rds:Restore*
+                  - rds:StopDB*
+                  - rds:CancelExportTask
+                  - glue:Create*
+                  - glue:Update*
+                  - glue:Delete*
+                  - glue:BatchDelete*
+                  - logs:Delete*
+                  - logs:PutRetentionPolicy
+                  - logs:PutSubscriptionFilter
+                  - logs:PutDataProtectionPolicy
+                Resource: "*"
+              - Sid: NeverAskLakeFormation
+                Effect: Deny
+                Action: lakeformation:*
+                Resource: "*"
+
+  # RDS and Aurora snapshot export (only with RdsExportKmsKeyArn)
+  RdsExportPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: RdsExport
+    Properties:
+      RoleName: !Ref ScannerRole
+      PolicyName: rds-snapshot-export
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: StartExports
+            Effect: Allow
+            Action: rds:StartExportTask
+            Resource:
+              - !Sub arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster-snapshot:*
+              - !Sub arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:snapshot:*
+          - Sid: PassTheExportRoleOnly
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt RdsExportRole.Arn
+            Condition:
+              StringEquals: { iam:PassedToService: export.rds.amazonaws.com }
+          - Sid: GrantOnTheExportKeyOnlyThroughRds
+            Effect: Allow
+            Action: kms:CreateGrant
+            Resource: !Ref RdsExportKmsKeyArn
+            Condition:
+              StringEquals: { kms:ViaService: !Sub "rds.${AWS::Region}.amazonaws.com" }
+              Bool: { kms:GrantIsForAWSResource: "true" }
+          - Sid: DescribeTheExportKeyThroughRds
+            Effect: Allow
+            Action: kms:DescribeKey
+            Resource: !Ref RdsExportKmsKeyArn
+            Condition:
+              StringEquals: { kms:ViaService: !Sub "rds.${AWS::Region}.amazonaws.com" }
+          - Sid: ReadTheExport
+            Effect: Allow
+            Action: kms:Decrypt
+            Resource: !Ref RdsExportKmsKeyArn
+            Condition:
+              StringEquals: { kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com" }
+
+  RdsExportRole:
+    Type: AWS::IAM::Role
+    Condition: RdsExport
+    Properties:
+      Description: Assumed by RDS to write snapshot exports to the scanner's exports/rds/ prefix
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: export.rds.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: write-exports
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject*
+                  - s3:GetObject*
+                  - s3:DeleteObject*
+                Resource: !Sub ${ResultsBucket.Arn}/exports/rds/*
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt ResultsBucket.Arn
+
+  # DynamoDB Export to S3 (only with EnableDynamoDBExport)
+  DynamoDBExportPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: DynamoDBExport
+    Properties:
+      RoleName: !Ref ScannerRole
+      PolicyName: dynamodb-export
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ExportLargeTables
+            Effect: Allow
+            Action:
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:ExportTableToPointInTime
+              - dynamodb:DescribeExport
+            Resource: "*"
+          - !If
+            - DynamoDBExportKey
+            - Sid: EncryptExportsThroughS3
+              Effect: Allow
+              Action: [kms:GenerateDataKey, kms:Decrypt]
+              Resource: !Ref DynamoDBExportKmsKeyArn
+              Condition:
+                StringEquals: { kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com" }
+            - !Ref AWS::NoValue
+
+  # Opt-in read-only SQL (only with DataApiTargets)
+  DataApiPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: DataApi
+    Metadata:
+      # The ARN lists default to empty (Split/Join keeps the lint finding here);
+      # the policy exists only when DataApiTargets is set, and they with it.
+      cfn-lint: { config: { ignore_checks: [W1033] } }
+    Properties:
+      RoleName: !Ref ScannerRole
+      PolicyName: rds-data-api-read-only
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadOnlySqlOnNamedClusters
+            Effect: Allow
+            Action:
+              - rds-data:BeginTransaction
+              - rds-data:ExecuteStatement
+              - rds-data:RollbackTransaction
+            Resource: !Split [",", !Join [",", !Ref DataApiClusterArns]]
+          - Sid: NamedSecretsOnly
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Split [",", !Join [",", !Ref DataApiSecretArns]]
+
+  Function:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Metadata:
+      # The zip's bucket and key default to empty; they are used only without ImageUri.
+      cfn-lint: { config: { ignore_checks: [W1030, W1031] } }
+    Properties:
+      FunctionName: sensitive-data-scanner
+      Description: Finds sensitive data in this account and region; reports findings only
+      Role: !GetAtt ScannerRole.Arn
+      PackageType: !If [UseImage, Image, Zip]
+      Code: !If
+        - UseImage
+        - ImageUri: !Ref ImageUri
+        - S3Bucket: !Sub ${CodeS3BucketPrefix}-${AWS::Region}
+          S3Key: !Ref CodeS3Key
+      Handler: !If [UseImage, !Ref AWS::NoValue, sensitive_data_scanner.handler.handler]
+      Runtime: !If [UseImage, !Ref AWS::NoValue, python3.12]
+      Architectures: [x86_64]
+      MemorySize: !Ref MemorySize
+      Timeout: 900
+      # No reserved concurrency: the results bucket's lock allows one run at a
+      # time, and reserving would fail in accounts at the default quota.
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucket
+          DISCOVER: !Ref Discover
+          DISCOVER_ALLOW: !Ref DiscoverAllow
+          DISCOVER_DENY: !Ref DiscoverDeny
+          DISCOVER_SAMPLING: !Ref DiscoverSampling
+          FINDINGS_EVENT_BUS_ARN: !Ref FindingsEventBusArn
+          RDS_EXPORT_ROLE_ARN: !If [RdsExport, !GetAtt RdsExportRole.Arn, ""]
+          RDS_EXPORT_KMS_KEY_ARN: !Ref RdsExportKmsKeyArn
+          DYNAMODB_EXPORT: !Ref EnableDynamoDBExport
+          DYNAMODB_EXPORT_KMS_KEY_ARN: !Ref DynamoDBExportKmsKeyArn
+          RDS_DATA_API: !Ref DataApiTargets
+
+  ScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: invoke-scanner
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt Function.Arn
+
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Runs sensitive-data-scanner
+      ScheduleExpression: !Ref ScheduleExpression
+      FlexibleTimeWindow:
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 60
+      Target:
+        Arn: !GetAtt Function.Arn
+        RoleArn: !GetAtt ScheduleRole.Arn
+        RetryPolicy:
+          MaximumRetryAttempts: 0
+
+Outputs:
+  ResultsBucket:
+    Value: !Ref ResultsBucket
+  FunctionArn:
+    Value: !GetAtt Function.Arn
+  ScannerRoleArn:
+    Description: Grant this role SELECT in Lake Formation to include governed tables
+    Value: !GetAtt ScannerRole.Arn
+  RdsExportRoleArn:
+    Condition: RdsExport
+    Value: !GetAtt RdsExportRole.Arn

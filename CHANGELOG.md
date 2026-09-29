@@ -85,6 +85,15 @@ bumps the minor version. Spec changes are listed under **Spec**.
   deleted afterwards. A large table without point-in-time recovery is
   reported as `pitr_off`.
 
+- Estate rollout: `deploy/scanner.yaml` puts the scanner in one account and
+  region (results bucket, function, schedule, and least-privilege read-only
+  IAM per source, with explicit denies on writes elsewhere and on Lake
+  Formation), and `deploy/estate-stackset.yaml` deploys it through a
+  service-managed StackSet to every account of the organizational units and
+  every region named, including accounts that join later, with findings
+  pushed to the existing central EventBridge bus. Releases attach both
+  templates.
+
 ### Findings schema
 - `schemaVersion` is now **1.2**, additive: the `discovery` summary,
   `kmsDenied` in coverage, `#` allowed in a masked bucket or table name,
@@ -96,6 +105,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `discovery.stores`.
 
 ### Internal
+- CI lints the templates with cfn-lint, and `test_template.py` checks that the
+  scanner's role allows only reads and aimed writes, that every AWS call the
+  code makes is allowed, that every allowed action is documented, and that
+  every environment variable the template sets is one the code reads.
 - pyarrow joins as the `columnar` dependency group, installed in the
   container image and not in the Lambda zip, which it would push past
   Lambda's 250 MB unzipped limit. The zip counts the formats it cannot read
@@ -118,10 +131,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Docs
 - `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,
-  the run summary, columnar formats, Glue and Lake Formation, and the
-  read-only IAM each kind of discovery needs. `docs/FINDINGS.md`: schema
-  1.2, the run summary and column findings. `docs/RELEASING.md`: which
-  formats the image and the zip read.
+  the run summary, columnar formats, Glue and Lake Formation, RDS and
+  DynamoDB exports, the estate rollout, and the IAM per source.
+  `docs/FINDINGS.md`: schema 1.2, the run summary, and column and database
+  findings. `docs/RELEASING.md`: which formats the image and the zip read,
+  and the templates attached to a release.
 
 ### Internal
 - `packages/spec-ts/dist/` is committed, so the package can be consumed by

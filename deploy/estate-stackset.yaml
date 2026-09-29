@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  sensitive-data-scanner across an AWS Organization: a service-managed
+  StackSet, deployed from the management account or a CloudFormation
+  delegated administrator, that puts deploy/scanner.yaml in every account of
+  the organizational units named, in every region named, and in every account
+  that joins those units later. Findings go to one central EventBridge bus.
+  The management account itself is not a target of a service-managed
+  StackSet; deploy scanner.yaml there as an ordinary stack if it holds data.
+
+Parameters:
+  ScannerTemplateUrl:
+    Type: String
+    Description: >-
+      The S3 URL of deploy/scanner.yaml from the release, in a bucket
+      CloudFormation can read (https://<bucket>.s3.<region>.amazonaws.com/scanner.yaml).
+  OrganizationalUnitIds:
+    Type: CommaDelimitedList
+    Description: The OUs to deploy to (ou-xxxx-yyyyyyyy), or the root (r-xxxx) for the whole organization.
+  Regions:
+    Type: CommaDelimitedList
+    Description: Every region to scan, e.g. us-east-1,us-west-2,eu-west-1.
+  CallAs:
+    Type: String
+    AllowedValues: [SELF, DELEGATED_ADMIN]
+    Default: SELF
+    Description: SELF from the management account; DELEGATED_ADMIN from a delegated administrator.
+  FindingsEventBusArn:
+    Type: String
+    Description: >-
+      The central sink (the existing consumer-owned bus). Its policy must allow
+      events:PutEvents with aws:PrincipalOrgID set to this organization.
+  ImageUri:
+    Type: String
+    Default: ""
+    Description: >-
+      The image in ECR, as scanner.yaml takes it. It must resolve in every
+      region: replicate the repository to each region and give the account
+      the region's registry domain, or use the zip.
+  CodeS3BucketPrefix:
+    Type: String
+    Default: ""
+  CodeS3Key:
+    Type: String
+    Default: ""
+  Discover:
+    Type: String
+    Default: all
+  DiscoverDeny:
+    Type: String
+    Default: ""
+  RdsExportKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Leave empty across an estate unless one key ARN is valid in every
+      account and region; otherwise set it per account with a stack-instance
+      parameter override.
+  MaxConcurrentPercentage:
+    Type: Number
+    Default: 25
+    MinValue: 1
+    MaxValue: 100
+  FailureTolerancePercentage:
+    Type: Number
+    Default: 10
+    MinValue: 0
+    MaxValue: 100
+
+Resources:
+  ScannerStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      StackSetName: sensitive-data-scanner
+      Description: sensitive-data-scanner in every account and region of the organizational units
+      PermissionModel: SERVICE_MANAGED
+      CallAs: !Ref CallAs
+      AutoDeployment:
+        Enabled: true
+        RetainStacksOnAccountRemoval: false
+      ManagedExecution:
+        Active: true
+      Capabilities: [CAPABILITY_IAM]
+      OperationPreferences:
+        RegionConcurrencyType: PARALLEL
+        MaxConcurrentPercentage: !Ref MaxConcurrentPercentage
+        FailureTolerancePercentage: !Ref FailureTolerancePercentage
+      TemplateURL: !Ref ScannerTemplateUrl
+      Parameters:
+        - ParameterKey: FindingsEventBusArn
+          ParameterValue: !Ref FindingsEventBusArn
+        - ParameterKey: ImageUri
+          ParameterValue: !Ref ImageUri
+        - ParameterKey: CodeS3BucketPrefix
+          ParameterValue: !Ref CodeS3BucketPrefix
+        - ParameterKey: CodeS3Key
+          ParameterValue: !Ref CodeS3Key
+        - ParameterKey: Discover
+          ParameterValue: !Ref Discover
+        - ParameterKey: DiscoverDeny
+          ParameterValue: !Ref DiscoverDeny
+        - ParameterKey: RdsExportKmsKeyArn
+          ParameterValue: !Ref RdsExportKmsKeyArn
+      StackInstancesGroup:
+        - DeploymentTargets:
+            OrganizationalUnitIds: !Ref OrganizationalUnitIds
+          Regions: !Ref Regions
+
+Outputs:
+  StackSetId:
+    Value: !Ref ScannerStackSet

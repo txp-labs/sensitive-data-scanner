@@ -533,9 +533,154 @@ A deny list in configuration is not an IAM boundary. To keep the scanner
 out of a store for certain, deny it in IAM as well (an explicit `Deny` on
 the bucket, table or log group), and it is then reported as `access_denied`.
 
-The IAM policy and the schedule belong to whoever deploys the scanner, for
-example Mermera's customer template. This repository creates no AWS
-resources, and it holds no CloudFormation or Terraform.
+The IAM policy and the schedule belong to whoever deploys the scanner. For
+a single account, that can be your own template (Mermera's customer template,
+for example). For an estate, use the two templates in `deploy/`
+([Estate rollout](#estate-rollout)). This repository creates no AWS resources
+by itself; the templates are for you to deploy.
+
+## Estate rollout
+
+Two CloudFormation templates put the scanner in **every account and every
+region** of an AWS Organization, and send every finding to **one place**:
+
+| Template | Deployed | What it holds |
+|---|---|---|
+| `deploy/scanner.yaml` | By the StackSet, into each account and region | The scanner: results bucket, Lambda function, schedule, log group, and the IAM below |
+| `deploy/estate-stackset.yaml` | Once, in the management account or a CloudFormation delegated administrator | A **service-managed** StackSet (`AWS::CloudFormation::StackSet`) that deploys `scanner.yaml` to the organizational units and regions named, with automatic deployment to accounts that join them later |
+
+```
+management or delegated-admin account
+  estate-stackset.yaml ─► StackSet "sensitive-data-scanner" (SERVICE_MANAGED, auto-deploy)
+                               │  OUs × regions
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                    ▼
+   account A / us-east-1  account A / us-west-2  account B / eu-west-1 …
+   scanner.yaml:          scanner.yaml:          scanner.yaml:
+   discover, read,        discover, read,        discover, read,
+   findings to its own    findings to its own    findings to its own
+   results bucket         results bucket         results bucket
+          │                    │                    │
+          └──── events:PutEvents (Findings v1) ─────┘
+                               ▼
+              the central sink: a consumer-owned EventBridge bus
+```
+
+**Rolling it out.**
+
+1. **The central sink.** Use the existing consumer-owned EventBridge bus
+   (see [Delivery](#delivery-push-decided-29-sep-2026)). Its resource policy
+   allows the whole organization to put events:
+
+   ```json
+   {
+     "Sid": "FindingsFromTheOrganization",
+     "Effect": "Allow",
+     "Principal": "*",
+     "Action": "events:PutEvents",
+     "Resource": "arn:aws:events:us-west-2:111122223333:event-bus/findings",
+     "Condition": { "StringEquals": { "aws:PrincipalOrgID": "o-exampleorgid" } }
+   }
+   ```
+
+2. **The code, in every region.** Lambda pulls images only from ECR in the
+   function's own region. Push the release image to an ECR repository,
+   replicate it to every region scanned, and give the organization pull
+   access (the repository policy with `aws:PrincipalOrgID`). Pass it as
+   `ImageUri`. The image is recommended because it reads Parquet and ORC.
+   For the zip instead, put it in one bucket per region, named
+   `<CodeS3BucketPrefix>-<region>`, readable by the organization.
+3. **Trusted access.** Turn on trusted access for CloudFormation StackSets
+   in AWS Organizations. To deploy from a delegated administrator, register
+   it and set `CallAs: DELEGATED_ADMIN`.
+4. **Deploy `estate-stackset.yaml`** with `ScannerTemplateUrl` (the release's
+   `scanner.yaml` in S3), `OrganizationalUnitIds` (an OU or the root),
+   `Regions`, and `FindingsEventBusArn`. Or do the same from the CLI:
+
+   ```sh
+   aws cloudformation create-stack-set --stack-set-name sensitive-data-scanner \
+     --template-url https://example-bucket.s3.us-east-1.amazonaws.com/scanner.yaml \
+     --permission-model SERVICE_MANAGED \
+     --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
+     --capabilities CAPABILITY_IAM \
+     --parameters ParameterKey=FindingsEventBusArn,ParameterValue=arn:aws:events:us-west-2:111122223333:event-bus/findings \
+                  ParameterKey=ImageUri,ParameterValue=111122223333.dkr.ecr.us-east-1.amazonaws.com/sensitive-data-scanner@sha256:…
+   aws cloudformation create-stack-instances --stack-set-name sensitive-data-scanner \
+     --deployment-targets OrganizationalUnitIds=ou-exam-ple12345 \
+     --regions us-east-1 us-west-2 eu-west-1 \
+     --operation-preferences RegionConcurrencyType=PARALLEL,MaxConcurrentPercentage=25,FailureTolerancePercentage=10
+   ```
+
+5. **The management account** is never a target of a service-managed
+   StackSet. If it holds data, deploy `scanner.yaml` there as an ordinary
+   stack.
+
+**Per account and region.**
+
+- `ImageUri` must name the region's own registry (`<account>.dkr.ecr.<region>.amazonaws.com/…`).
+  For many regions, set it per region with a stack-instance parameter
+  override (`--parameter-overrides` on `create-stack-instances`, or
+  `update-stack-instances`).
+- `RdsExportKmsKeyArn` names a key in each account and region, so it is
+  usually set per account. Without it, RDS and Aurora are discovered and
+  reported as `export_not_configured`.
+- IAM resources have no fixed names, so one account holds a stack in many
+  regions without collisions. The results bucket is
+  `sds-results-<account>-<region>`, and its policy refuses anything but TLS.
+- There is no reserved concurrency: the results bucket's lock allows one run
+  at a time, and reserving concurrency would fail in accounts still at the
+  default Lambda quota.
+
+### IAM per source
+
+The scanner's role (`ScannerRole` in `scanner.yaml`) holds exactly this,
+statement by statement. A test (`scanner/tests/test_template.py`) checks
+several things:
+- every allowed action is a read, or a write aimed at the scanner's own
+  bucket, log group, bus or exports;
+- every AWS call in the code is allowed;
+- every allowed action is named in this table;
+- nothing allowed is also denied.
+
+| Source | Actions | Resource | Condition |
+|---|---|---|---|
+| Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` | the results bucket and its objects | |
+| Its own logs | `logs:CreateLogStream`, `logs:PutLogEvents` | its log group | |
+| S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
+| CloudWatch Logs | `logs:DescribeLogGroups`, `logs:FilterLogEvents`, `logs:ListTagsForResource` | `*` | |
+| DynamoDB | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`, `dynamodb:Query`, `dynamodb:ListTagsOfResource` | `*` | |
+| Glue Data Catalog | `glue:GetDatabases`, `glue:GetTables`, `glue:GetTags` | `*` | |
+| RDS and Aurora (discovery) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBClusterSnapshots`, `rds:DescribeDBSnapshots`, `rds:DescribeExportTasks` | `*` | |
+| KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>` or `dynamodb.<region>` (`AllowKmsDecrypt`) |
+| Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
+| RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
+| | `iam:PassRole` | the export role only | `iam:PassedToService` is `export.rds.amazonaws.com` |
+| | `kms:CreateGrant` | the export key | `kms:ViaService` is `rds.<region>`, and `kms:GrantIsForAWSResource` |
+| | `kms:DescribeKey` | the export key | `kms:ViaService` is `rds.<region>` |
+| | `kms:Decrypt` | the export key | `kms:ViaService` is `s3.<region>` (to read the export) |
+| DynamoDB export | `dynamodb:DescribeContinuousBackups`, `dynamodb:ExportTableToPointInTime`, `dynamodb:DescribeExport` | `*` | only with `EnableDynamoDBExport` |
+| | `kms:GenerateDataKey`, `kms:Decrypt` | the export key | `kms:ViaService` is `s3.<region>`; only with `DynamoDBExportKmsKeyArn` |
+| Data API (opt-in) | `rds-data:BeginTransaction`, `rds-data:ExecuteStatement`, `rds-data:RollbackTransaction` | the named clusters | only with `DataApiTargets` |
+| | `secretsmanager:GetSecretValue` | the named secrets | |
+
+And three explicit denies, as defense in depth against any other policy the
+role might gain:
+
+| Deny | What |
+|---|---|
+| `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes |
+| `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
+
+The RDS **export role** (`RdsExportRole`, trusted by
+`export.rds.amazonaws.com` for this account only) can write, read and delete
+under `exports/rds/` in the results bucket, and list the bucket, nothing
+else. The schedule's role can invoke the function, nothing else.
+
+**Stores kept out.** The deny list (`DiscoverDeny`) is configuration, not a
+boundary. To keep the scanner out of a store for certain, add an explicit
+`Deny` for the scanner's role in that bucket's, table's or key's own
+policy; the store is then reported as `access_denied`.
 
 ## Event-driven mode (phase 2, design only)
 

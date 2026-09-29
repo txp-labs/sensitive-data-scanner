@@ -48,6 +48,9 @@ jobs:
       - name: Types
         run: uv run mypy
 
+      - name: Templates (cfn-lint)
+        run: uv run cfn-lint ../deploy/*.yaml
+
       - name: Tests
         env:
           # The parity test runs the TypeScript package with Node; in CI a
