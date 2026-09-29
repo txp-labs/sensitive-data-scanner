@@ -580,6 +580,57 @@ def test_no_value_leaves_opensearch(
         assert leaks(blob) == [], name_
 
 
+def test_no_value_leaves_snapshots_backups_or_clusters(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """EBS blocks holding values, and a Backup vault and DocumentDB cluster named with them."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_snapshots import T2, blocks, snapshot, stubs
+
+    s = stubs(env, "ec2", "ebs", "backup", "docdb", "docdb-elastic")
+    s["ec2"].add_response("describe_volumes", {"Volumes": [{"VolumeId": "vol-0a1", "Size": 1}]})
+    s["ec2"].add_response(
+        "describe_snapshots", {"Snapshots": [snapshot("snap-new", "vol-0a1", T2)]}
+    )
+    s["backup"].add_response(
+        "list_backup_vaults",
+        {"BackupVaultList": [{"BackupVaultName": f"vault-{SSN_A}", "BackupVaultArn": "arn:v"}]},
+    )
+    s["backup"].add_response("list_recovery_points_by_backup_vault", {"RecoveryPoints": []})
+    s["docdb"].add_response(
+        "describe_db_clusters",
+        {"DBClusters": [{"DBClusterIdentifier": f"docs-{SSN_B}", "Engine": "docdb"}]},
+    )
+    s["docdb-elastic"].add_response(
+        "list_clusters",
+        {"clusters": [{"clusterName": f"e-{CARDS['visa']}", "clusterArn": "a", "status": "x"}]},
+    )
+    blocks(
+        s["ebs"],
+        "snap-new",
+        0,
+        [f"card {CARDS['jcb']} ssn {dashed(SSN_B)}", f"{CARDS['amex']} and {SSN_A}"],
+    )
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"ebs", "backup", "documentdb"}),
+            ebs_direct_read=True,
+            ebs_blocks_per_snapshot=4,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert {f["class"] for f in doc["findings"]} >= {"card", "us_ssn"}
+    assert sum(1 for x in doc["discovery"]["stores"] if x.get("nameMasked")) == 3
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 
