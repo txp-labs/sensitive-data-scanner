@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/txp-labs/sensitive-data-scanner/spec/schema/classes.schema.json",
+  "title": "Sensitive-data classes (spec/classes.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specVersion", "classes", "retryPrefixes", "promptCarryover", "contextWindow", "cardBrands"],
+  "properties": {
+    "specVersion": { "const": "0.1" },
+    "classes": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/class" }
+    },
+    "retryPrefixes": { "type": "array", "items": { "type": "string", "pattern": "^[^A-Z]+$" } },
+    "promptCarryover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turns", "surviveRetry"],
+      "properties": {
+        "turns": { "const": 1 },
+        "surviveRetry": { "type": "boolean" }
+      }
+    },
+    "contextWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turnsBefore"],
+      "properties": { "turnsBefore": { "type": "integer", "minimum": 0 } }
+    },
+    "cardBrands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["brand", "prefixes", "lengths"],
+        "properties": {
+          "brand": { "type": "string", "pattern": "^[a-z]+$" },
+          "prefixes": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "pattern": "^[0-9]+(-[0-9]+)?$" }
+          },
+          "lengths": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "integer", "minimum": 13, "maximum": 19 }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digits": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        {
+          "type": "array",
+          "prefixItems": [{ "type": "integer", "minimum": 1 }, { "type": "integer", "minimum": 1 }],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ]
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "digits": { "$ref": "#/$defs/digits" },
+        "rules": {
+          "type": "array",
+          "items": {
+            "enum": ["luhn", "iin_known", "area_not_000_666_9xx", "group_not_00", "serial_not_0000"]
+          }
+        },
+        "softRules": { "type": "array", "items": { "enum": ["iin_known"] } },
+        "kinds": {
+          "type": "array",
+          "items": { "enum": ["date_mmddyy", "date_mmddyyyy", "date_slashed", "date_iso", "spoken_date"] }
+        }
+      },
+      "oneOf": [{ "required": ["digits"] }, { "required": ["kinds"] }]
+    },
+    "class": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "promptPhrases", "shape"],
+      "properties": {
+        "severity": { "enum": ["high", "medium", "low"] },
+        "promptPhrases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "shape": { "$ref": "#/$defs/shape" },
+        "promptedWithoutShape": { "enum": ["flag_low_confidence"] },
+        "standalone": { "enum": ["any", "formatted", "never"] },
+        "contextWords": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "contextExclusions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "suppressWords": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "dummyValues": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" } },
+        "excludeKnownTestNumbers": { "type": "boolean" },
+        "testNumbers": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]{13,19}$" } },
+        "testNumbersMaxDistinctDigits": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

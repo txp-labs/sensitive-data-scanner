@@ -1,0 +1,184 @@
+# Sensitive-data classes: what each class is, the prompts that ask for it,
+# the shape a value must have, and the words that give context.
+#
+# This file is a contract. Stugum's call engine mirrors it, and the TypeScript
+# package (packages/spec-ts) and the Python runner (scanner/) both implement
+# it and are tested against every case in vectors/. The rules for reading it
+# are in spec/README.md. The JSON Schema is spec/schema/classes.schema.json.
+#
+# Synthetic and public values only. Never put a real card number, SSN or any
+# other personal value in this file.
+specVersion: "0.1"
+
+classes:
+  us_ssn:
+    severity: high
+    # Regular expressions, matched case-insensitively against a bot or agent
+    # turn (retry prefixes stripped). A match marks the NEXT customer turn as
+    # this class.
+    promptPhrases:
+      - "social security number"
+      - "\\bssn\\b"
+    shape:
+      digits: 9
+      rules: [area_not_000_666_9xx, group_not_00, serial_not_0000]
+    # Without a prompt or a context word, a nine-digit value counts only when
+    # it was written 3-2-4 with one kind of separator (512-43-7788).
+    standalone: formatted
+    contextWords: ["social", "ssn", "social security"]
+    # Removed from the context before contextWords are looked for: the last
+    # four of a social is not an SSN.
+    contextExclusions:
+      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)"
+    # Published sample numbers. Excluded from shape and context detection
+    # (counted apart as test data); a prompted answer is classed regardless.
+    dummyValues: ["078051120", "219099999", "123456789", "111111111", "987654320"]
+
+  card:
+    severity: high
+    promptPhrases: ["credit card number", "card number", "debit card"]
+    shape:
+      digits: [13, 19]
+      rules: [luhn, iin_known]
+      # A prompted answer that fails only these rules is medium confidence,
+      # not low: a Luhn-valid number the IIN table does not know.
+      softRules: [iin_known]
+    promptedWithoutShape: flag_low_confidence
+    standalone: any
+    contextWords:
+      - "card"
+      - "cards"
+      - "credit"
+      - "debit"
+      - "visa"
+      - "mastercard"
+      - "master card"
+      - "amex"
+      - "american express"
+      - "discover"
+      - "jcb"
+      - "diners"
+      - "unionpay"
+      - "union pay"
+      - "maestro"
+      - "cardholder"
+      - "exp"
+      - "expiry"
+      - "expiration"
+      - "expires"
+      - "cvv"
+      - "cvc"
+      - "payment"
+      - "billing"
+    # Without a card word, a number next to one of these is something else.
+    suppressWords:
+      - "order"
+      - "invoice"
+      - "tracking"
+      - "phone"
+      - "telephone"
+      - "mobile"
+      - "fax"
+      - "imei"
+      - "iccid"
+      - "isbn"
+      - "serial"
+      - "uuid"
+      - "guid"
+      - "trace"
+      - "request id"
+      - "transaction id"
+      - "txn"
+      - "confirmation"
+      - "reference"
+      - "ref"
+      - "account id"
+      - "customer id"
+      - "timestamp"
+      - "epoch"
+    excludeKnownTestNumbers: true
+    # Public test numbers published by card networks and processors. Also
+    # excluded: any number made of two or fewer distinct digits.
+    testNumbers:
+      - "4111111111111111"
+      - "4012888888881881"
+      - "4222222222222"
+      - "4242424242424242"
+      - "4000056655665556"
+      - "4000000000000002"
+      - "4000000000009995"
+      - "5555555555554444"
+      - "5105105105105100"
+      - "5200828282828210"
+      - "2223003122003222"
+      - "2223000048400011"
+      - "378282246310005"
+      - "371449635398431"
+      - "378734493671000"
+      - "6011111111111117"
+      - "6011000990139424"
+      - "6011981111111113"
+      - "3530111333300000"
+      - "3566002020360505"
+      - "30569309025904"
+      - "38520000023237"
+      - "36227206271667"
+      - "6200000000000005"
+      - "6759649826438453"
+    testNumbersMaxDistinctDigits: 2
+
+  dob:
+    severity: medium
+    promptPhrases: ["date of birth", "\\bdob\\b", "birthday", "born"]
+    shape:
+      kinds: [date_mmddyy, date_mmddyyyy, date_slashed, date_iso, spoken_date]
+    standalone: never
+    contextWords: ["date of birth", "dob", "d.o.b", "born", "birth date", "birthdate", "birthday"]
+
+  cvv:
+    severity: high
+    promptPhrases: ["security code", "\\bcvv\\b", "three digit code"]
+    shape: { digits: [3, 4] }
+
+  pin:
+    severity: high
+    promptPhrases: ["\\bpin\\b"]
+    shape: { digits: [4, 6] }
+
+  account_number:
+    severity: medium
+    promptPhrases: ["account number"]
+    shape: { digits: [6, 17] }
+
+  us_ssn_last4:
+    severity: low
+    promptPhrases: ["last four of your social", "last 4 of your ssn"]
+    shape: { digits: 4 }
+
+# Stripped from the start of a bot or agent turn before prompt matching.
+retryPrefixes: ["sorry. i didn't get that", "i'm sorry, i didn't catch that"]
+
+promptCarryover:
+  turns: 1            # the class applies to the next customer turn only (keypad or speech)
+  surviveRetry: true  # a retry-prefixed re-prompt re-arms the same class
+
+# Context words are looked for in the turn that holds the value and in this
+# many turns before it (any speaker).
+contextWindow:
+  turnsBefore: 2
+
+# Issuer identification number ranges. The first rule with a matching prefix
+# decides the brand; the number's length must then be one of that rule's
+# lengths, or it has no known IIN. A range "a-b" compares the first
+# len(a) digits. Most specific first.
+cardBrands:
+  - { brand: discover, prefixes: ["622126-622925"], lengths: [16, 17, 18, 19] }
+  - { brand: maestro, prefixes: ["5018", "5020", "5038", "5893", "6304", "6759", "6761-6763"], lengths: [13, 14, 15, 16, 17, 18, 19] }
+  - { brand: mir, prefixes: ["2200-2204"], lengths: [16, 17, 18, 19] }
+  - { brand: visa, prefixes: ["4"], lengths: [13, 16, 19] }
+  - { brand: mastercard, prefixes: ["51-55", "2221-2720"], lengths: [16] }
+  - { brand: amex, prefixes: ["34", "37"], lengths: [15] }
+  - { brand: discover, prefixes: ["6011", "644-649", "65"], lengths: [16, 17, 18, 19] }
+  - { brand: jcb, prefixes: ["3528-3589"], lengths: [16, 17, 18, 19] }
+  - { brand: diners, prefixes: ["300-305", "36", "38-39"], lengths: [14, 15, 16, 17, 18, 19] }
+  - { brand: unionpay, prefixes: ["62"], lengths: [16, 17, 18, 19] }

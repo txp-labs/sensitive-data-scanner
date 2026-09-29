@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/txp-labs/sensitive-data-scanner/spec/schema/normalize-vector.schema.json",
+  "title": "One normalization test vector (a line of vectors/normalize.jsonl)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "text", "normalized", "digitRuns"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "description": { "type": "string" },
+    "text": { "type": "string" },
+    "normalized": { "type": "string" },
+    "digitRuns": {
+      "description": "Every maximal run of digits in the normalized text: [start, end, originalStart, originalEnd].",
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": "integer", "minimum": 0 },
+        "minItems": 4,
+        "maxItems": 4
+      }
+    }
+  }
+}

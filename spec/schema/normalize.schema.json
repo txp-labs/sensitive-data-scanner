@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/txp-labs/sensitive-data-scanner/spec/schema/normalize.schema.json",
+  "title": "Normalization steps (spec/normalize.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specVersion", "steps"],
+  "properties": {
+    "specVersion": { "const": "0.1" },
+    "steps": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/strip_keypad_terminator" },
+        { "$ref": "#/$defs/spoken_dates_to_iso" },
+        { "$ref": "#/$defs/number_words_to_digits" },
+        { "$ref": "#/$defs/drop_fillers_between_digits" },
+        { "$ref": "#/$defs/collapse_digit_separators" },
+        { "$ref": "#/$defs/join_same_speaker_turns" }
+      ],
+      "minItems": 6,
+      "maxItems": 6
+    }
+  },
+  "$defs": {
+    "wordMap": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z]+$" },
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "strip_keypad_terminator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strip_keypad_terminator"],
+      "properties": {
+        "strip_keypad_terminator": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 1 }
+        }
+      }
+    },
+    "spoken_dates_to_iso": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spoken_dates_to_iso"],
+      "properties": {
+        "spoken_dates_to_iso": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["months", "ordinals", "units", "teens", "tens", "yearRange"],
+          "properties": {
+            "months": { "$ref": "#/$defs/wordMap" },
+            "ordinals": { "$ref": "#/$defs/wordMap" },
+            "units": { "$ref": "#/$defs/wordMap" },
+            "teens": { "$ref": "#/$defs/wordMap" },
+            "tens": { "$ref": "#/$defs/wordMap" },
+            "yearRange": {
+              "type": "array",
+              "prefixItems": [{ "type": "integer" }, { "type": "integer" }],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        }
+      }
+    },
+    "number_words_to_digits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number_words_to_digits"],
+      "properties": {
+        "number_words_to_digits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["words", "multipliers"],
+          "properties": {
+            "words": { "$ref": "#/$defs/wordMap" },
+            "zeroOnlyNextToDigits": { "type": "array", "items": { "type": "string", "pattern": "^[a-z]+$" } },
+            "multipliers": { "$ref": "#/$defs/wordMap" }
+          }
+        }
+      }
+    },
+    "drop_fillers_between_digits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drop_fillers_between_digits"],
+      "properties": {
+        "drop_fillers_between_digits": { "type": "array", "items": { "type": "string", "pattern": "^[a-z]+$" } }
+      }
+    },
+    "collapse_digit_separators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collapse_digit_separators"],
+      "properties": {
+        "collapse_digit_separators": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 1 }
+        }
+      }
+    },
+    "join_same_speaker_turns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["join_same_speaker_turns"],
+      "properties": {
+        "join_same_speaker_turns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["withinSeconds", "stopWhenClassComplete"],
+          "properties": {
+            "withinSeconds": { "type": "number", "minimum": 0 },
+            "stopWhenClassComplete": { "type": "boolean" },
+            "maxInterveningTurns": { "type": "integer", "minimum": 0 },
+            "neverJoinChannels": { "type": "array", "items": { "enum": ["speech", "dtmf", "chat"] } }
+          }
+        }
+      }
+    }
+  }
+}

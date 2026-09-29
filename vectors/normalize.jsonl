@@ -1,0 +1,32 @@
+{"id":"keypad-terminator-pound","description":"A pound key right after digits is dropped.","text":"123456789#","normalized":"123456789","digitRuns":[[0,9,0,9]]}
+{"id":"keypad-terminator-star","description":"A star key right after digits is dropped.","text":"0230*","normalized":"0230","digitRuns":[[0,4,0,4]]}
+{"id":"keypad-terminator-kept-in-words","description":"A pound sign not right after a digit stays.","text":"ss# is fine, press # now","normalized":"ss# is fine, press # now","digitRuns":[]}
+{"id":"digit-words","description":"Digit words become digits and join.","text":"one two three four five six seven eight nine zero","normalized":"1234567890","digitRuns":[[0,10,0,49]]}
+{"id":"digit-words-case","description":"Digit words in any case.","text":"Four Two FOUR two","normalized":"4242","digitRuns":[[0,4,0,17]]}
+{"id":"oh-inside-number","description":"\"oh\" next to a digit word is zero.","text":"one oh five","normalized":"105","digitRuns":[[0,3,0,11]]}
+{"id":"oh-starting-number","description":"\"oh\" before a digit word is zero.","text":"oh one oh one","normalized":"0101","digitRuns":[[0,4,0,13]]}
+{"id":"oh-alone","description":"\"oh\" followed by a comma is a word.","text":"oh, it's one two","normalized":"oh, it's 12","digitRuns":[[9,11,9,16]]}
+{"id":"oh-in-sentence","description":"\"Oh\" with no digit next to it is a word.","text":"Oh I see","normalized":"Oh I see","digitRuns":[]}
+{"id":"double-triple","description":"\"double\" and \"triple\" repeat the next digit.","text":"double five triple oh seven","normalized":"550007","digitRuns":[[0,6,0,27]]}
+{"id":"double-digit-char","description":"\"double\" and \"triple\" before a single digit.","text":"double 5 and triple 0","normalized":"55 and 000","digitRuns":[[0,2,0,8],[7,10,13,21]]}
+{"id":"double-not-a-digit","description":"\"double\" before a non-digit stays.","text":"double check","normalized":"double check","digitRuns":[]}
+{"id":"fillers-between-digits","description":"Fillers between digits are dropped.","text":"four five uh three nine um um one","normalized":"45391","digitRuns":[[0,5,0,33]]}
+{"id":"fillers-not-between-digits","description":"A filler before a number stays.","text":"uh four five","normalized":"uh 45","digitRuns":[[3,5,3,12]]}
+{"id":"separators-collapse","description":"Spaces, dashes and dots between digits go.","text":"4539 1488-0343.6467","normalized":"4539148803436467","digitRuns":[[0,16,0,19]]}
+{"id":"separators-comma-space","description":"A comma and space between digits go.","text":"5 3 6 2, 2 8 1 4 7","normalized":"536228147","digitRuns":[[0,9,0,18]]}
+{"id":"separators-sentence","description":"Trailing punctuation after the number stays.","text":"It's 5 1 2 4 3 7 7 8 8.","normalized":"It's 512437788.","digitRuns":[[5,14,5,22]]}
+{"id":"spoken-date-month-first","description":"Month, ordinal day, spoken year.","text":"January first, nineteen eighty","normalized":"1980-01-01","digitRuns":[[0,4,0,30],[5,7,0,30],[8,10,0,30]]}
+{"id":"spoken-date-day-first","description":"Day of month, \"two thousand and one\".","text":"the twenty-first of March, two thousand and one","normalized":"2001-03-21","digitRuns":[[0,4,0,47],[5,7,0,47],[8,10,0,47]]}
+{"id":"spoken-date-compound-day","description":"A compound day and a three-word year.","text":"March thirty first nineteen eighty one","normalized":"1981-03-31","digitRuns":[[0,4,0,38],[5,7,0,38],[8,10,0,38]]}
+{"id":"spoken-date-oh-year","description":"\"nineteen oh five\".","text":"June 5, nineteen oh five","normalized":"1905-06-05","digitRuns":[[0,4,0,24],[5,7,0,24],[8,10,0,24]]}
+{"id":"spoken-date-twenty-twenty","description":"An abbreviated month, a digit day, \"twenty twenty\".","text":"on Dec. 2nd twenty twenty","normalized":"on 2020-12-02","digitRuns":[[3,7,3,25],[8,10,3,25],[11,13,3,25]]}
+{"id":"written-date-to-iso","description":"A written date with a month name becomes ISO.","text":"Date of birth: March 3, 1979","normalized":"Date of birth: 1979-03-03","digitRuns":[[15,19,15,28],[20,22,15,28],[23,25,15,28]]}
+{"id":"written-date-day-first","description":"Day, month, year.","text":"3 March 1979","normalized":"1979-03-03","digitRuns":[[0,4,0,12],[5,7,0,12],[8,10,0,12]]}
+{"id":"invalid-date-left","description":"An impossible date is not converted (and its digits then collapse).","text":"Feb 30 1990","normalized":"Feb 301990","digitRuns":[[4,10,4,11]]}
+{"id":"iso-date-protected","description":"An ISO date keeps its dashes.","text":"born 1990-07-21 in Boise","normalized":"born 1990-07-21 in Boise","digitRuns":[[5,9,5,9],[10,12,10,12],[13,15,13,15]]}
+{"id":"slashed-date-protected","description":"A slashed date keeps its shape and does not join the next number.","text":"DOB 7/4/1981 5 1 2","normalized":"DOB 7/4/1981 512","digitRuns":[[4,5,4,5],[6,7,6,7],[8,12,8,12],[13,16,13,18]]}
+{"id":"iso-date-not-joined","description":"A converted date does not join the next number.","text":"January 1, 1980 5 1 2","normalized":"1980-01-01 512","digitRuns":[[0,4,0,15],[5,7,0,15],[8,10,0,15],[11,14,16,21]]}
+{"id":"spoken-card-groups","description":"A card read in groups of four.","text":"four five three nine, one four eight eight, zero three four three, six four six seven","normalized":"4539148803436467","digitRuns":[[0,16,0,85]]}
+{"id":"mixed-spoken-digits","description":"Digits and digit words mixed.","text":"5 three 6 two","normalized":"5362","digitRuns":[[0,4,0,13]]}
+{"id":"curly-apostrophe","description":"Non-ASCII punctuation is kept as is.","text":"it’s nine eight seven","normalized":"it’s 987","digitRuns":[[5,8,5,21]]}
+{"id":"no-digits","description":"Text with no digits is unchanged.","text":"Thank you for calling.","normalized":"Thank you for calling.","digitRuns":[]}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/txp-labs/sensitive-data-scanner/spec/schema/vector.schema.json",
+  "title": "One conversation test vector (a line of vectors/*.jsonl, except normalize.jsonl)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "source", "turns", "expect"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "source": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "now": { "type": "string", "format": "date" },
+    "turns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["speaker", "text"],
+        "properties": {
+          "speaker": { "enum": ["bot", "agent", "customer"] },
+          "channel": { "enum": ["speech", "dtmf", "chat"] },
+          "text": { "type": "string" },
+          "beginMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "expect": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["turn", "class", "start", "end", "via", "confidence"],
+        "properties": {
+          "turn": { "type": "integer", "minimum": 0 },
+          "endTurn": { "type": "integer", "minimum": 0 },
+          "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "start": { "type": "integer", "minimum": 0 },
+          "end": { "type": "integer", "minimum": 1 },
+          "via": { "enum": ["prompt", "shape", "context"] },
+          "confidence": { "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "content"],
+      "properties": {
+        "format": { "enum": ["connect_chat", "contact_lens", "lex_v2_log", "connect_flow_log"] },
+        "content": { "type": "string" }
+      }
+    }
+  }
+}
