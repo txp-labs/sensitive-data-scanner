@@ -14,6 +14,10 @@
   `page_size` items, and stops early when its share of the run's budget is
   spent. The cursor keeps the last item read, and the next run resumes
   there, so a large table is covered over several runs.
+- **Sampling.** With `sample_percent` below 100, a Scan reads one parallel-scan
+  segment of `round(100 / sample_percent)` (`Segment` 0 of `TotalSegments`),
+  which DynamoDB spreads across the whole key space: the same items every
+  pass. The items left out are estimated and stated. A Query is not sampled.
 - **A pass.** When the last page of a pass is read, findings for items the
   pass no longer found (deleted, or clean now) drop out.
 
@@ -39,7 +43,7 @@ from typing import TYPE_CHECKING, Any
 from ..config import DynamoTarget
 from ..detect.analyzer import Detector
 from ..findings import Coverage, dynamodb_link, dynamodb_resource, finding_json
-from ..safety import error_name, log_event
+from ..safety import error_name, is_kms_denial, log_event
 from ..scan.attributes import FORMAT, AttributeRules, key_value, scan_attributes
 from ..scan.paths import parse_path
 from .base import Budget, FindingStore, SourceRun
@@ -82,6 +86,7 @@ class DynamoDBSource:
         region: str,
         page_size: int = 100,
         max_pages: int = 200,
+        sample_percent: int = 100,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.client = client
@@ -89,6 +94,7 @@ class DynamoDBSource:
         self.region = region
         self.page_size = page_size
         self.max_pages = max_pages
+        self.segments = 1 if target.partition is not None else max(1, round(100 / sample_percent))
         self.sleep = sleep
         self.rules = _rules(target)
         # The id names the read without its values: the partition and prefix go in hashed.
@@ -138,6 +144,9 @@ class DynamoDBSource:
                 cond += " AND begins_with(#sk, :sk)"
             args["KeyConditionExpression"] = cond
             args["ExpressionAttributeValues"] = values
+        elif self.segments > 1:
+            args["Segment"] = 0
+            args["TotalSegments"] = self.segments
         if names:
             args["ExpressionAttributeNames"] = names
         return op, args
@@ -156,7 +165,7 @@ class DynamoDBSource:
         store: FindingStore,
         now: _dt.datetime,
     ) -> SourceRun:
-        cov = Coverage("dynamodb", self.target)
+        cov = Coverage("dynamodb", self.target, sample_percent=max(1, 100 // self.segments))
         salt = cursor.get("keySalt") or secrets.token_hex(16)
         start_key = cursor.get("startKey") or None
         pass_id = cursor.get("passId") or secrets.token_hex(8)
@@ -180,7 +189,9 @@ class DynamoDBSource:
                     args["ExclusiveStartKey"] = start_key
                 page = self._call(op, budget, args)
                 pages += 1
-                cov.listed += int(page.get("ScannedCount", len(page.get("Items", []))))
+                listed = int(page.get("ScannedCount", len(page.get("Items", []))))
+                cov.listed += listed
+                cov.sampled_out += listed * (self.segments - 1)  # an estimate: other segments
                 cut = False
                 for item in page.get("Items", []):
                     cov.eligible += 1
@@ -230,6 +241,8 @@ class DynamoDBSource:
                     break
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
+            if is_kms_denial(err):
+                cov.kms_denied += 1
             log_event("source.failed", source=self.target, error=cov.error)
         if done and cov.error is None:
             cov.pass_complete = True

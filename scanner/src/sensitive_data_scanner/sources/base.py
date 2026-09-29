@@ -40,6 +40,10 @@ class Budget:
         self.items += 1
         self.bytes += size
 
+    def exhausted(self) -> bool:
+        """Nothing more fits: items, bytes or time are spent."""
+        return self.items >= self.max_items or self.bytes >= self.max_bytes or not self.time_left()
+
     def time_left(self) -> bool:
         return self.clock() < self.deadline
 

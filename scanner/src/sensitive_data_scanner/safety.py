@@ -54,6 +54,9 @@ EVENTS: Final = frozenset(
         "state.reset",
         "events.sent",
         "events.failed",
+        "discovery.done",
+        "discovery.failed",
+        "source.deferred",
     }
 )
 
@@ -95,6 +98,39 @@ def error_name(err: BaseException) -> str:
         code = (response.get("Error") or {}).get("Code")
     raw = str(code) if code else type(err).__name__
     return re.sub(r"[^A-Za-z0-9._:-]", "", raw)[:80] or "Error"
+
+
+KMS_ERRORS: Final = frozenset(
+    {
+        "KMSAccessDeniedException",
+        "KMSDisabledException",
+        "KMSInvalidStateException",
+        "KMSNotFoundException",
+        "KMS.AccessDeniedException",
+        "KMS.DisabledException",
+        "KMS.KMSInvalidStateException",
+        "KMS.NotFoundException",
+        "KMS.UnrecognizedClientException",
+    }
+)
+
+
+def is_kms_denial(err: BaseException) -> bool:
+    """Whether an error is a KMS key the scanner may not use.
+
+    S3 and DynamoDB report a missing `kms:Decrypt` as a plain AccessDenied whose
+    message names KMS. The message is only looked at here, never kept or logged.
+    """
+    name = error_name(err)
+    if name in KMS_ERRORS or name.startswith("KMS."):
+        return True
+    if name not in ("AccessDenied", "AccessDeniedException"):
+        return False
+    response = getattr(err, "response", None)
+    message = ""
+    if isinstance(response, dict):
+        message = str((response.get("Error") or {}).get("Message") or "")
+    return "kms" in message.lower()
 
 
 class ScanError(Exception):
