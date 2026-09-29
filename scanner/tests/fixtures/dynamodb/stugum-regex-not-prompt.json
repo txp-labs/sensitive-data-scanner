@@ -1,0 +1,123 @@
+{
+  "_comment": "Synthetic. Made-up values only, in the shape of a Stugum call-test run item (DynamoDB JSON) as Stugum described it on 2026-09-29.",
+  "Item": {
+    "pk": {
+      "S": "T#t_0000example"
+    },
+    "sk": {
+      "S": "RUN#2026-09-29T15:00:00Z#r_0000regex"
+    },
+    "runId": {
+      "S": "r_0000regex"
+    },
+    "parentRunId": {
+      "S": "r_0000suite"
+    },
+    "status": {
+      "S": "passed"
+    },
+    "steps": {
+      "L": [
+        {
+          "M": {
+            "kind": {
+              "S": "waitForPrompt"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
+            "text": {
+              "S": "(?i)social security number|\\bssn\\b"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
+            "digits": {
+              "S": "512437788#"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "speakUtterance"
+            },
+            "text": {
+              "S": "I would like to talk to an agent"
+            }
+          }
+        }
+      ]
+    },
+    "stepResults": {
+      "L": [
+        {
+          "M": {
+            "kind": {
+              "S": "waitForPrompt"
+            },
+            "stepIndex": {
+              "N": "0"
+            },
+            "observedText": {
+              "S": "For billing, press one. For anything else, press two."
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
+            "stepIndex": {
+              "N": "1"
+            },
+            "observedText": {
+              "S": "For billing, press one. For anything else, press two."
+            },
+            "engineVerdict": {
+              "S": "pass"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
+            "stepIndex": {
+              "N": "2"
+            },
+            "observedDtmf": {
+              "S": "512437788#"
+            },
+            "observedDtmfCount": {
+              "N": "9"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "speakUtterance"
+            },
+            "stepIndex": {
+              "N": "3"
+            },
+            "observedText": {
+              "S": "I would like to talk to an agent"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

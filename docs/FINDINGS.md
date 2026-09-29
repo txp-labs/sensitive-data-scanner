@@ -1,4 +1,4 @@
-# Findings, schema version 1.0
+# Findings, schema version 1.1
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,10 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.0"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.1"`.
+- Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
+  resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
+  so a 1.0 consumer that ignores what it does not know keeps working.
 
 ## Where findings go
 
@@ -54,8 +57,8 @@ the scanned account onto that bus:
 ```json
 {
   "schema": "sensitive-data-scanner.findings",
-  "schemaVersion": "1.0",
-  "scannerVersion": "0.1.0",
+  "schemaVersion": "1.1",
+  "scannerVersion": "0.2.0",
   "specVersion": "0.1",
   "runId": "20260929T060000Z-1a2b3c4d",
   "account": "123456789012",
@@ -133,7 +136,7 @@ One class of data in one attribute path of one item:
     "type": "dynamodb_item",
     "table": "stugum",
     "keyHash": "3f1c…(64 hex)",
-    "key": { "pk": "T#t_0123abcd", "sk": "R#2026-09-29T15:00:00Z#r_0123" },
+    "key": { "pk": "T#t_0123abcd", "sk": "RUN#2026-09-29T15:00:00Z#r_0123" },
     "attributePath": "stepResults[].observedDtmf"
   },
   "format": "dynamodb_item",
@@ -150,11 +153,11 @@ One class of data in one attribute path of one item:
 |---|---|
 | `keyHash` | HMAC-SHA256 of the item's key under a random salt in the scanner's state. Stable across runs; never the key. |
 | `key` | The key attributes, each value masked like an S3 object key; `keyMasked: true` when anything was masked. |
-| `attributePath` | The attribute, with `[]` for every list element. Each offset's `pointer` names the exact element. Findings in different paths are different findings. |
+| `attributePath` | The attribute, with `[]` for every list element, whatever condition (`[kind=sendDtmf]`) the configuration selected it by. Each offset's `pointer` names the exact element. Findings in different paths are different findings. |
 | `planted` | `true` when the path is configured as planted test input (a test script's steps), not a leak. |
 
-The DynamoDB resource, format and coverage kind are additive in schema 1.0:
-they appear only when a DynamoDB source is configured.
+The DynamoDB resource, format and coverage kind are new in schema 1.1
+(additive): they appear only when a DynamoDB source is configured.
 
 ### Names are masked
 

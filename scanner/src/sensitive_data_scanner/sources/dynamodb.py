@@ -67,6 +67,7 @@ def _rules(t: DynamoTarget) -> AttributeRules:
         keypad=tuple(parse_path(p) for p in t.keypad),
         prompts=tuple(parse_path(p) for p in t.prompts),
         planted=tuple(parse_path(p) for p in t.planted),
+        order_by=t.order_by,
     )
 
 
