@@ -23,14 +23,16 @@ value shows up in findings, events, logs, exception messages or object reprs.
   as a Redshift column, an OpenSearch field, an EBS volume's blocks, a
   stream's records, a queue's messages, a parameter's or a secret's value),
   the `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`,
-  `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm` and `secretsmanager`
-  kinds, the `block` format, the store reasons
+  `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`,
+  `elasticache`, `memorydb`, `timestream` and `keyspaces` kinds, the `block`,
+  `cql` and `rdb` formats, the store reasons
   `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
   `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
-  `live_queue`, `redrive_would_change` and `no_s3_destination`, and the store
+  `live_queue`, `redrive_would_change`, `no_s3_destination`, `in_memory`
+  and `no_read_path`, and the store
   fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
   `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue`,
-  `approximateMessages`, `items`, `itemTypes` and `excluded`. The kinds are one list
+  `approximateMessages`, `items`, `itemTypes`, `excluded` and `snapshots`. The kinds are one list
   (`$defs/storeKind`) for coverage, the run summary and listing errors. All
   additive.
 
@@ -140,7 +142,7 @@ One class of data at one location.
 | `id` | A stable hash of the resource and class. It stays the same across runs for the same location (and object version). Key triage decisions on it. |
 | `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). `dynamodb_item`: `table`, `keyHash`, `key` and `attributePath` (below). |
 | `connect` | The Amazon Connect contact and instance, when the item names one: a chat or Contact Lens transcript, or a flow log event. |
-| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`, `sql`, or (1.3) `block` (raw EBS blocks). |
+| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`, `sql`, or (1.3) `block` (raw EBS blocks), `cql` (Keyspaces) and `rdb` (a Redis snapshot file in S3, read as its text runs; no offsets). |
 | `class`, `severity` | The spec class (`card`, `us_ssn`, `us_itin`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
 | `count` | Distinct values of the class in the item. The same card read out by a caller and read back by the agent counts once. |
 | `occurrences` | Every place a value appears in the item. |
@@ -237,10 +239,10 @@ one field of one store as `store_field`. A Redshift column:
 
 | Field | Meaning |
 |---|---|
-| `service` | The product: `redshift` (a provisioned cluster), `redshift_serverless` (a workgroup), `opensearch` (a managed domain), `opensearch_serverless` (a collection) `ebs` (a volume, or a snapshot whose volume is gone), `kinesis` (a stream), `sqs` (a dead-letter queue), `ssm` (a parameter) or `secretsmanager` (a secret; the value itself is never reported). Firehose findings are the S3 objects it delivered (`s3_object`) |
+| `service` | The product: `redshift` (a provisioned cluster), `redshift_serverless` (a workgroup), `opensearch` (a managed domain), `opensearch_serverless` (a collection) `ebs` (a volume, or a snapshot whose volume is gone), `kinesis` (a stream), `sqs` (a dead-letter queue), `ssm` (a parameter), `secretsmanager` (a secret; the value itself is never reported), `timestream` or `keyspaces` (a table's column). Firehose findings are the S3 objects it delivered (`s3_object`) |
 | `store` | The cluster or workgroup (and, for later kinds, the domain, stream, queue, parameter or secret), masked like a key |
-| `database`, `table`, `field` | Where the values are, as far as the store has them: for Redshift the database, `schema.table` and the column; for OpenSearch the index (`table`) and the document's top-level field; for EBS `field: blocks` (the raw blocks; no file path); for Kinesis `field: records`, for SQS `field: messages`, for a parameter or a secret `field: value` |
-| `readBy` | How it was read: `data_api` for Redshift, `search` for OpenSearch, `ebs_direct` for EBS, `shard_sample` for Kinesis, `receive` for SQS, `get_parameters` for SSM, `get_secret_value` for Secrets Manager |
+| `database`, `table`, `field` | Where the values are, as far as the store has them: for Redshift the database, `schema.table` and the column; for OpenSearch the index (`table`) and the document's top-level field; for EBS `field: blocks` (the raw blocks; no file path); for Kinesis `field: records`, for SQS `field: messages`, for a parameter or a secret `field: value`; for Timestream and Keyspaces the database or keyspace as `store`, the `table` and the column as `field` |
+| `readBy` | How it was read: `data_api` for Redshift, `search` for OpenSearch, `ebs_direct` for EBS, `shard_sample` for Kinesis, `receive` for SQS, `get_parameters` for SSM, `get_secret_value` for Secrets Manager, `query` for Timestream, `cql` for Keyspaces |
 | `snapshotTime` | For EBS: when the snapshot read was taken. Not part of the id |
 | `offsets` | Empty: a sampled row is not addressable later. `count` is distinct values in the sample |
 
@@ -316,7 +318,7 @@ One entry per source says what was, and was not, read:
 
 | Field | Meaning |
 |---|---|
-| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2), `redshift` with `cluster:<id>` or `workgroup:<name>`, `opensearch` with `domain:<name>` or `collection:<name>`, `ebs` with the volume or snapshot id, `kinesis` with the stream, `sqs` with the queue, `ssm` with `parameter-store`, `secretsmanager` with `secrets-manager`; a Firehose stream's S3 locations are `s3` with `bucket/prefix` (1.3) |
+| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2), `redshift` with `cluster:<id>` or `workgroup:<name>`, `opensearch` with `domain:<name>` or `collection:<name>`, `ebs` with the volume or snapshot id, `kinesis` with the stream, `sqs` with the queue, `ssm` with `parameter-store`, `secretsmanager` with `secrets-manager`, `timestream` and `keyspaces` with `database.table`; a Firehose stream's S3 locations are `s3` with `bucket/prefix` (1.3) |
 | `listed`, `eligible`, `scanned` | Objects listed, events returned, or DynamoDB items evaluated (`ScannedCount`); the new or changed ones (for DynamoDB, the items returned); the ones read this run |
 | `sampledOut`, `samplePercent` | Left out by sampling. Sampling is stated, never silent |
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
@@ -357,10 +359,10 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`; and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`; and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy) and `no_s3_destination` (a Firehose stream with no S3 location) |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -377,6 +379,7 @@ coverage gap is visible rather than silent.
 | `fileSystemType` | (1.3) For FSx: `LUSTRE`, `WINDOWS`, `ONTAP` or `OPENZFS` |
 | `destinations` | (1.3) For Firehose: where the stream delivers (`S3`, `Redshift`, `OpenSearch`, `Splunk`, `HttpEndpoint`, `Snowflake`, `Iceberg`) |
 | `deadLetterQueue`, `approximateMessages` | (1.3) For SQS: the queue is a dead-letter queue; its approximate message count |
+| `snapshots` | (1.3) For ElastiCache and MemoryDB: the cache's snapshots, counted |
 | `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`) |
 
 `stores` lists the stores not read first, and holds at most 5,000

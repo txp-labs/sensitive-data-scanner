@@ -88,7 +88,9 @@ READ = re.compile(
     r"|kinesis:(List|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
     r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$"
     r"|ssm:(DescribeParameters|GetParameters|GetParameter|ListTagsForResource)$"
-    r"|secretsmanager:ListSecrets$)"
+    r"|secretsmanager:ListSecrets$"
+    r"|elasticache:Describe|memorydb:Describe|timestream:(DescribeEndpoints$|List|Select$)"
+    r"|timestream-influxdb:List|cassandra:Select$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -286,19 +288,40 @@ SERVICES = {
     "firehose": "firehose",
     "sqs": "sqs",
     "secretsmanager": "secretsmanager",
+    "elasticache": "elasticache",
+    "memorydb": "memorydb",
+    "timestream-write": "timestream",
+    "timestream-query": "timestream",
+    "timestream-influxdb": "timestream-influxdb",
+    "keyspaces": "cassandra",
 }
+
+
+# API operations whose IAM action is not named after them (the service's own reference).
+OPERATION_ACTIONS = {
+    ("timestream-query", "Query"): "timestream:Select",
+    ("keyspaces", "ListKeyspaces"): "cassandra:Select",
+    ("keyspaces", "ListTables"): "cassandra:Select",
+    ("keyspaces", "GetTable"): "cassandra:Select",
+    ("keyspaces", "ListTagsForResource"): "cassandra:Select",
+}
+
+
+def action_of(service: str, op: str) -> str:
+    if service == "s3":
+        return S3_ACTIONS.get(op, f"s3:{op}")
+    return OPERATION_ACTIONS.get((service, op), f"{SERVICES[service]}:{op}")
 
 
 def operations() -> dict[str, list[str]]:
     """Snake-case operation name to the IAM actions it may be, across the services used."""
     session = botocore.session.get_session()
     out: dict[str, list[str]] = {}
-    for service, prefix in SERVICES.items():
+    for service in SERVICES:
         model = session.get_service_model(service)
         for op in model.operation_names:
             snake = botocore.xform_name(op)
-            action = S3_ACTIONS.get(op, f"{prefix}:{op}") if service == "s3" else f"{prefix}:{op}"
-            out.setdefault(snake, []).append(action)
+            out.setdefault(snake, []).append(action_of(service, op))
     return out
 
 
@@ -363,7 +386,7 @@ def test_each_adapter_calls_only_its_own_services() -> None:
         for service in services:
             model = session.get_service_model(service)
             for op in model.operation_names:
-                own.setdefault(botocore.xform_name(op), []).append(f"{SERVICES[service]}:{op}")
+                own.setdefault(botocore.xform_name(op), []).append(action_of(service, op))
         every = operations()
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
@@ -454,6 +477,17 @@ def test_config_stores_are_read_never_written_and_secrets_are_opt_in() -> None:
     ]
     assert [c for c, st, _ in wrapped if st.get("Sid") == "ReadSecretValues"] == ["SecretsValues"]
     assert SCANNER["Parameters"]["SecretsRead"]["Default"] == "false"
+
+
+def test_time_series_and_keyspaces_are_select_only() -> None:
+    ts = next(s for s in statements() if s.get("Sid") == "SelectTimestreamTables")
+    assert actions(ts) == ["timestream:Select"]
+    assert in_account(ts["Resource"], "timestream", "database/")
+    ks = next(s for s in statements() if s.get("Sid") == "SelectKeyspaces")
+    assert actions(ks) == ["cassandra:Select"]
+    assert in_account(ks["Resource"], "cassandra", "/keyspace/")
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {"cassandra:Modify", "timestream:WriteRecords", "elasticache:CopySnapshot"} <= denied
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:

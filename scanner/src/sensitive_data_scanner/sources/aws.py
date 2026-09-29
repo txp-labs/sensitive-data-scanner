@@ -12,6 +12,12 @@ from .config_stores import SecretsAdapter, SsmAdapter
 from .coverage_only import ClusterAdapter, EfsAdapter, FsxAdapter
 from .ebs import BackupAdapter, EbsAdapter
 from .opensearch import OpenSearchAdapter
+from .other_stores import (
+    ElastiCacheAdapter,
+    KeyspacesAdapter,
+    MemoryDbAdapter,
+    TimestreamAdapter,
+)
 from .redshift import RedshiftAdapter
 from .streams import FirehoseAdapter, KinesisAdapter, SqsAdapter
 
@@ -29,5 +35,9 @@ _ALL: list[Adapter] = [
     SqsAdapter(),
     SsmAdapter(),
     SecretsAdapter(),
+    ElastiCacheAdapter(),
+    MemoryDbAdapter(),
+    TimestreamAdapter(),
+    KeyspacesAdapter(),
 ]
 ADAPTERS: dict[str, Adapter] = {a.kind: a for a in _ALL}

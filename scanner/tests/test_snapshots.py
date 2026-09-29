@@ -19,7 +19,8 @@ from jsonschema import Draft202012Validator
 from aws_fixtures import Env, config
 from conftest import REPO
 from sensitive_data_scanner.config import read_config, store_rules
-from sensitive_data_scanner.sources.ebs import BLOCK, printable_text
+from sensitive_data_scanner.scan.raw import printable_text
+from sensitive_data_scanner.sources.ebs import BLOCK
 from synthetic import CARDS, SSN_A, dashed
 
 SCHEMA = Draft202012Validator(

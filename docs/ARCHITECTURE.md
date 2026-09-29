@@ -143,6 +143,8 @@ One run:
 | `SQS_MESSAGES_PER_QUEUE` | Messages received per dead-letter queue per run | 100 |
 | `SSM_DECRYPT` | Read `SecureString` parameters, decrypted through SSM ([below](#parameter-store-and-secrets-manager)) | on |
 | `SECRETS_READ` | Read Secrets Manager secrets' values for sensitive data | off: listed and reported `read_not_configured` |
+| `TIMESTREAM_MAX_ROWS`, `TIMESTREAM_LOOKBACK_DAYS` | Rows sampled per Timestream table, and how far back (`WHERE time > ago(Nd)`) | 1,000 and 1 |
+| `KEYSPACES_MAX_ROWS` | Rows sampled per Keyspaces table (`LIMIT`) | 1,000 |
 | `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
 
 #### Configuration beyond 4 KB
@@ -215,6 +217,38 @@ region, and a bucket in another region is left to that region's scanner.
 | `sqs` | `ListQueues`, `GetQueueAttributes` | dead-letter queues only, received from and left in place, opt-in |
 | `ssm` | `DescribeParameters` | one store, `parameter-store`: each parameter's value (`GetParameters`, ten at a time) |
 | `secretsmanager` | `ListSecrets` | one store, `secrets-manager`: each secret's value, opt-in (`GetSecretValue`) |
+| `elasticache`, `memorydb` | `DescribeReplicationGroups`, `DescribeCacheClusters`, `DescribeServerlessCaches` (and their snapshots); MemoryDB `DescribeClusters`, `DescribeSnapshots` | reported (`in_memory`); an exported snapshot in S3 is read by the S3 source |
+| `timestream` | `ListDatabases`, `ListTables`; InfluxDB `ListDbInstances` | one sampled query per table; InfluxDB reported (`no_read_path`) |
+| `keyspaces` | `ListKeyspaces`, `ListTables` | one sampled CQL query per table, signed with the role |
+
+#### Coverage by store
+
+Every kind the scanner discovers, and how far it reads it. Nothing listed
+is ever a silent pass: what is not read is in the run summary with its
+reason.
+
+| Store | Read | How | Otherwise reported as |
+|---|---|---|---|
+| S3, CloudWatch Logs, DynamoDB, Glue tables | **Scanned** | objects, events, items, columns | `denied`, `kms_access`, `too_large`, ... |
+| RDS and Aurora | **Scanned** with the export role and key | snapshot export to Parquet | `export_not_configured`, `no_snapshot` |
+| Aurora (small databases) | **Opt-in** (`RDS_DATA_API`) | sampled read-only SQL | |
+| Redshift, Redshift Serverless | **Opt-in** (`REDSHIFT_READ`) | sampled read-only SQL (Data API) | `read_not_configured`, `paused`, `no_grant` |
+| OpenSearch domains | **Scanned** | sampled `_search` per index, GETs only | `vpc_only`, `access_denied` |
+| OpenSearch Serverless | **Opt-in** (`OPENSEARCH_SERVERLESS_READ`) | the same | `read_not_configured` |
+| EBS volumes and snapshots | **Opt-in** (`EBS_DIRECT_READ`) | sampled blocks' text, EBS direct APIs | `read_not_configured`, `no_snapshot`, `archived` |
+| Kinesis Data Streams | **Scanned** | sampled from `TRIM_HORIZON`, never checkpointed | `unsupported` |
+| Firehose | **Scanned** | its S3 locations, by the S3 source | `no_s3_destination` |
+| SQS dead-letter queues | **Opt-in** (`SQS_DLQ_READ`) | received with `VisibilityTimeout=0` | `read_not_configured`, `redrive_would_change`; live queues `live_queue` |
+| SSM Parameter Store | **Scanned** (`SecureString` via `SSM_DECRYPT`, on) | `GetParameters` | `excluded` counts |
+| Secrets Manager | **Opt-in** (`SECRETS_READ`) | `GetSecretValue`, counts only | `read_not_configured` |
+| Timestream for LiveAnalytics | **Scanned** | one sampled query per table | `unsupported` |
+| Keyspaces | **Scanned** | one sampled CQL query per table | `access_denied` |
+| ElastiCache, MemoryDB snapshots exported to S3 | **Scanned** | `.rdb` files read by the S3 source | |
+| ElastiCache, MemoryDB | Coverage only | | `in_memory` |
+| AWS Backup vaults | Coverage only (EBS points read as EBS) | | `backup_copy` |
+| DocumentDB, Neptune | Coverage only | | `no_snapshot_export` |
+| EFS, FSx | Coverage only; opt-in task designed | | `needs_task` |
+| Timestream for InfluxDB | Coverage only | | `no_read_path` |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -300,6 +334,8 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `live_queue` | An SQS queue that is not a dead-letter queue: never read, a receive would reach live consumers |
 | `skipped` | `redrive_would_change` | A dead-letter queue with its own redrive policy: a receive raises the receive count, which could move messages on |
 | `skipped` | `no_s3_destination` | A Firehose stream with no S3 location (its destination's own kind reads it, or it is outside AWS) |
+| `skipped` | `in_memory` | ElastiCache or MemoryDB: data in memory, inside the VPC, behind the cache's own credentials; exported snapshots in S3 are read there |
+| `skipped` | `no_read_path` | Timestream for InfluxDB: reached inside a VPC with an InfluxDB token |
 
 Each store's `gaps` counts what was listed but not read: `kmsDenied`
 (objects under a KMS key the scanner may not use), `unreadable` and
@@ -705,6 +741,55 @@ fragment of it.
   key) is counted `unreadable`, and the pass goes on. Binary secrets that are
   not text are counted `unreadable`.
 
+### Caches, Timestream and Keyspaces
+
+**ElastiCache and MemoryDB** (`elasticache`, `memorydb`). The run lists
+replication groups (their member clusters are not listed again), standalone
+cache clusters, serverless caches and MemoryDB clusters, counts each one's
+snapshots (`snapshots`), and reports them as `in_memory`. The data lives in
+memory inside the VPC, behind the cache's own authentication, and a snapshot
+has no read path while it stays in the service. A snapshot **exported to
+S3** (`CopySnapshot` with a target bucket, or
+`ExportServerlessCacheSnapshot`) is an RDB file in a bucket. The S3 source
+reads it: an object that starts with `REDIS` or ends in `.rdb` is read as
+the runs of printable text in it (strings of 20 bytes or more may be
+LZF-compressed in an RDB, and are then not read), with format `rdb` and no
+offsets. The scanner never exports a snapshot itself (`CopySnapshot` is
+denied).
+
+**Timestream for LiveAnalytics** (`timestream`). The run lists databases and
+tables (`ListDatabases`, `ListTables`; Timestream's endpoint discovery needs
+`DescribeEndpoints`), and for each active table runs one query:
+
+```sql
+SELECT * FROM "db"."table" WHERE time > ago(1d) LIMIT 1000
+```
+
+The quoted names come from the generic SQL dialect, and pages are followed
+up to the row limit. The rows are read by column (`store_field`,
+`service: timestream`, the database as `store`, the table, the measure or
+dimension as `field`, `readBy: query`, format `sql`). A query is billed by
+the data it scans, so the time filter (`TIMESTREAM_LOOKBACK_DAYS`) keeps it
+to recent data. Timestream for InfluxDB instances are listed and reported as
+`no_read_path`.
+
+**Keyspaces** (`keyspaces`). The run lists keyspaces and tables (the system
+keyspaces are left out), and for each table runs one CQL query over TLS to
+`cassandra.<region>.amazonaws.com:9142`, signed with the scanner's own role
+(the SigV4 plugin; no service-specific password):
+
+```sql
+SELECT * FROM "keyspace"."table" LIMIT 1000
+```
+
+The consistency is `LOCAL_ONE`, and the rows are read by column
+(`service: keyspaces`, format `cql`). One session is kept per run; a session
+left from an earlier invocation that has gone dead is replaced once. The
+only permission is `cassandra:Select`, which Keyspaces checks for both the
+listing (the system keyspaces) and the read. A sampled `LIMIT` read uses the
+table's read capacity. The Cassandra driver is a dependency of both the
+image and the zip.
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -896,6 +981,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx` | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `rds:DescribeDBClusters`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`; with `EbsDirectRead`, `ebs:ListSnapshotBlocks` and `ebs:GetSnapshotBlock` on this region's snapshots, and `kms:Decrypt` through EBS | `*`; `snapshot/*` |
 | `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
 | `ssm`, `secretsmanager` | `ssm:DescribeParameters`, `ssm:GetParameters` (on this account's parameters), `secretsmanager:ListSecrets`; `ssm:ListTagsForResource` only with tag rules; with `SsmDecrypt`, `kms:Decrypt` through SSM; with `SecretsRead`, `secretsmanager:GetSecretValue` on this account's secrets and `kms:Decrypt` through Secrets Manager | `*`; the ARNs named |
+| `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
@@ -1053,6 +1139,9 @@ several things:
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `ssm.<region>`; only with `SsmDecrypt` (on by default) |
 | Secret values (opt-in) | `secretsmanager:GetSecretValue` | this account's `secret:*` in the region | only with `SecretsRead` |
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `secretsmanager.<region>`; only with `SecretsRead` |
+| Caches and time series (discovery) | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream:ListTagsForResource`, `timestream-influxdb:ListDbInstances` | `*` | |
+| Timestream tables | `timestream:Select` (the `Query` API) | this account's `database/*/table/*` in the region | |
+| Keyspaces | `cassandra:Select` (listing, through the system keyspaces, and reading) | this account's `/keyspace/*` in the region | |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And three explicit denies, as defense in depth against any other policy the
@@ -1061,7 +1150,7 @@ role might gain:
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner` |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 
 The RDS **export role** (`RdsExportRole`, trusted by
