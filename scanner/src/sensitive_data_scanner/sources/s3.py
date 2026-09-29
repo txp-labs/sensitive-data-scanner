@@ -58,10 +58,16 @@ from ..scan.columnar import (
     zstd_text,
 )
 from ..scan.item import classify_key, looks_binary, scan_item_text
+from ..scan.raw import printable_text
 from .base import Budget, FindingStore, SourceRun
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
+
+
+def is_rdb(key: str, head: bytes) -> bool:
+    """A Redis RDB snapshot: `REDIS` and a version (`REDIS0011`), or an `.rdb` key."""
+    return head[:5] == b"REDIS" or key.lower().endswith(".rdb")
 
 
 def sample_point(key: str) -> int:
@@ -432,6 +438,21 @@ class S3Source:
         if kind is None:
             head, read, version, partial = self._read(key, size, cov)
             kind = sniff(head) if _compression(key) is None else None
+            if kind is None and is_rdb(key, head):
+                # A Redis snapshot (an ElastiCache or MemoryDB export): its text runs.
+                cov.partial += int(partial)
+                self._record_text(
+                    key,
+                    printable_text(head),
+                    read=read,
+                    version=version,
+                    cov=cov,
+                    detector=detector,
+                    store=store,
+                    seen_at=seen_at,
+                    fmt="rdb",
+                )
+                return
             if kind is None:
                 if partial:
                     cov.partial += 1
@@ -474,6 +495,7 @@ class S3Source:
         detector: Detector,
         store: FindingStore,
         seen_at: str,
+        fmt: str | None = None,
     ) -> None:
         name = _inner_name(key)
         if self.serde == "csv" and self.columns:
@@ -491,6 +513,11 @@ class S3Source:
             )
             return
         item = scan_item_text(name, text, detector)
+        if fmt is not None:
+            # Text pulled out of a binary file: offsets into it would point nowhere.
+            item.format = fmt
+            for cf in item.findings.values():
+                cf.offsets = []
         cov.scanned += 1
         cov.bytes_scanned += read
         cov.formats[item.format] = cov.formats.get(item.format, 0) + 1

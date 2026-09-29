@@ -253,6 +253,47 @@ wheels = [
 ]
 
 [[package]]
+name = "cassandra-driver"
+version = "3.30.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "deprecated" },
+    { name = "geomet" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/ed/4e16210e194660f107929ee494f1cf18557252655067d9b39029c241be2d/cassandra_driver-3.30.1.tar.gz", hash = "sha256:0c6a3e1428f7c6a9aa6c944b9c47a37cd2cdbeb5b5a82d42c33afdd56f14e398", size = 289233, upload-time = "2026-07-06T20:14:31.37Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/d4/8a80155cfe1312bb5d750e5a7b0384a1346fde2ca07cbff869f6627db071/cassandra_driver-3.30.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:9ff317f79b09eba52a44d46d8c4773e47533dfdd8b9ba4984268dc4a1fe5206e", size = 3649965, upload-time = "2026-07-06T20:13:35.813Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/ed/d9bca63e72e8219243e75821e72ace3046da0fe9a8b22375cf0c0efff427/cassandra_driver-3.30.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ab853bd2806899c5612c3e4ac2a355a7811084d06692e4460255e3b0a4fa556a", size = 3475640, upload-time = "2026-07-06T20:13:39.842Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/43/9bc21a9a3881c7eb9c19d0a6af8331a3fda0f18e82be83b49330f072d546/cassandra_driver-3.30.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e10784b4f7d77332dc1a5c72855977a0d797160fd8ba50785414caed07fce95b", size = 3226293, upload-time = "2026-07-06T20:13:43.675Z" },
+    { url = "https://files.pythonhosted.org/packages/89/c1/d050e11c324c0d0be7213947bed7c1cb65ef50ab4f12b3e881614217fce2/cassandra_driver-3.30.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:af5c6f5d7d5a86725b908aba12d9554df60234c15bfe053a8175b15db791ada8", size = 3483718, upload-time = "2026-07-06T20:13:48.038Z" },
+    { url = "https://files.pythonhosted.org/packages/49/ee/779b732de46608018ac90613a5fe4954a4901c6efa19f38ab2213e9cf4ef/cassandra_driver-3.30.1-cp312-cp312-win_amd64.whl", hash = "sha256:e43d873de5f8dadf4c8dcc4fab87d66a8495137e844ae3c184fbc90a54c05bc0", size = 2662678, upload-time = "2026-07-06T20:13:51.566Z" },
+    { url = "https://files.pythonhosted.org/packages/23/4f/13533a1f642213d84ae5896b85f71d0eb1b3449647ecd8a0127adba0a7f8/cassandra_driver-3.30.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:0ea769cf9925206b8458db10477b78699660fbdaed7262157e43b8f21817f838", size = 3636690, upload-time = "2026-07-06T20:13:55.901Z" },
+    { url = "https://files.pythonhosted.org/packages/54/dc/20972270725376e920d333abfb89260ebf1c1d68491e1464a064061040a2/cassandra_driver-3.30.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:8f43abccb5b5a761582e4ba6d44a7ef4274b61b0bd3f8e3159af40ca2c10c0fa", size = 3466913, upload-time = "2026-07-06T20:14:00.199Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/bd/1b9d30155656ce660838440b72d1e85b3e4301d5e6facaf327a83aeca96a/cassandra_driver-3.30.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ec04eebfadc74039b1f7df84356a822539992c7dc0b013fedbb5a33d9295af86", size = 3220329, upload-time = "2026-07-06T20:14:04.196Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/df/569fb36b5b9810c750c03802be23afaea52099b55e9f47379f1ced180b97/cassandra_driver-3.30.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c0995dccff3df739a1df6e10da9f3fc95bbbc8b38bacc4cfb6172655f8351cba", size = 3476643, upload-time = "2026-07-06T20:14:07.848Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/af/a6eab42d55ac693f105113651951cad6830cd1230434eb8c2f241d184796/cassandra_driver-3.30.1-cp313-cp313-win_amd64.whl", hash = "sha256:eba7931a615207aab84ebaa000330024f1c614aa86ca58d119556edd338883ce", size = 2665168, upload-time = "2026-07-06T20:14:10.952Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/52/2c06e18f3d4c4fe3263a5e6cc1e747b592b9d2d2546e20add7dac43dc1b6/cassandra_driver-3.30.1-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:87822d6cce2c586aa72733a9dd1858276cee795834f7ad949c783bf19cf7a3a7", size = 3618485, upload-time = "2026-07-06T20:14:14.863Z" },
+    { url = "https://files.pythonhosted.org/packages/16/a5/ce2fc121344a55af03800cf388d2672f8eae9ebe0b5d3143417b4c5585a0/cassandra_driver-3.30.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:3cb90ec9ac9d44cbfe17f1e9cb643dbc5f401e62980835aa6669a2fd5792863b", size = 3446763, upload-time = "2026-07-06T20:14:18.661Z" },
+    { url = "https://files.pythonhosted.org/packages/19/b5/0b9c71f8e5255905df92487ca5c366f397fd5806e369fc804ab55e3e02cc/cassandra_driver-3.30.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:921403aa76c66d78d00c4a3dff542f989fa584b7450e3cb1dd2c267b4a5a55f0", size = 3277349, upload-time = "2026-07-06T20:14:22.387Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/b9/d1ce6bc0c990005ab45ac984aa7f3b93c7fd2ba2b83d5a9b02df6c134481/cassandra_driver-3.30.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:61bf2ded460fb0d2e909b70c9d193588b71148540bd85e29fe6954e00bb1a869", size = 3496154, upload-time = "2026-07-06T20:14:26.295Z" },
+    { url = "https://files.pythonhosted.org/packages/43/e9/c8aabe3f2b7ab862c2741b67a3296ce8ae677b85cb53ce61773b909b37ba/cassandra_driver-3.30.1-cp314-cp314-win_amd64.whl", hash = "sha256:3c32513a2f2c6832d4fe3464e11be59dc21096dba296b18ec3454bc8354a78ba", size = 2716997, upload-time = "2026-07-06T20:14:29.651Z" },
+]
+
+[[package]]
+name = "cassandra-sigv4"
+version = "4.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "cassandra-driver" },
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4d/24/fdf4235820fc72befd6d73b65c9e177cf3dce91191dedc2255b1e6487ea0/cassandra-sigv4-4.0.2.tar.gz", hash = "sha256:77ff6123ab941c50a70ae51779de5a7bbe2843d96b80c466acffdf2629748a98", size = 5527, upload-time = "2020-10-30T19:43:39.229Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/f6/45ea57ccbe381bdd060571e669eb4fa21b0d6e7205ae855a2b3aa7f5897f/cassandra_sigv4-4.0.2-py2.py3-none-any.whl", hash = "sha256:122e2a187937f0499fe25476eee88f69edd33defd4c3b005f2a79ccb04dfe71f", size = 9782, upload-time = "2020-10-30T19:43:37.739Z" },
+]
+
+[[package]]
 name = "catalogue"
 version = "2.0.10"
 source = { registry = "https://pypi.org/simple" }
@@ -638,6 +679,18 @@ wheels = [
 ]
 
 [[package]]
+name = "deprecated"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f7/9c/16649913bf14c73e0a9453782e148362ff2657067deff6aa9c7ebcddcc31/deprecated-3.0.0.tar.gz", hash = "sha256:16850204d3a1e6bb0acd06bff48d96e8b0a0d25d1c52f71705405a0f4894192d", size = 166912, upload-time = "2026-09-26T13:58:10.675Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/ae/676feae8e4644a6d7169951a97f61c56f416c73f67bf1761f2461d75cc81/deprecated-3.0.0-py3-none-any.whl", hash = "sha256:58204cf4a7f6270d547af5c278ee7a6bb56045a4b3d8441a1cd11660f41b7939", size = 21912, upload-time = "2026-09-26T13:58:09.458Z" },
+]
+
+[[package]]
 name = "fastavro"
 version = "1.12.2"
 source = { registry = "https://pypi.org/simple" }
@@ -683,6 +736,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2b/2d/5cb7a5ac017031e96a63173f3d57a8a5162ce36f9ff461e62bc6da4d88ab/filelock-4.0.6.tar.gz", hash = "sha256:323fab3b2fb22d889b29fa83774f60029addddb4b6a1bcfa1e73066eabffb5f2", size = 248237, upload-time = "2026-09-28T22:16:16.257Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/3b/b74ae9db2f78f1354278731372ae89870626be7b86cbb46b8d707acd1a98/filelock-4.0.6-py3-none-any.whl", hash = "sha256:9b139fb93b2ac5807f7feaf63aa4546fbd74074a2d3f554c040f40a4694d7b9f", size = 109077, upload-time = "2026-09-28T22:16:14.731Z" },
+]
+
+[[package]]
+name = "geomet"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/8c/dde022aa6747b114f6b14a7392871275dea8867e2bd26cddb80cc6d66620/geomet-1.1.0.tar.gz", hash = "sha256:51e92231a0ef6aaa63ac20c443377ba78a303fd2ecd179dc3567de79f3c11605", size = 28732, upload-time = "2023-11-14T15:43:36.764Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/90/3bc780df088d439714af8295196a4332a26559ae66fd99865e36f92efa9e/geomet-1.1.0-py3-none-any.whl", hash = "sha256:4372fe4e286a34acc6f2e9308284850bd8c4aa5bc12065e2abbd4995900db12f", size = 31522, upload-time = "2023-11-14T15:43:35.305Z" },
 ]
 
 [[package]]
@@ -1932,6 +1997,8 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "cassandra-driver" },
+    { name = "cassandra-sigv4" },
     { name = "presidio-analyzer" },
     { name = "pyyaml" },
 ]
@@ -1959,6 +2026,8 @@ lambda = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.40" },
+    { name = "cassandra-driver", specifier = ">=3.29" },
+    { name = "cassandra-sigv4", specifier = ">=4.0.2" },
     { name = "presidio-analyzer", specifier = ">=2.2.364,<2.3" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]

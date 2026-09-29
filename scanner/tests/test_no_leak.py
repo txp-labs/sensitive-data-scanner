@@ -853,6 +853,79 @@ def test_no_value_leaves_parameters_or_secrets(
         assert marker not in blob, name_
 
 
+def test_no_value_leaves_time_series_keyspaces_or_caches(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Timestream and Keyspaces tables and columns named with values, holding values; a cache
+    named with one; an exported RDB snapshot holding one."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from sensitive_data_scanner.scan.sql import sample_sql
+    from sensitive_data_scanner.sources.other_stores import CQL, KeyspacesSource
+    from test_other_stores import KS, FakeSession, stubs
+
+    s = stubs(env, "timestream-write", "timestream-query", "timestream-influxdb", "keyspaces")
+    s["timestream-write"].add_response("list_databases", {"Databases": [{"DatabaseName": "iot"}]})
+    table = f"t_{SSN_A}"
+    s["timestream-write"].add_response(
+        "list_tables", {"Tables": [{"TableName": table, "TableStatus": "ACTIVE"}]}
+    )
+    s["timestream-influxdb"].add_response("list_db_instances", {"items": []})
+    s["timestream-query"].add_response(
+        "query",
+        {
+            "QueryId": "q",
+            "ColumnInfo": [{"Name": f"c_{CARDS['visa']}", "Type": {"ScalarType": "VARCHAR"}}],
+            "Rows": [{"Data": [{"ScalarValue": f"card {CARDS['jcb']}"}]}],
+        },
+    )
+    s["keyspaces"].add_response(
+        "list_keyspaces",
+        {
+            "keyspaces": [
+                {
+                    "keyspaceName": f"ks_{SSN_B}",
+                    "resourceArn": f"{KS}/ks/",
+                    "replicationStrategy": "SINGLE_REGION",
+                }
+            ]
+        },
+    )
+    s["keyspaces"].add_response(
+        "list_tables",
+        {
+            "tables": [
+                {
+                    "keyspaceName": f"ks_{SSN_B}",
+                    "tableName": f"u_{CARDS['amex']}",
+                    "resourceArn": f"{KS}/ks/table/u",
+                }
+            ]
+        },
+    )
+    rows = [{f"n_{SSN_A}": dashed(SSN_B), "pan": CARDS["discover"]}]
+    cql = sample_sql(CQL, f"ks_{SSN_B}", f"u_{CARDS['amex']}", 1000)
+    session = FakeSession({cql: rows})
+    env.clients.services["keyspaces-cql"] = lambda region: session
+    body = b"REDIS0011" + f"\x10k:{CARDS['mastercard']}\x00ssn:{SSN_A}".encode()
+    env.put(f"exports/cache-{SSN_B}.rdb", body)
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            discover=frozenset({"timestream", "keyspaces"}),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    KeyspacesSource._sessions.clear()
+    services = {f["resource"].get("service", f["resource"]["type"]) for f in doc["findings"]}
+    assert services == {"timestream", "keyspaces", "s3_object"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

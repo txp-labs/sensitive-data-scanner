@@ -59,7 +59,8 @@ Parameters:
     Description: >-
       DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
       opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
-      firehose, sqs, ssm, secretsmanager.
+      firehose, sqs, ssm, secretsmanager, elasticache, memorydb, timestream,
+      keyspaces.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -500,6 +501,33 @@ Resources:
                     StringEquals:
                       kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
+              # --- Caches (reported), Timestream and Keyspaces (sampled read-only queries)
+              - Sid: DescribeCachesAndTimeSeries
+                Effect: Allow
+                Action:
+                  - elasticache:DescribeReplicationGroups
+                  - elasticache:DescribeCacheClusters
+                  - elasticache:DescribeServerlessCaches
+                  - elasticache:DescribeSnapshots
+                  - elasticache:DescribeServerlessCacheSnapshots
+                  - memorydb:DescribeClusters
+                  - memorydb:DescribeSnapshots
+                  - timestream:DescribeEndpoints
+                  - timestream:ListDatabases
+                  - timestream:ListTables
+                  - timestream:ListTagsForResource
+                  - timestream-influxdb:ListDbInstances
+                Resource: "*"
+              - Sid: SelectTimestreamTables
+                Effect: Allow
+                Action: timestream:Select
+                Resource: !Sub arn:${AWS::Partition}:timestream:${AWS::Region}:${AWS::AccountId}:database/*/table/*
+              # Keyspaces: listing reads the system keyspaces, and a sample reads a table;
+              # both are cassandra:Select, the only Keyspaces permission.
+              - Sid: SelectKeyspaces
+                Effect: Allow
+                Action: cassandra:Select
+                Resource: !Sub arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*
               # --- Push findings to the central sink
               - !If
                 - HasBus
@@ -659,6 +687,31 @@ Resources:
                   - secretsmanager:ReplicateSecretToRegions
                   - secretsmanager:RemoveRegionsFromReplication
                   - secretsmanager:StopReplicationToReplica
+                  - elasticache:Create*
+                  - elasticache:Delete*
+                  - elasticache:Modify*
+                  - elasticache:CopySnapshot
+                  - elasticache:CopyServerlessCacheSnapshot
+                  - elasticache:ExportServerlessCacheSnapshot
+                  - elasticache:Reboot*
+                  - elasticache:TestFailover
+                  - memorydb:Create*
+                  - memorydb:Delete*
+                  - memorydb:Update*
+                  - memorydb:CopySnapshot
+                  - timestream:WriteRecords
+                  - timestream:Create*
+                  - timestream:Delete*
+                  - timestream:Update*
+                  - timestream-influxdb:Create*
+                  - timestream-influxdb:Delete*
+                  - timestream-influxdb:Update*
+                  - cassandra:Create
+                  - cassandra:Alter
+                  - cassandra:Drop
+                  - cassandra:Modify
+                  - cassandra:Restore*
+                  - cassandra:UpdatePartitioner
                 Resource: "*"
               - Sid: NeverAskLakeFormation
                 Effect: Deny

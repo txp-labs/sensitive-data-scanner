@@ -108,19 +108,33 @@ bumps the minor version. Spec changes are listed under **Spec**.
   by default). Secrets are always listed, and read only with `SECRETS_READ`
   (off by default); sensitive data in a secret is a finding, and the secret
   is never reported.
+- Other stores ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - Timestream for LiveAnalytics (`timestream`): one sampled read-only query
+    per table (`TIMESTREAM_MAX_ROWS`, `TIMESTREAM_LOOKBACK_DAYS`), by column;
+    InfluxDB instances reported (`no_read_path`).
+  - Keyspaces (`keyspaces`): one sampled CQL query per table over TLS, signed
+    with the role (`cassandra-driver` and `cassandra-sigv4`, new
+    dependencies; `KEYSPACES_MAX_ROWS`), by column.
+  - ElastiCache and MemoryDB (`elasticache`, `memorydb`): reported as
+    `in_memory` with their snapshots counted; an exported snapshot in S3 (an
+    `.rdb` file) is read by the S3 source as its text runs (format `rdb`).
+- The run summary's coverage table by store (docs/ARCHITECTURE.md): what is
+  scanned, what is opt-in, what is coverage only, and why.
 - The adapter interface (`sources/base.py`, `Adapter`) and the generic
   sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
   discovery, the budget and the run summary through them, with no cloud in
   the core. The RDS Data API mode now runs on the same SQL pass.
 - Findings schema **1.3** (additive): the `store_field` resource, the
   `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`,
-  `fsx`, `kinesis`, `firehose`, `sqs`, `ssm` and `secretsmanager` kinds,
-  the `block` format, the store reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`,
+  `elasticache`, `memorydb`, `timestream` and `keyspaces` kinds, the `block`,
+  `cql` and `rdb` formats, the store reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
   `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
-  `live_queue`, `redrive_would_change` and `no_s3_destination`, and the store
+  `live_queue`, `redrive_would_change`, `no_s3_destination`, `in_memory` and
+  `no_read_path`, and the store
   fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
   `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue`,
-  `approximateMessages`, `items`, `itemTypes` and `excluded`.
+  `approximateMessages`, `items`, `itemTypes`, `excluded` and `snapshots`.
 - `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
   describe permissions, and, only when reading, the Data API on this
   account's clusters and workgroups, its own statements only, and the
@@ -140,6 +154,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `SsmDecrypt`, `kms:Decrypt` through SSM; only with `SecretsRead`,
   `secretsmanager:GetSecretValue` on this account's secrets and
   `kms:Decrypt` through Secrets Manager; parameter and secret writes denied.
+  Caches and time series: describe and list; `timestream:Select` on this
+  account's tables and `cassandra:Select` on its keyspaces; cache, snapshot
+  copy and export, Timestream and Keyspaces writes denied.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.

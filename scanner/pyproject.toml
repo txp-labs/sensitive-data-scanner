@@ -8,6 +8,9 @@ requires-python = ">=3.12"
 authors = [{ name = "txp-labs, LLC" }]
 dependencies = [
     "boto3>=1.40",
+    # Amazon Keyspaces over CQL, signed with the scanner's role (no password).
+    "cassandra-driver>=3.29",
+    "cassandra-sigv4>=4.0.2",
     "presidio-analyzer>=2.2.364,<2.3",
     "pyyaml>=6.0.3",
 ]
@@ -76,9 +79,12 @@ python_version = "3.12"
 strict = true
 files = ["src", "tests"]
 
-# pyarrow ships no type information.
+# pyarrow and the Cassandra driver ship no type information.
 [[tool.mypy.overrides]]
-module = ["pyarrow", "pyarrow.*", "fastavro", "fastavro.*"]
+module = [
+  "pyarrow", "pyarrow.*", "fastavro", "fastavro.*",
+  "cassandra", "cassandra.*", "cassandra_sigv4", "cassandra_sigv4.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

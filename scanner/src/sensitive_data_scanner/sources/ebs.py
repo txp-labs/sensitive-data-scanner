@@ -40,6 +40,7 @@ from ..discovery import Discovery, Store, decide, needs_tags, reason_for
 from ..findings import Coverage, console_link, store_field_resource
 from ..safety import error_name, is_kms_denial, log_event
 from ..scan.item import scan_item_text
+from ..scan.raw import printable_text
 from .base import Budget, Context, FindingStore, SourceRun, class_findings
 from .exports import drop_other_passes, merge
 
@@ -48,27 +49,6 @@ AWS_SERVICES = ("ec2", "ebs", "backup")
 
 BLOCK = 512 * 1024
 RUN = 4  # consecutive blocks read at each sampling point
-MAX_TEXT_PER_BLOCK = 64 * 1024
-_ASCII = re.compile(rb"[\x20-\x7e\t]{6,}")
-_UTF16 = re.compile(rb"(?:[\x20-\x7e]\x00){6,}")
-_CANDIDATE = re.compile(r"[0-9]|\b(?:zero|one|two|three|four|five|six|seven|eight|nine)\b", re.I)
-
-
-def printable_text(data: bytes) -> str:
-    """The runs of printable text in raw bytes (ASCII, and UTF-16LE), one per line, that could
-    hold a value; at most MAX_TEXT_PER_BLOCK characters."""
-    runs = [m[0].decode("ascii") for m in _ASCII.finditer(data)]
-    runs += [m[0].decode("utf-16-le") for m in _UTF16.finditer(data)]
-    out: list[str] = []
-    n = 0
-    for r in runs:
-        if not _CANDIDATE.search(r):
-            continue
-        out.append(r)
-        n += len(r) + 1
-        if n >= MAX_TEXT_PER_BLOCK:
-            break
-    return "\n".join(out)
 
 
 def _tags(raw: list[dict[str, Any]] | None) -> dict[str, str]:

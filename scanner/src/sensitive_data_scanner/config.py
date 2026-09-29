@@ -158,6 +158,10 @@ DISCOVER_KINDS = {
     "sqs": "sqs",
     "ssm": "ssm",
     "secretsmanager": "secretsmanager",
+    "elasticache": "elasticache",
+    "memorydb": "memorydb",
+    "timestream": "timestream",
+    "keyspaces": "keyspaces",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -181,6 +185,10 @@ _KIND_ALIASES = {
     "ssm": "ssm",
     "secretsmanager": "secretsmanager",
     "secrets": "secretsmanager",
+    "elasticache": "elasticache",
+    "memorydb": "memorydb",
+    "timestream": "timestream",
+    "keyspaces": "keyspaces",
 }
 
 
@@ -446,6 +454,10 @@ class Config:
     # Secrets Manager: listed always, read only when on.
     ssm_decrypt: bool = True
     secrets_read: bool = False
+    # Timestream and Keyspaces: one sampled read-only query per table.
+    timestream_max_rows: int = 1000
+    timestream_lookback_days: int = 1
+    keyspaces_max_rows: int = 1000
 
     @property
     def exports_prefix(self) -> str:
@@ -522,6 +534,9 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         sqs_messages_per_queue=_int(e.get("SQS_MESSAGES_PER_QUEUE"), 100, 1, 1000),
         ssm_decrypt=_bool(e.get("SSM_DECRYPT", "true")),
         secrets_read=_bool(e.get("SECRETS_READ")),
+        timestream_max_rows=_int(e.get("TIMESTREAM_MAX_ROWS"), 1000, 1, 100_000),
+        timestream_lookback_days=_int(e.get("TIMESTREAM_LOOKBACK_DAYS"), 1, 1, 3650),
+        keyspaces_max_rows=_int(e.get("KEYSPACES_MAX_ROWS"), 1000, 1, 100_000),
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
