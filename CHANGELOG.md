@@ -6,6 +6,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.3.0 — 2026-09-29
+
 ### Spec
 - **Spec 0.4** ([#26](https://github.com/txp-labs/sensitive-data-scanner/issues/26), asked for as 0.3.1; the spec has
   no patch version, and a phrase that changes matches is a minor bump. Every
@@ -281,6 +283,9 @@ From the first run in a real account (stugum-dev,
   as skipped `columnar`; CI checks the zip has no pyarrow and the image reads
   Parquet and ORC. fastavro is a test-only dependency, to write Avro
   fixtures with an implementation other than the scanner's.
+- `packages/spec-ts/dist/` is committed, so the package can be consumed by
+  git commit (package managers do not build git dependencies). A CI job
+  rebuilds it and fails if it differs. `exports` still points at `dist/`.
 
 ### Security
 - A bucket or table name holding a number that could be a card or an SSN is
@@ -302,11 +307,6 @@ From the first run in a real account (stugum-dev,
   `docs/FINDINGS.md`: schema 1.2, the run summary, and column and database
   findings. `docs/RELEASING.md`: which formats the image and the zip read,
   and the templates attached to a release.
-
-### Internal
-- `packages/spec-ts/dist/` is committed, so the package can be consumed by
-  git commit (package managers do not build git dependencies). A CI job
-  rebuilds it and fails if it differs. `exports` still points at `dist/`.
 
 ## 0.2.0 — 2026-09-29
 
