@@ -18,7 +18,7 @@ you name (buckets and prefixes, log groups, DynamoDB tables), looks for
 sensitive data, and
 writes **findings only** to a results store in the same account:
 
-- the kind of data (card number, US SSN, date of birth, and more);
+- the kind of data (card number, US SSN or ITIN, date of birth, and more);
 - where it was found: account, region, object and version; log group,
   stream and time; or DynamoDB table, a hash of the item's key and the
   attribute path; and the Amazon Connect contact;
@@ -43,11 +43,13 @@ It is built for places where sensitive data turns up by accident, above all
 Detection uses [Microsoft Presidio](https://github.com/microsoft/presidio)
 (MIT), run **with no NLP model**. The scanner adds:
 
-- **The spec's rules on Presidio's own card and SSN recognizers:** Luhn and
-  IIN, published test numbers set apart, SSN structure, and dates of birth
-  next to a DOB word.
+- **The spec's rules on Presidio's own card, SSN and ITIN recognizers:** Luhn
+  and IIN, published test numbers set apart, SSN and ITIN structure, and dates
+  of birth next to a DOB word.
 - **Transcript normalization:** spoken digits, "oh", "double" and "triple",
-  spoken dates, and numbers split across consecutive turns of one speaker.
+  spoken dates, and numbers split across consecutive turns of one speaker
+  (a keypad answer only within one answer window; a menu or question turn
+  ends the value).
 - **A conversational recognizer:** a bot or agent turn that asks for class X
   ("Please enter your card number") classes the next customer turn as X,
   whatever its shape. A Luhn-failing entry right after a card prompt is

@@ -21,6 +21,7 @@ from .rules import (
     date_digits_shape,
     date_token_shape,
     is_test_card,
+    itin_structure_valid,
     luhn_valid,
     shape_pass,
     ssn_structure_valid,
@@ -28,7 +29,7 @@ from .rules import (
 from .spec import ClassSpec, Spec
 
 SPEAKERS = ("bot", "agent", "customer")
-_FORMATTED_SSN = re.compile(r"[0-9]{3}([ -])[0-9]{2}\1[0-9]{4}", re.A)
+_FORMATTED_3_2_4 = re.compile(r"[0-9]{3}([ -])[0-9]{2}\1[0-9]{4}", re.A)
 _ALNUM = re.compile(r"[A-Za-z0-9]", re.A)
 
 
@@ -104,7 +105,9 @@ class _Chain:
     prompted: tuple[str, ...]
     last_end_ms: int | None
     is_date: bool = False
-    channel: str | None = None
+    # A part was given in an answer-window channel (dtmf): the value ends at
+    # another speaker's turn.
+    answer_window: bool = False
 
     @property
     def digits(self) -> str:
@@ -191,6 +194,16 @@ def prompt_classes(spec: Spec, text: str) -> tuple[tuple[str, ...], bool]:
     return tuple(ordered), retry
 
 
+def is_menu_or_question(spec: Spec, text: str) -> bool:
+    """Whether a bot or agent turn is a menu or a question ("Reply 1 for more.").
+
+    Such a turn ends any value another speaker is still giving. Matched
+    against the same text as prompt phrases.
+    """
+    body, _ = strip_retry(spec, text)
+    return any(rx.search(body) for rx in spec.normalize.menu_or_question_res)
+
+
 def _context(spec: Spec, turns: list[Turn], first: int, last: int) -> str:
     lo = max(0, first - spec.context_turns_before)
     return "\n".join(t.text for t in turns[lo : last + 1])
@@ -256,7 +269,7 @@ class _Classifier:
                 if shape_pass(cls, d, self.spec, self.now_year) == "full":
                     return True
             return len(d) >= self._limit(chain)
-        if len(d) == 9 and ssn_structure_valid(d):
+        if len(d) == 9 and (ssn_structure_valid(d) or itin_structure_valid(d)):
             return True
         return 13 <= len(d) <= 19 and luhn_valid(d) and card_brand(d, self.spec.brands) is not None
 
@@ -319,11 +332,16 @@ class _Classifier:
                 return None, Excluded("us_ssn", chain.first_turn), False
             if has_context(ssn, context):
                 return self._match("us_ssn", "context", "high", chain, None), None, False
-            if ssn.standalone == "formatted" and len(chain.parts) == 1:
-                part = chain.parts[0]
-                o_s, o_e = self.norms[part.turn].to_original(part.start, part.end)
-                if _FORMATTED_SSN.fullmatch(self.turns[part.turn].text[o_s:o_e]):
-                    return self._match("us_ssn", "shape", "medium", chain, None), None, False
+            if ssn.standalone == "formatted" and self._formatted(chain):
+                return self._match("us_ssn", "shape", "medium", chain, None), None, False
+        itin = spec.classes.get("us_itin")
+        if itin is not None and len(d) == 9 and itin_structure_valid(d):
+            if d in itin.test_numbers:
+                return None, Excluded("us_itin", chain.first_turn), False
+            if has_context(itin, context):
+                return self._match("us_itin", "context", "high", chain, None), None, False
+            if itin.standalone == "formatted" and self._formatted(chain):
+                return self._match("us_itin", "shape", "medium", chain, None), None, False
         dob = spec.classes.get("dob")
         if (
             dob is not None
@@ -333,6 +351,14 @@ class _Classifier:
         ):
             return self._match("dob", "context", "high", chain, None), None, False
         return None, None, False
+
+    def _formatted(self, chain: _Chain) -> bool:
+        """The value sits in one turn whose original text is exactly ddd-dd-dddd or ddd dd dddd."""
+        if len(chain.parts) != 1:
+            return False
+        part = chain.parts[0]
+        o_s, o_e = self.norms[part.turn].to_original(part.start, part.end)
+        return _FORMATTED_3_2_4.fullmatch(self.turns[part.turn].text[o_s:o_e]) is not None
 
     def _evaluate_prompted(self, chain: _Chain) -> None:
         spec = self.spec
@@ -381,13 +407,18 @@ class _Classifier:
                 if rearm:
                     armed = rearm
                     last_armed = rearm
-                    # A new prompt ends any value still being read out.
+                # A new prompt, a menu or a question ends any value still being given.
+                if rearm or is_menu_or_question(spec, turn.text):
                     for sp in [s for s in self.open if s != turn.speaker]:
                         self._finish(sp)
+            # A keypad answer ends at the next turn of another speaker.
+            for sp in [s for s, c in self.open.items() if s != turn.speaker and c.answer_window]:
+                self._finish(sp)
             norm = self.norms[idx].text
             toks = _tokens(norm)
             begin = turn.begin_ms
             end_ms = turn.end_ms if turn.end_ms is not None else turn.begin_ms
+            in_window = turn.channel in n.join_answer_window
             start_at = 0
             carry = self.open.get(turn.speaker)
             if carry is not None:
@@ -398,7 +429,8 @@ class _Classifier:
                     or begin - carry.last_end_ms <= n.join_within_ms
                 )
                 turns_ok = idx - carry.last_turn - 1 <= n.join_max_intervening
-                joinable = turn.channel not in n.join_never and carry.channel not in n.join_never
+                # Within one answer window, no other speaker's turn may come between the parts.
+                joinable = not (in_window or carry.answer_window) or idx == carry.last_turn + 1
                 if (
                     joinable
                     and first is not None
@@ -411,6 +443,7 @@ class _Classifier:
                 ):
                     carry.parts.append(_Part(idx, first.start, first.end, first.text))
                     carry.last_end_ms = end_ms
+                    carry.answer_window = carry.answer_window or in_window
                     start_at = 1
                     if not (len(toks) == 1 and _at_end(norm, first)):
                         self._finish(turn.speaker)
@@ -424,7 +457,7 @@ class _Classifier:
                     prompted,
                     end_ms,
                     tok.is_date,
-                    turn.channel,
+                    in_window,
                 )
                 if i == len(toks) - 1 and not tok.is_date and _at_end(norm, tok):
                     self.open[turn.speaker] = chain

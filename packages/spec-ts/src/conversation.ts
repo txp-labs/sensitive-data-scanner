@@ -13,6 +13,7 @@ import {
   dateDigitsShape,
   dateTokenShape,
   isTestCard,
+  itinStructureValid,
   luhnValid,
   shapePass,
   ssnStructureValid,
@@ -92,7 +93,8 @@ interface Chain {
   prompted: readonly string[];
   lastEndMs: number | null;
   isDate: boolean;
-  channel: string | null;
+  /** A part was given in an answer-window channel (dtmf): the value ends at another speaker's turn. */
+  answerWindow: boolean;
 }
 
 interface Token {
@@ -102,7 +104,7 @@ interface Token {
   isDate: boolean;
 }
 
-const FORMATTED_SSN = /^[0-9]{3}([ -])[0-9]{2}\1[0-9]{4}$/;
+const FORMATTED_3_2_4 = /^[0-9]{3}([ -])[0-9]{2}\1[0-9]{4}$/;
 const ALNUM = /[A-Za-z0-9]/;
 const SPEAKERS: readonly string[] = ['bot', 'agent', 'customer'];
 
@@ -176,6 +178,16 @@ export function promptClasses(spec: Spec, text: string): [string[], boolean] {
   const ordered: string[] = [];
   for (const [, , name] of kept) if (!ordered.includes(name)) ordered.push(name);
   return [ordered, retry];
+}
+
+/**
+ * Whether a bot or agent turn is a menu or a question ("Reply 1 for more.",
+ * "Is that a Visa?"): such a turn ends any value another speaker is still
+ * giving. Matched against the same text as prompt phrases.
+ */
+export function isMenuOrQuestion(spec: Spec, text: string): boolean {
+  const [body] = stripRetry(spec, text);
+  return spec.normalize.menuOrQuestionRes.some((rx) => rx.test(body));
 }
 
 export function hasContext(cls: ClassSpec, context: string): boolean {
@@ -270,7 +282,7 @@ class Classifier {
       }
       return d.length >= this.limit(chain);
     }
-    if (d.length === 9 && ssnStructureValid(d)) return true;
+    if (d.length === 9 && (ssnStructureValid(d) || itinStructureValid(d))) return true;
     return d.length >= 13 && d.length <= 19 && luhnValid(d) && cardBrand(d, this.spec.brands) !== null;
   }
 
@@ -317,12 +329,16 @@ class Classifier {
     if (ssn && d.length === 9 && ssnStructureValid(d)) {
       if (ssn.dummyValues.has(d)) return [null, { class: 'us_ssn', turn: firstTurn(chain) }, false];
       if (hasContext(ssn, context)) return [this.match('us_ssn', 'context', 'high', chain, null), null, false];
-      if (ssn.standalone === 'formatted' && chain.parts.length === 1) {
-        const part = chain.parts[0]!;
-        const [os, oe] = toOriginal(this.norms[part.turn]!, part.start, part.end);
-        if (FORMATTED_SSN.test(this.turns[part.turn]!.text.slice(os, oe))) {
-          return [this.match('us_ssn', 'shape', 'medium', chain, null), null, false];
-        }
+      if (ssn.standalone === 'formatted' && this.formatted(chain)) {
+        return [this.match('us_ssn', 'shape', 'medium', chain, null), null, false];
+      }
+    }
+    const itin = spec.classes.us_itin;
+    if (itin && d.length === 9 && itinStructureValid(d)) {
+      if (itin.testNumbers.has(d)) return [null, { class: 'us_itin', turn: firstTurn(chain) }, false];
+      if (hasContext(itin, context)) return [this.match('us_itin', 'context', 'high', chain, null), null, false];
+      if (itin.standalone === 'formatted' && this.formatted(chain)) {
+        return [this.match('us_itin', 'shape', 'medium', chain, null), null, false];
       }
     }
     const dob = spec.classes.dob;
@@ -335,6 +351,14 @@ class Classifier {
       return [this.match('dob', 'context', 'high', chain, null), null, false];
     }
     return [null, null, false];
+  }
+
+  /** The value sits in one turn whose original text is exactly ddd-dd-dddd or ddd dd dddd. */
+  private formatted(chain: Chain): boolean {
+    if (chain.parts.length !== 1) return false;
+    const part = chain.parts[0]!;
+    const [os, oe] = toOriginal(this.norms[part.turn]!, part.start, part.end);
+    return FORMATTED_3_2_4.test(this.turns[part.turn]!.text.slice(os, oe));
   }
 
   private evaluatePrompted(chain: Chain): void {
@@ -392,23 +416,28 @@ class Classifier {
         if (rearm.length > 0) {
           armed = rearm;
           lastArmed = rearm;
-          // A new prompt ends any value still being read out.
+        }
+        // A new prompt, a menu or a question ends any value still being given.
+        if (rearm.length > 0 || isMenuOrQuestion(spec, turn.text)) {
           for (const sp of [...this.open.keys()]) if (sp !== turn.speaker) this.finish(sp);
         }
       }
+      // A keypad answer ends at the next turn of another speaker.
+      for (const [sp, c] of [...this.open.entries()]) if (sp !== turn.speaker && c.answerWindow) this.finish(sp);
       const norm = this.norms[idx]!.text;
       const toks = tokensOf(norm);
       const begin = turn.beginMs ?? null;
       const endMs = turn.endMs ?? turn.beginMs ?? null;
       const channel = turn.channel ?? null;
+      const inWindow = channel !== null && n.joinAnswerWindow.has(channel);
       let startAt = 0;
       const carry = this.open.get(turn.speaker);
       if (carry) {
         const first = toks[0];
         const gapOk = carry.lastEndMs === null || begin === null || begin - carry.lastEndMs <= n.joinWithinMs;
         const turnsOk = idx - lastTurn(carry) - 1 <= n.joinMaxIntervening;
-        const joinable =
-          !(channel !== null && n.joinNever.has(channel)) && !(carry.channel !== null && n.joinNever.has(carry.channel));
+        // Within one answer window, no other speaker's turn may come between the parts.
+        const joinable = !(inWindow || carry.answerWindow) || idx === lastTurn(carry) + 1;
         if (
           joinable &&
           first !== undefined &&
@@ -421,6 +450,7 @@ class Classifier {
         ) {
           carry.parts.push({ turn: idx, start: first.start, end: first.end, digits: first.text });
           carry.lastEndMs = endMs;
+          carry.answerWindow ||= inWindow;
           startAt = 1;
           if (!(toks.length === 1 && atEnd(norm, first))) this.finish(turn.speaker);
         } else {
@@ -435,7 +465,7 @@ class Classifier {
           prompted,
           lastEndMs: endMs,
           isDate: tok.isDate,
-          channel,
+          answerWindow: inWindow,
         };
         if (i === toks.length - 1 && !tok.isDate && atEnd(norm, tok)) this.open.set(turn.speaker, chain);
         else this.evaluate(chain);

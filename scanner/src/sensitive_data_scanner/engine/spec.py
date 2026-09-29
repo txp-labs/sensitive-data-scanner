@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-SPEC_VERSION = "0.1"
+SPEC_VERSION = "0.2"
 
 WS = "[ \\t\\r\\n]+"
 
@@ -79,7 +79,11 @@ class NormalizeSpec:
     join_within_ms: int
     join_stop_when_complete: bool
     join_max_intervening: int
-    join_never: frozenset[str]
+    # Channels whose values end at the next turn of another speaker (a keypad answer window).
+    join_answer_window: frozenset[str]
+    # A bot or agent turn matching one of these is a menu or a question: it ends
+    # other speakers' values.
+    menu_or_question_res: tuple[re.Pattern[str], ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -186,7 +190,10 @@ def _normalize(raw: dict[str, Any]) -> NormalizeSpec:
         join_within_ms=int(float(join["withinSeconds"]) * 1000),
         join_stop_when_complete=bool(join.get("stopWhenClassComplete", True)),
         join_max_intervening=int(join.get("maxInterveningTurns", 0)),
-        join_never=frozenset(join.get("neverJoinChannels") or ()),
+        join_answer_window=frozenset(join.get("answerWindowChannels") or ()),
+        menu_or_question_res=tuple(
+            re.compile(p, re.I | re.A) for p in join.get("menuOrQuestionTurns") or ()
+        ),
     )
 
 

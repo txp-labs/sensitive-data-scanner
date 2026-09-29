@@ -1,4 +1,4 @@
-# The sensitive-data spec, version 0.1
+# The sensitive-data spec, version 0.2
 
 This directory is a **contract**. Three implementations follow it:
 
@@ -145,7 +145,12 @@ For each `bot` or `agent` turn:
    - Any other bot or agent turn ("mm-hmm", "Thank you.") leaves the armed
      classes as they were.
 5. A turn that arms or re-arms classes ends any value that another speaker
-   is still reading out.
+   is still reading out. So does a **menu or question** turn: one that
+   matches a `menuOrQuestionTurns` pattern of `join_same_speaker_turns`
+   (matched like prompt phrases, against the same text as step 1).
+   "Thanks. Reply 1 for more." and "Is that a Visa?" are menu or question
+   turns; "mm-hmm", "Okay." and "Thank you." are backchannels and end
+   nothing.
 
 The first `customer` turn after that takes the armed classes and disarms
 them (`promptCarryover.turns: 1`). Every value that **starts** in that turn
@@ -158,7 +163,10 @@ of a turn is left **open** when it is a digit run at the end of the turn. It
 continues into that speaker's next turn when all of these hold:
 
 - the next turn's first token is a digit run at the start of the turn;
-- neither turn's channel is in `neverJoinChannels` (a keypad entry is whole);
+- if either the open value or the next turn has a part in an
+  `answerWindowChannels` channel (`dtmf`), no turn of another speaker comes
+  between them: a keypad answer may be keyed in parts (`0101`, then `80#`)
+  within one prompt's answer window, never across a bot or agent turn;
 - the time from the open turn's end (`endMs`, else `beginMs`) to the next
   turn's `beginMs` is at most `withinSeconds`, or either time is unknown;
 - at most `maxInterveningTurns` turns of other speakers come between;
@@ -169,12 +177,19 @@ continues into that speaker's next turn when all of these hold:
   - a prompted value is complete when it passes a prompted class's shape
     in full, or has reached the limit;
   - an unprompted value is complete when it is a structurally valid
-    nine-digit SSN, or a 13-19 digit card that passes Luhn and has a known
-    IIN.
+    nine-digit SSN or ITIN, or a 13-19 digit card that passes Luhn and has a
+    known IIN.
 
 A continued value stays open while the turn holds nothing else. An open value
-is also closed once more than `maxInterveningTurns` turns have passed, and at
-the end of the conversation. A value spanning turns is reported from its
+is closed:
+
+- by a prompt, retry, menu or question turn of another speaker (see
+  [Prompts](#prompts));
+- if it has a part in an `answerWindowChannels` channel, by any turn of
+  another speaker;
+- once more than `maxInterveningTurns` turns have passed;
+- at the end of the conversation.
+ A value spanning turns is reported from its
 first turn (`turn`, `start`) to its last (`endTurn`, `end`).
 
 ### Shapes
@@ -191,6 +206,9 @@ first turn (`turn`, `start`) to its last (`endTurn`, `end`).
     `len(a)` digits.
 - **SSN:** nine digits; area not 000, 666 or 900-999; group not 00; serial
   not 0000.
+- **ITIN** (`us_itin`): nine digits; area 900-999 (`area_9xx`); group 50-65,
+  70-88, 90-92 or 94-99 (`group_50_65_70_88_90_92_94_99`). No nine-digit
+  value is both an SSN and an ITIN.
 - **Date** (`dob`):
   - `date_mmddyy` (6 digits) or `date_mmddyyyy` (8 digits);
   - a slashed date (`m/d/yy` or `m/d/yyyy`) or an ISO date (which
@@ -224,7 +242,7 @@ Context is the original text of the value's turns, and the
 newlines. A class has context when one of its `contextWords` appears there
 as a whole word or phrase, after its `contextExclusions` are removed.
 
-The rules below are checked in order: card, then SSN, then DOB.
+The rules below are checked in order: card, then SSN, then ITIN, then DOB.
 
 1. **Card** (13 or more digits): take the first candidate length (as in
    [Shapes](#shapes)) that passes in full. Then:
@@ -241,11 +259,30 @@ The rules below are checked in order: card, then SSN, then DOB.
    - else, if `standalone: formatted` and the value sits in one turn whose
      original text is exactly `ddd-dd-dddd` or `ddd dd dddd` (one kind of
      separator): `us_ssn`, via `shape`, `medium`.
-3. **DOB** (a 6- or 8-digit run, or a date token, with a valid date shape)
+3. **ITIN** (exactly nine digits, structurally valid as an ITIN):
+   - if it is a `testNumbers` entry (the IRS advertising range 987-65-4320
+     to 987-65-4329), it is excluded as test data;
+   - else, with ITIN context: `us_itin`, via `context`, `high`. The ITIN
+     context words include the SSN words, so "SSN 912-70-1234" is an ITIN;
+   - else, if `standalone: formatted` and the value is formatted as for an
+     SSN: `us_itin`, via `shape`, `medium`.
+4. **DOB** (a 6- or 8-digit run, or a date token, with a valid date shape)
    with DOB context: `dob`, via `context`, `high`.
 
 Classes with no `standalone` and no `contextWords` (`cvv`, `pin`,
 `account_number`, `us_ssn_last4`) are only ever matched through a prompt.
+
+### ITIN and SSN
+
+`us_itin` is its own class, reported under its own name, with the **same
+severity as `us_ssn` (`high`)**: it identifies a taxpayer the same way and is
+protected the same way. A caller without an SSN gives an ITIN where an SSN is
+asked for, so `us_itin` lists the SSN prompt phrases too: an SSN prompt arms
+`us_ssn` and `us_itin` (in that order), and an answer is `us_ssn` if it is a
+valid SSN, `us_itin` if it is a valid ITIN, and otherwise `us_ssn` with `low`
+confidence. As with cards, the advertising-range test numbers are excluded
+only from shape and context detection; keyed after a prompt, they are
+classed.
 
 ## Vectors
 
@@ -265,7 +302,7 @@ Classes with no `standalone` and no `contextWords` (`cvv`, `pin`,
 
 ## Stability
 
-- `specVersion` is `"0.1"`.
+- `specVersion` is `"0.2"`.
 - Before 1.0, a **breaking change bumps the minor version** (0.1 to 0.2).
   A change is breaking if it can change the matches for any input, or if it
   changes a file's shape. Every change is listed in the repository
@@ -274,6 +311,47 @@ Classes with no `standalone` and no `contextWords` (`cvv`, `pin`,
   change to the contract.
 - An implementation declares the `specVersion` it implements and refuses to
   load a spec file with any other version.
+
+## Changes from 0.1
+
+Version 0.2 settles txp-labs/sensitive-data-scanner#15, raised by Stugum after
+it adopted 0.1. Stugum mirrors this contract, so every change is listed here;
+each one has vectors in `vectors/answer-windows.jsonl` or `vectors/itin.jsonl`.
+
+1. **Keypad answers may be keyed in parts.** `neverJoinChannels` is removed
+   from `join_same_speaker_turns`, and `answerWindowChannels: [dtmf]`
+   replaces it. A `dtmf` part joins the same speaker's next turn (`0101`,
+   then `80#` is one DOB) only while no turn of another speaker has come
+   between them, and a value with a `dtmf` part ends at the next turn of
+   another speaker. All the other join conditions still apply.
+2. **A menu or question turn ends the pending value.** A new field,
+   `menuOrQuestionTurns` in `join_same_speaker_turns`, lists patterns (`?`,
+   `press`, `reply`, `say`, `enter`, `type`, `select`, `choose`, `dial`,
+   `menu`). A bot or agent turn matching one is not a backchannel: like a
+   prompt, it ends any value another speaker is still giving. After an
+   incomplete `0230` and "Thanks. Reply 1 for more.", the `1` is not part of
+   the DOB.
+3. **A new class, `us_itin`** (severity `high`, the same as `us_ssn`):
+   - shape rules `area_9xx` and `group_50_65_70_88_90_92_94_99`;
+   - the SSN prompt phrases plus `\bitin\b` and `taxpayer identification
+     number`, so an SSN prompt arms `us_ssn` and `us_itin`;
+   - context words `itin`, `taxpayer identification`, `taxpayer id` and the
+     SSN words, with the last-four exclusion (which now also names `itin`);
+   - `standalone: formatted`;
+   - `testNumbers`: the IRS advertising range, `987654320` to `987654329`.
+   - A new unprompted rule, **ITIN**, runs after SSN and before DOB.
+   - A structurally valid ITIN is a complete unprompted value for
+     `stopWhenClassComplete`, like an SSN.
+4. **`987654320` left `us_ssn.dummyValues`**: a 9xx area is never an SSN,
+   so it could never match there. It is in `us_itin.testNumbers`.
+5. **Schema changes:** `testNumbers` entries may have any number of digits
+   (they were 13-19); the shape rule enum gains the two ITIN rules; the
+   `join_same_speaker_turns` fields change as in 1 and 2.
+6. **`specVersion` is `"0.2"`** in both spec files. An implementation of 0.1
+   refuses them.
+
+The TypeScript package's compiled `dist/` is now committed, so it can be
+consumed by git commit; that is a packaging change, not a contract change.
 
 ## Changes from the v0 draft
 

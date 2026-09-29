@@ -41,9 +41,9 @@ def test_spec_file_follows_schema(yaml_name: str, schema_name: str) -> None:
     assert errors == []
 
 
-def test_spec_version_is_0_1() -> None:
-    assert load_yaml("classes.yaml")["specVersion"] == "0.1"
-    assert load_yaml("normalize.yaml")["specVersion"] == "0.1"
+def test_spec_version_is_0_2() -> None:
+    assert load_yaml("classes.yaml")["specVersion"] == "0.2"
+    assert load_yaml("normalize.yaml")["specVersion"] == "0.2"
 
 
 def test_prompt_phrases_and_exclusions_compile() -> None:

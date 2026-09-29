@@ -90,6 +90,44 @@ jobs:
         run: |
           node -e 'const p=require("./package.json"); const d=Object.keys(p.dependencies||{}); if(d.length){console.error("runtime dependencies:",d); process.exit(1)}'
 
+  spec-ts-dist:
+    # dist/ is committed so the package can be consumed by git commit (package
+    # managers do not build git dependencies). It must be exactly what a fresh
+    # build of src/ produces.
+    name: spec-ts dist matches a fresh build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/spec-ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild dist from scratch
+        run: |
+          rm -rf dist
+          npm run build
+
+      - name: Committed dist is up to date
+        run: |
+          set -euo pipefail
+          changes=$(git status --porcelain --untracked-files=all -- dist)
+          if [ -n "${changes}" ]; then
+            echo "${changes}"
+            git --no-pager diff -- dist
+            echo "::error::packages/spec-ts/dist differs from a fresh build: run 'npm run build' in packages/spec-ts and commit dist/."
+            exit 1
+          fi
+
   package:
     name: Package (Lambda image and zip)
     runs-on: ubuntu-latest

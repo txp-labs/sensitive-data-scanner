@@ -8,7 +8,7 @@
 #
 # Synthetic and public values only. Never put a real card number, SSN or any
 # other personal value in this file.
-specVersion: "0.1"
+specVersion: "0.2"
 
 classes:
   us_ssn:
@@ -32,7 +32,48 @@ classes:
       - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)"
     # Published sample numbers. Excluded from shape and context detection
     # (counted apart as test data); a prompted answer is classed regardless.
-    dummyValues: ["078051120", "219099999", "123456789", "111111111", "987654320"]
+    dummyValues: ["078051120", "219099999", "123456789", "111111111"]
+
+  # An IRS Individual Taxpayer Identification Number: the 9xx area an SSN
+  # never has. Same severity as an SSN: it identifies a taxpayer the same way
+  # and is protected the same way. An SSN prompt or SSN context word also
+  # classes one, since an ITIN is what a caller without an SSN gives there.
+  us_itin:
+    severity: high
+    promptPhrases:
+      - "social security number"
+      - "\\bssn\\b"
+      - "\\bitin\\b"
+      - "taxpayer identification number"
+    shape:
+      digits: 9
+      rules: [area_9xx, group_50_65_70_88_90_92_94_99]
+    # Without a prompt or a context word, only when written 3-2-4 with one
+    # kind of separator (912-70-1234).
+    standalone: formatted
+    contextWords:
+      - "itin"
+      - "taxpayer identification"
+      - "taxpayer id"
+      - "social"
+      - "ssn"
+      - "social security"
+    contextExclusions:
+      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn|itin)"
+    # The range the IRS publishes for use in advertising: 987-65-4320 to
+    # 987-65-4329. Excluded from shape and context detection (counted apart
+    # as test data); a prompted answer is classed regardless.
+    testNumbers:
+      - "987654320"
+      - "987654321"
+      - "987654322"
+      - "987654323"
+      - "987654324"
+      - "987654325"
+      - "987654326"
+      - "987654327"
+      - "987654328"
+      - "987654329"
 
   card:
     severity: high

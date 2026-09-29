@@ -7,7 +7,7 @@
  */
 import { CLASSES_RAW, NORMALIZE_RAW } from './spec.generated.ts';
 
-export const SPEC_VERSION = '0.1';
+export const SPEC_VERSION = '0.2';
 
 const WS = '[ \\t\\r\\n]+';
 
@@ -65,7 +65,10 @@ export interface NormalizeSpec {
   joinWithinMs: number;
   joinStopWhenComplete: boolean;
   joinMaxIntervening: number;
-  joinNever: ReadonlySet<string>;
+  /** Channels whose values end at the next turn of another speaker (a keypad answer window). */
+  joinAnswerWindow: ReadonlySet<string>;
+  /** A bot or agent turn matching one of these is a menu or a question: it ends other speakers' values. */
+  menuOrQuestionRes: readonly RegExp[];
 }
 
 export interface Spec {
@@ -196,7 +199,8 @@ function parseNormalize(raw: Raw): NormalizeSpec {
     joinWithinMs: Math.trunc(Number(join.withinSeconds) * 1000),
     joinStopWhenComplete: join.stopWhenClassComplete !== false,
     joinMaxIntervening: Number(join.maxInterveningTurns ?? 0),
-    joinNever: new Set(strings(join.neverJoinChannels)),
+    joinAnswerWindow: new Set(strings(join.answerWindowChannels)),
+    menuOrQuestionRes: strings(join.menuOrQuestionTurns).map((p) => new RegExp(p, 'i')),
   };
 }
 

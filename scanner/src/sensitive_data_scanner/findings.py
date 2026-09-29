@@ -33,6 +33,7 @@ MAX_FINDINGS_IN_DOCUMENT = 5000
 SEVERITY = {
     "card": "high",
     "us_ssn": "high",
+    "us_itin": "high",  # the same as us_ssn: it identifies a taxpayer the same way
     "cvv": "high",
     "pin": "high",
     "dob": "medium",

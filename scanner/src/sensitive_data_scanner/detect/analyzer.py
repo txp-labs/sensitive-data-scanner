@@ -32,6 +32,7 @@ from .recognizers import (
     ConversationalPromptRecognizer,
     DateOfBirthRecognizer,
     SpecCreditCardRecognizer,
+    SpecUsItinRecognizer,
     SpecUsSsnRecognizer,
     SpokenDigitsRecognizer,
     render_transcript,
@@ -71,6 +72,7 @@ def build_engine(spec: Spec, now: _dt.date | None) -> AnalyzerEngine:
     for rec in (
         SpecCreditCardRecognizer(spec),
         SpecUsSsnRecognizer(spec),
+        SpecUsItinRecognizer(spec),
         DateOfBirthRecognizer(now),
         SpokenDigitsRecognizer(spec, now),
     ):
@@ -147,7 +149,7 @@ class Detector:
         self._conversation = build_conversation_engine(self.spec, now)
 
     def analyze_text(self, text: str, context: list[str] | None = None) -> Analysis:
-        """Stored text: card and SSN patterns and checksums, dates of birth, spoken digits."""
+        """Stored text: card, SSN and ITIN patterns and checksums, dates of birth, spoken digits."""
         results = self._text.analyze(text=text, language="en", context=context or [])
         return _analysis(results, None)
 

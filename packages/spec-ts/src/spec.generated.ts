@@ -2,7 +2,7 @@
 // Do not edit by hand: change the YAML and run `npm run gen:spec`.
 
 export const CLASSES_RAW: unknown = {
-  "specVersion": "0.1",
+  "specVersion": "0.2",
   "classes": {
     "us_ssn": {
       "severity": "high",
@@ -31,8 +31,47 @@ export const CLASSES_RAW: unknown = {
         "078051120",
         "219099999",
         "123456789",
-        "111111111",
-        "987654320"
+        "111111111"
+      ]
+    },
+    "us_itin": {
+      "severity": "high",
+      "promptPhrases": [
+        "social security number",
+        "\\bssn\\b",
+        "\\bitin\\b",
+        "taxpayer identification number"
+      ],
+      "shape": {
+        "digits": 9,
+        "rules": [
+          "area_9xx",
+          "group_50_65_70_88_90_92_94_99"
+        ]
+      },
+      "standalone": "formatted",
+      "contextWords": [
+        "itin",
+        "taxpayer identification",
+        "taxpayer id",
+        "social",
+        "ssn",
+        "social security"
+      ],
+      "contextExclusions": [
+        "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn|itin)"
+      ],
+      "testNumbers": [
+        "987654320",
+        "987654321",
+        "987654322",
+        "987654323",
+        "987654324",
+        "987654325",
+        "987654326",
+        "987654327",
+        "987654328",
+        "987654329"
       ]
     },
     "card": {
@@ -362,7 +401,7 @@ export const CLASSES_RAW: unknown = {
 };
 
 export const NORMALIZE_RAW: unknown = {
-  "specVersion": "0.1",
+  "specVersion": "0.2",
   "steps": [
     {
       "strip_keypad_terminator": [
@@ -511,8 +550,20 @@ export const NORMALIZE_RAW: unknown = {
         "withinSeconds": 15,
         "stopWhenClassComplete": true,
         "maxInterveningTurns": 3,
-        "neverJoinChannels": [
+        "answerWindowChannels": [
           "dtmf"
+        ],
+        "menuOrQuestionTurns": [
+          "\\?",
+          "\\bpress(?:ing)?\\b",
+          "\\breply\\b",
+          "\\bsay\\b",
+          "\\benter\\b",
+          "\\btype\\b",
+          "\\bselect\\b",
+          "\\bchoose\\b",
+          "\\bdial\\b",
+          "\\bmenu\\b"
         ]
       }
     }

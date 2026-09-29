@@ -8,8 +8,9 @@ Analyzer, with **no NLP model**, and recognizers for the classes in the
 |---|---|
 | `SpecCreditCardRecognizer` | Presidio's card pattern and Luhn checksum, plus the 2-series and 19-digit ranges, the spec's IIN table, and published test numbers set apart |
 | `SpecUsSsnRecognizer` | Presidio's SSN recognizer with the spec's structure rules and sample numbers; nine bare digits only next to an SSN word |
+| `SpecUsItinRecognizer` | Presidio's ITIN recognizer with the spec's structure rules (9xx area, groups 50-65, 70-88, 90-92, 94-99) and the IRS advertising range set apart; nine bare digits only next to an ITIN or SSN word |
 | `DateOfBirthRecognizer` | Dates, kept only next to a DOB word |
-| `SpokenDigitsRecognizer` | Card numbers and SSNs read aloud in one text ("four five three nine, ..."), after the spec's normalization |
+| `SpokenDigitsRecognizer` | Card numbers, SSNs and ITINs read aloud in one text ("four five three nine, ..."), after the spec's normalization |
 | `ConversationalPromptRecognizer` | A whole transcript: a bot or agent turn asking for class X classes the next customer turn as X, whatever its shape; values split across a speaker's turns |
 | `SpecContextEnhancer` | Context words in a character window and in caller-supplied context (a JSON key, a CSV header), without an NLP model |
 

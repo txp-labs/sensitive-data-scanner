@@ -8,6 +8,8 @@ import {
   SPEC_VERSION,
   armedClasses,
   classify,
+  isMenuOrQuestion,
+  itinStructureValid,
   loadSpec,
   normalize,
   parseSpec,
@@ -24,10 +26,10 @@ test('the compiled spec matches spec/*.yaml', () => {
   assert.equal(file, generated());
 });
 
-test('spec version 0.1, and any other version is refused', () => {
-  assert.equal(SPEC_VERSION, '0.1');
-  assert.equal(spec.specVersion, '0.1');
-  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.2' };
+test('spec version 0.2, and any other version is refused', () => {
+  assert.equal(SPEC_VERSION, '0.2');
+  assert.equal(spec.specVersion, '0.2');
+  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.1' };
   assert.throws(() => parseSpec(wrong, NORMALIZE_RAW), /unsupported specVersion/);
 });
 
@@ -92,4 +94,31 @@ test('results carry no digits: every string field is a class, via or confidence'
     return v;
   });
   for (const s of strings) assert.doesNotMatch(s, /[0-9]/);
+});
+
+test('an SSN prompt arms us_itin too; an ITIN prompt arms only us_itin', () => {
+  const ssn: Turn = { speaker: 'bot', text: 'Please enter or say your nine digit Social Security number.' };
+  assert.deepEqual(armedClasses(spec, [ssn]), ['us_ssn', 'us_itin']);
+  assert.deepEqual(armedClasses(spec, [{ speaker: 'agent', text: 'And your ITIN?' }]), ['us_itin']);
+  assert.deepEqual(armedClasses(spec, [{ speaker: 'bot', text: 'The last four of your social?' }]), [
+    'us_ssn_last4',
+  ]);
+});
+
+test('ITIN structure: a 9xx area and a group in 50-65, 70-88, 90-92 or 94-99', () => {
+  for (const ok of ['912501234', '912651234', '912701234', '912881234', '912901234', '912921234', '912941234', '912991234']) {
+    assert.equal(itinStructureValid(ok), true, ok);
+  }
+  for (const bad of ['912491234', '912661234', '912691234', '912891234', '912931234', '812701234', '91270123']) {
+    assert.equal(itinStructureValid(bad), false, bad);
+  }
+});
+
+test('menu and question turns, and backchannels', () => {
+  for (const t of ['Thanks. Reply 1 for more.', 'Is that a Visa?', 'Press 2 to repeat.', 'Please say or enter it again.']) {
+    assert.equal(isMenuOrQuestion(spec, t), true, t);
+  }
+  for (const t of ['Mm-hmm.', 'Okay.', 'Thank you.', 'Got it, go on.']) {
+    assert.equal(isMenuOrQuestion(spec, t), false, t);
+  }
 });

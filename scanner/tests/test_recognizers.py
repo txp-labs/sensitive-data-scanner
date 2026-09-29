@@ -1,4 +1,4 @@
-"""Stored text through Presidio: the card, SSN, DOB and spoken-digit recognizers
+"""Stored text through Presidio: the card, SSN, ITIN, DOB and spoken-digit recognizers
 and the context enhancer, on #1067's positives and near-misses."""
 
 from __future__ import annotations
@@ -9,6 +9,8 @@ import pytest
 
 from sensitive_data_scanner.detect.analyzer import Analysis, Detector
 from sensitive_data_scanner.detect.recognizers import card_grouping
+from sensitive_data_scanner.engine.spec import load_spec
+from sensitive_data_scanner.findings import SEVERITY
 from synthetic import (
     CARDS,
     SSN_A,
@@ -134,6 +136,37 @@ class TestSsn:
         assert found(detector.analyze_text(f"last four of your social is 7788, ref {SSN_A}")) == []
         a = detector.analyze_text("SSN 078-05-1120")
         assert (found(a), a.test_values) == ([], 1)
+
+
+class TestItin:
+    """Made-up ITINs: a 9xx area and a group in 50-65, 70-88, 90-92 or 94-99."""
+
+    def test_dashed_with_and_without_a_word(self, detector: Detector) -> None:
+        assert found(detector.analyze_text("ITIN: 912-70-1234")) == [("us_itin", "context", "high")]
+        assert found(detector.analyze_text("SSN: 945-88-2716")) == [("us_itin", "context", "high")]
+        assert found(detector.analyze_text("id 978-94-3302")) == [("us_itin", "shape", "medium")]
+
+    def test_bare_nine_digits_only_with_a_word(self, detector: Detector) -> None:
+        assert found(detector.analyze_text("taxpayer id 931556070")) == [
+            ("us_itin", "context", "high")
+        ]
+        assert found(detector.analyze_text("ref 931556070")) == []
+
+    @pytest.mark.parametrize("bad", ["912-49-1234", "912-66-1234", "912-89-1234", "912-93-1234"])
+    def test_groups_outside_the_itin_ranges(self, detector: Detector, bad: str) -> None:
+        assert found(detector.analyze_text(f"ITIN {bad}")) == []
+
+    def test_advertising_range_is_test_data(self, detector: Detector) -> None:
+        a = detector.analyze_text("ITIN 987-65-4320, or 987-65-4329")
+        assert (found(a), a.test_values) == ([], 2)
+
+    def test_last_four_is_not_context(self, detector: Detector) -> None:
+        assert found(detector.analyze_text("last four of my ITIN is 1234, ref 945882716")) == []
+
+    def test_same_severity_as_ssn(self) -> None:
+        spec = load_spec()
+        assert spec.classes["us_itin"].severity == spec.classes["us_ssn"].severity == "high"
+        assert SEVERITY["us_itin"] == SEVERITY["us_ssn"]
 
 
 class TestDob:
