@@ -159,6 +159,17 @@ jobs:
           # The estate rollout templates (docs/ARCHITECTURE.md, Estate rollout).
           cp deploy/scanner.yaml deploy/estate-stackset.yaml dist/
           cd dist
+          # Name every file as GitHub will serve it, so SHA256SUMS matches the
+          # downloads: GitHub replaces characters other than letters, digits,
+          # "-", "_" and "." with ".", which turned buildx's
+          # owner~repo~id.dockerbuild record into owner.repo.id.dockerbuild (#24).
+          for f in *; do
+            safe=$(printf '%s' "$f" | LC_ALL=C sed 's/[^A-Za-z0-9._-]/./g')
+            if [ "$f" != "$safe" ]; then
+              test ! -e "$safe"
+              mv -- "$f" "$safe"
+            fi
+          done
           sha256sum -- * > SHA256SUMS
           echo "ghcr.io/txp-labs/sensitive-data-scanner@${DIGEST}" > IMAGE_DIGEST
           cd ..
@@ -168,3 +179,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${RELEASE_TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${RELEASE_TAG}" --notes-file notes.md --verify-tag
+      - name: SHA256SUMS names every asset as GitHub serves it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort > served
+          awk '{print $2}' dist/SHA256SUMS | sort > summed
+          # Every summed file is served under that name; only SHA256SUMS itself is not summed.
+          comm -23 summed served | tee missing
+          test ! -s missing
+          test "$(comm -13 summed served)" = "SHA256SUMS"

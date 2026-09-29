@@ -39,6 +39,8 @@ from .exports import drop_other_passes
 AWS_SERVICES = ("ssm", "secretsmanager")
 
 PARAMETER_STORE = "parameter-store"
+# The scanner's own configuration parameters (CONFIG_LOCATION): never read as data.
+OWN_PARAMETERS = "/sensitive-data-scanner/"
 SECRETS = "secrets-manager"
 
 
@@ -92,9 +94,13 @@ class SsmAdapter:
             return {str(t["Key"]): str(t.get("Value", "")) for t in r.get("TagList", [])}
 
         secure = {str(p["Name"]) for p in params if p.get("Type") == "SecureString"}
+        own = [str(p["Name"]) for p in params if str(p["Name"]).startswith(OWN_PARAMETERS)]
+        params = [p for p in params if not str(p["Name"]).startswith(OWN_PARAMETERS)]
         kept, excluded = _members(
             ctx, "ssm", [(str(p["Name"]), None, str(p["Name"])) for p in params], tags
         )
+        if own:
+            excluded["self"] = len(own)
         if not ctx.config.ssm_decrypt:
             n = sum(1 for k in kept if k in secure)
             kept = [k for k in kept if k not in secure]

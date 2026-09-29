@@ -243,7 +243,9 @@ class OpenSearchSource:
     def link(self) -> str:
         q = urllib.parse.quote(self.name, safe="")
         page = f"collections/{q}" if self.serverless else f"domains/{q}"
-        return console_link(self.region, f"aos/home?region={self.region}#opensearch/{page}")
+        return console_link(
+            self.region, f"aos/home?region={self.region}#opensearch/{page}", (self.name,)
+        )
 
     def indices(self) -> list[str]:
         rows = self._get("/_cat/indices?format=json&h=index,status&expand_wildcards=open")

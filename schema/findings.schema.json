@@ -395,7 +395,9 @@
               "excluded": {
                 "description": "Parameters or secrets not read, by reason: the deny or allow rules, unreadable tags, or SecureString with SSM_DECRYPT off (1.3).",
                 "type": "object",
-                "propertyNames": { "enum": ["denied", "not_allowed", "tags_unreadable", "secure_string"] },
+                "propertyNames": {
+                  "enum": ["denied", "not_allowed", "tags_unreadable", "secure_string", "self"]
+                },
                 "additionalProperties": { "type": "integer", "minimum": 1 }
               },
               "fileSystemType": {

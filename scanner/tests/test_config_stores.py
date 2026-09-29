@@ -54,6 +54,7 @@ PARAMS = {
     "/app/payment": ("SecureString", json.dumps({"card_number": CARDS["visa"]})),
     "/app/regions": ("StringList", "us-west-2,us-east-1"),
     "/prod/secret-key": ("SecureString", f"card {CARDS['jcb']}"),
+    "/sensitive-data-scanner/config": ("String", "{}"),
 }
 
 
@@ -99,10 +100,10 @@ def test_parameters_are_read_decrypted_and_named(env: Env) -> None:
     assert (st["name"], st["status"], st["items"], st["excluded"]) == (
         "parameter-store",
         "scanned",
-        5,
-        {"denied": 1},
+        6,
+        {"denied": 1, "self": 1},  # its own configuration is never read as data
     )
-    assert st["itemTypes"] == {"SecureString": 2, "String": 2, "StringList": 1}
+    assert st["itemTypes"] == {"SecureString": 2, "String": 3, "StringList": 1}
     assert "names" not in st
 
 
@@ -113,7 +114,7 @@ def test_without_decrypt_secure_strings_are_counted_not_read(env: Env) -> None:
     doc = env.run(config(s3_targets=[], discover=frozenset({"ssm"}), ssm_decrypt=False))
     assert doc is not None
     s["ssm"].assert_no_pending_responses()
-    assert stores(doc)["ssm"]["excluded"] == {"secure_string": 2}
+    assert stores(doc)["ssm"]["excluded"] == {"secure_string": 2, "self": 1}
     assert read_config({"RESULTS_BUCKET": "x"}).ssm_decrypt is True
     assert read_config({"RESULTS_BUCKET": "x", "SSM_DECRYPT": "false"}).ssm_decrypt is False
 
