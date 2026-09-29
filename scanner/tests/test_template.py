@@ -86,7 +86,8 @@ READ = re.compile(
     r"|ec2:Describe(Volumes|Snapshots)$|ebs:(ListSnapshotBlocks|GetSnapshotBlock)$|backup:List"
     r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List"
     r"|kinesis:(List|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
-    r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$)"
+    r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$"
+    r"|ssm:(DescribeParameters|GetParameters|ListTagsForResource)$|secretsmanager:ListSecrets$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -245,6 +246,8 @@ SERVICES = {
     "kinesis": "kinesis",
     "firehose": "firehose",
     "sqs": "sqs",
+    "ssm": "ssm",
+    "secretsmanager": "secretsmanager",
 }
 
 
@@ -395,6 +398,24 @@ def test_queues_are_received_from_never_consumed() -> None:
     source = (PACKAGE / "sources" / "streams.py").read_text()
     assert "VisibilityTimeout=0" in source
     assert "delete_message" not in source and "change_message_visibility" not in source
+
+
+def test_config_stores_are_read_never_written_and_secrets_are_opt_in() -> None:
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "ssm:PutParameter",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret*",
+    } <= (denied)
+    secrets = next(s for s in statements() if s.get("Sid") == "ReadSecretValues")
+    assert in_account(secrets["Resource"], "secretsmanager", "secret:")
+    wrapped = [
+        s["Fn::If"]
+        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        if isinstance(s, dict) and "Fn::If" in s
+    ]
+    assert [c for c, st, _ in wrapped if st.get("Sid") == "ReadSecretValues"] == ["SecretsValues"]
+    assert SCANNER["Parameters"]["SecretsRead"]["Default"] == "false"
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:

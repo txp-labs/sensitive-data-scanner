@@ -8,6 +8,7 @@ adapter here, keyed by its kind (the name `DISCOVER` and the run summary use).
 from __future__ import annotations
 
 from .base import Adapter
+from .config_stores import SecretsAdapter, SsmAdapter
 from .coverage_only import ClusterAdapter, EfsAdapter, FsxAdapter
 from .ebs import BackupAdapter, EbsAdapter
 from .opensearch import OpenSearchAdapter
@@ -26,5 +27,7 @@ _ALL: list[Adapter] = [
     KinesisAdapter(),
     FirehoseAdapter(),
     SqsAdapter(),
+    SsmAdapter(),
+    SecretsAdapter(),
 ]
 ADAPTERS: dict[str, Adapter] = {a.kind: a for a in _ALL}

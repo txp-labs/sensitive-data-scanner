@@ -52,7 +52,7 @@ READABLE_LOG_CLASSES = frozenset({"STANDARD", "INFREQUENT_ACCESS"})
 
 
 _INTERNAL = frozenset(
-    {"tableArn", "endpoint", "snapshotId", "volumeGiB", "queueUrl", "s3Locations"}
+    {"tableArn", "endpoint", "snapshotId", "volumeGiB", "queueUrl", "s3Locations", "names"}
 )
 # Engines the RDS API lists that have their own kind (and adapter) when discovered.
 OWN_KIND = {"docdb": "documentdb", "neptune": "neptune"}

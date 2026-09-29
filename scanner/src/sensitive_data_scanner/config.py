@@ -149,6 +149,8 @@ DISCOVER_KINDS = {
     "kinesis": "kinesis",
     "firehose": "firehose",
     "sqs": "sqs",
+    "ssm": "ssm",
+    "secretsmanager": "secretsmanager",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -169,6 +171,9 @@ _KIND_ALIASES = {
     "kinesis": "kinesis",
     "firehose": "firehose",
     "sqs": "sqs",
+    "ssm": "ssm",
+    "secretsmanager": "secretsmanager",
+    "secrets": "secretsmanager",
 }
 
 
@@ -430,6 +435,10 @@ class Config:
     # SQS: dead-letter queues are received from (VisibilityTimeout=0) only when on.
     sqs_dlq_read: bool = False
     sqs_messages_per_queue: int = 100
+    # SSM Parameter Store: SecureString values are decrypted through SSM unless off.
+    # Secrets Manager: listed always, read only when on.
+    ssm_decrypt: bool = True
+    secrets_read: bool = False
 
     @property
     def exports_prefix(self) -> str:
@@ -504,6 +513,8 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         kinesis_max_shards=_int(e.get("KINESIS_MAX_SHARDS"), 50, 1, 10_000),
         sqs_dlq_read=_bool(e.get("SQS_DLQ_READ")),
         sqs_messages_per_queue=_int(e.get("SQS_MESSAGES_PER_QUEUE"), 100, 1, 1000),
+        ssm_decrypt=_bool(e.get("SSM_DECRYPT", "true")),
+        secrets_read=_bool(e.get("SECRETS_READ")),
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
