@@ -57,6 +57,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `docs/RELEASING.md` describes the steps and what is pending (signing,
   hosting).
 
+### Docs
+- README usage, `docs/ARCHITECTURE.md` (batch mode, and the event-driven
+  phase 2 design with push delivery to a consumer-owned EventBridge bus).
+  `docs/FINDINGS.md` (the findings schema) and `docs/RELEASING.md`.
+
 ### Internal
 - CI: Python (ruff, mypy, pytest), Node (typecheck, tests), gitleaks and
   zizmor, all SHA-pinned.
