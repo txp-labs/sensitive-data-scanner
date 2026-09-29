@@ -1,13 +1,26 @@
-"""What every source shares: the run budget, and the store findings go into."""
+"""What every source shares: the run budget, the store findings go into, and the adapter
+interface a kind of store plugs into discovery and the run with.
+
+Nothing here names a cloud. An adapter (sources/aws.py lists AWS's) lists its
+stores, decides with the shared allow, deny and sampling rules, and gives the
+runner a source per store; the budget, the findings and the run summary stay
+the core's.
+"""
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from ..findings import Coverage
+from ..findings import ClassFinding, Coverage, finding_json
+
+if TYPE_CHECKING:
+    from ..config import Config
+    from ..discovery import Discovery, Store
+    from ..scan.columnar import TableResult
+    from .exports import ExportQuota
 
 
 class Budget:
@@ -113,3 +126,57 @@ class FindingStore:
 
     def public(self) -> list[dict[str, Any]]:
         return [{k: v for k, v in f.items() if not k.startswith("_")} for f in self.items.values()]
+
+
+def column_findings(
+    table: TableResult,
+    resource_for: Callable[[str], dict[str, Any]],
+    link: str | None,
+    seen_at: str,
+) -> list[dict[str, Any]]:
+    """Per-column findings with counts only: the rows of a sample are not addressable later."""
+    out = []
+    for column, item in sorted(table.by_column.items()):
+        resource = resource_for(column)
+        for cf in item.findings.values():
+            cf.offsets = []
+            out.append(finding_json(resource, link, table.format, cf, seen_at))
+    return out
+
+
+def class_findings(
+    findings: dict[str, ClassFinding],
+    resource: dict[str, Any],
+    link: str | None,
+    fmt: str,
+    seen_at: str,
+) -> list[dict[str, Any]]:
+    """Findings for one field with counts only (a record, message or value read once)."""
+    out = []
+    for cf in findings.values():
+        cf.offsets = []
+        out.append(finding_json(resource, link, fmt, cf, seen_at))
+    return out
+
+
+@dataclass
+class Context:
+    """What an adapter is given: the configuration, a client per service, where it runs."""
+
+    config: Config
+    clients: Any  # runner.Clients: `clients.client("<service>")`
+    region: str
+    account: str
+    quota: ExportQuota | None = None
+
+
+class Adapter(Protocol):
+    """One kind of store: how to list it, and the source that reads one of them."""
+
+    kind: str
+
+    def discover(self, ctx: Context, out: Discovery) -> None:
+        """Append a Store per store of this kind, decided (read, or skipped with a reason)."""
+
+    def source(self, ctx: Context, store: Store) -> Any | None:
+        """The source that reads a pending store, or None (the store is then reported)."""

@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.2,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.3,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -23,7 +23,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.2"
+FINDINGS_SCHEMA_VERSION = "1.3"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -219,6 +219,43 @@ def rds_resource(
     return out
 
 
+def store_field_resource(
+    *,
+    service: str,
+    store: str,
+    field: str | None,
+    read_by: str,
+    database: str | None = None,
+    table: str | None = None,
+    snapshot_time: str | None = None,
+) -> dict[str, Any]:
+    """One field of one store that is not S3, logs, DynamoDB or RDS (1.3).
+
+    A column of a warehouse table (`database`, `table`, `field`), a field of a
+    search index's documents (`table` is the index), a record stream's or a
+    queue's messages, a parameter's or a secret's value. The same shape serves
+    any cloud: `service` names the product, `store` the cluster, domain,
+    stream, queue, parameter or secret.
+    """
+    names = {
+        k: v
+        for k, v in (("store", store), ("database", database), ("table", table), ("field", field))
+        if v is not None
+    }
+    masked = {k: redact_digits(v) for k, v in names.items()}
+    out: dict[str, Any] = {"type": "store_field", "service": service, **masked, "readBy": read_by}
+    if snapshot_time:
+        out["snapshotTime"] = snapshot_time
+    if masked != names:
+        out["keyMasked"] = True
+    return out
+
+
+def console_link(region: str, path: str) -> str:
+    """A page in the account's own AWS console (`path` after the host, already quoted)."""
+    return f"https://{region}.console.aws.amazon.com/{path}"
+
+
 # Resource fields that say which copy was read, not where the data lives.
 _NOT_IN_ID = frozenset({"snapshotTime"})
 
@@ -267,7 +304,7 @@ def finding_json(
 class Coverage:
     """What one source's pass read, sampled, skipped and could not read."""
 
-    kind: str  # s3 | cloudwatch_logs | dynamodb
+    kind: str  # the store kind: s3 | cloudwatch_logs | dynamodb | redshift | ...
     target: str
     listed: int = 0
     eligible: int = 0

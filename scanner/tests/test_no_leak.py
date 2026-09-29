@@ -466,6 +466,83 @@ def test_no_value_leaves_the_exports_or_the_data_api(
     del CLUSTER_ARN, SECRET_ARN
 
 
+def _outputs(env: Env, sent: list[dict[str, Any]], capsys: Any, caplog: Any) -> dict[str, str]:
+    # state/ is the scanner's own (cursors name the last key read, as for S3 and
+    # DynamoDB); what leaves the account is the findings, the events and the logs.
+    return {
+        "findings/latest.json": json.dumps(env.latest()),
+        "events": json.dumps(sent),
+        "stdout+stderr": "".join(capsys.readouterr()),
+        "log records": "\n".join(r.getMessage() for r in caplog.records),
+    }
+
+
+def _bus(env: Env) -> list[dict[str, Any]]:
+    sent: list[dict[str, Any]] = []
+
+    class Bus:
+        def put_events(self, Entries: list[dict[str, Any]]) -> dict[str, Any]:
+            sent.extend(Entries)
+            return {"FailedEntryCount": 0}
+
+    env.clients.events = Bus()  # type: ignore[assignment]
+    return sent
+
+
+def test_no_value_leaves_redshift(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A cluster and a workgroup whose names, databases, tables and columns hold values, read
+    by sampled SQL: findings, state, events and logs hold masked names and counts only."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_redshift import Aws
+
+    aws = Aws(env)
+    cluster = f"wh-{SSN_A}"
+    group = f"wg-{CARDS['visa']}"
+    aws.rs_stub.add_response(
+        "describe_clusters",
+        {"Clusters": [{"ClusterIdentifier": cluster, "ClusterStatus": "available"}]},
+    )
+    aws.sl_stub.add_response(
+        "list_namespaces", {"namespaces": [{"namespaceName": "n-1", "dbName": f"db_{SSN_B}"}]}
+    )
+    aws.sl_stub.add_response(
+        "list_workgroups",
+        {"workgroups": [{"workgroupName": group, "namespaceName": "n-1", "status": "AVAILABLE"}]},
+    )
+    rows = [{f"c_{CARDS['jcb']}": CARDS["amex"], "ssn": dashed(SSN_B), "n": int(SSN_A)}]
+    # Stores run in name order: the workgroup ("wg-") before the cluster ("wh-").
+    wg = {"WorkgroupName": group}
+    aws.data_stub.add_response("list_databases", {"Databases": [f"db_{SSN_B}"]})
+    aws.database(f"db_{SSN_B}", {(f"s_{SSN_A}", f"t_{CARDS['mastercard']}"): rows}, auth=wg)
+    cl = {"ClusterIdentifier": cluster}
+    aws.data_stub.add_response("list_databases", {"Databases": ["dev"]})
+    aws.database("dev", {("public", f"cust_{SSN_B}"): rows}, auth=cl)
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"redshift"}),
+            redshift_read="iam",
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    aws.data_stub.assert_no_pending_responses()
+    assert {f["resource"]["service"] for f in doc["findings"]} == {
+        "redshift",
+        "redshift_serverless",
+    }
+    assert all(f["resource"].get("keyMasked") and f["link"] is None for f in doc["findings"])
+    assert all(s.get("nameMasked") for s in doc["discovery"]["stores"])
+    for name, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

@@ -16,11 +16,12 @@ A finding names the engine, the cluster or instance, the database, and the
 table and column (`schema.table.column`). Rows are not addressable once the
 export is deleted, so a finding carries counts, not offsets.
 
-**Data API (opt-in, `RDS_DATA_API`).** For a small Aurora database: list its
-tables from `information_schema`, then `SELECT * ... LIMIT n` from each,
-inside a transaction that is always rolled back (and `SET TRANSACTION READ
-ONLY` on PostgreSQL). Identifiers are quoted; the only statements are the
-scanner's own SELECTs. The secret should belong to a read-only database user.
+**Data API (opt-in, `RDS_DATA_API`).** For a small Aurora database: the
+generic sampled SQL of scan/sql.py (list the tables from
+`information_schema`, then `SELECT * ... LIMIT n` from each), inside a
+transaction that is always rolled back (and `SET TRANSACTION READ ONLY` on
+PostgreSQL). Identifiers are quoted; the only statements are the scanner's
+own SELECTs. The secret should belong to a read-only database user.
 """
 
 from __future__ import annotations
@@ -36,7 +37,9 @@ from ..config import DataApiTarget
 from ..detect.analyzer import Detector
 from ..findings import Coverage, finding_json, rds_link, rds_resource
 from ..safety import error_name, is_kms_denial, log_event
-from ..scan.columnar import TableResult, scan_parquet, scan_rows
+from ..scan.columnar import TableResult, scan_parquet
+from ..scan.sql import MYSQL, POSTGRESQL, Dialect, Params, sample_sql, sample_tables
+from ..scan.sql import tables_sql as generic_tables_sql
 from .base import Budget, FindingStore, SourceRun
 from .exports import ExportQuota, delete_prefix, drop_other_passes, due, list_keys, merge
 from .s3 import S3RangeFile
@@ -325,38 +328,23 @@ class RdsExportSource:
         return SourceRun(cov, finished, None, self._extra(c, "COMPLETE"))
 
 
+def _dialect(engine: str) -> Dialect:
+    return MYSQL if engine == "mysql" else POSTGRESQL
+
+
 def quote_identifier(name: str, engine: str) -> str:
-    """A SQL identifier, quoted so that nothing in it is SQL."""
-    if engine == "mysql":
-        return "`" + name.replace("`", "``") + "`"
-    return '"' + name.replace('"', '""') + '"'
+    """A SQL identifier, quoted so that nothing in it is SQL (scan/sql.py)."""
+    return _dialect(engine).ident(name)
 
 
 def tables_sql(engine: str, schemas: tuple[str, ...]) -> tuple[str, list[dict[str, Any]]]:
-    """The statement that lists base tables, and its parameters (never inlined values)."""
-    if engine == "mysql":
-        return (
-            "SELECT table_schema, table_name FROM information_schema.tables "
-            "WHERE table_type = 'BASE TABLE' AND table_schema = DATABASE() "
-            "ORDER BY table_schema, table_name",
-            [],
-        )
-    params = [{"name": f"s{i}", "value": {"stringValue": s}} for i, s in enumerate(schemas)]
-    where = (
-        "table_schema IN (" + ", ".join(f":s{i}" for i in range(len(schemas))) + ")"
-        if schemas
-        else "table_schema NOT IN ('pg_catalog', 'information_schema')"
-    )
-    sql = (
-        "SELECT table_schema, table_name FROM information_schema.tables "  # noqa: S608 - placeholders only
-        f"WHERE table_type = 'BASE TABLE' AND {where} ORDER BY table_schema, table_name"
-    )
-    return sql, params
+    """The statement that lists base tables, and its Data API parameters (never inlined)."""
+    sql, params = generic_tables_sql(_dialect(engine), schemas)
+    return sql, [{"name": n, "value": {"stringValue": v}} for n, v in params]
 
 
 def select_sql(engine: str, schema: str, table: str, limit: int) -> str:
-    q = quote_identifier
-    return f"SELECT * FROM {q(schema, engine)}.{q(table, engine)} LIMIT {int(limit)}"  # noqa: S608 - quoted identifiers
+    return sample_sql(_dialect(engine), schema, table, limit)
 
 
 class RdsDataApiSource:
@@ -404,6 +392,30 @@ class RdsDataApiSource:
         extra = {"engine": engine, "dbType": "cluster", "readBy": "data_api"}
         tx: str | None = None
         done = False
+
+        def execute(sql: str, params: Params) -> list[dict[str, Any]]:
+            data_api = [{"name": n, "value": {"stringValue": v}} for n, v in params]
+            r = self._exec(sql, tx, data_api)
+            rows: list[dict[str, Any]] = json.loads(r.get("formattedRecords") or "[]")
+            return rows
+
+        def on_table(schema: str, name: str, table: TableResult) -> None:
+            findings = _findings(
+                table,
+                engine=engine,
+                identifier=self.identifier,
+                db_type="cluster",
+                database=self.t.database,
+                name=f"{schema}.{name}",
+                read_by="data_api",
+                snapshot_time=None,
+                link=link,
+                seen_at=seen_at,
+            )
+            for f in findings:
+                f["_pass"] = pass_id
+            store.replace_location(f"{self.id}\n{schema}.{name}", findings)
+
         try:
             tx = self.client.begin_transaction(
                 resourceArn=self.t.cluster_arn,
@@ -412,61 +424,26 @@ class RdsDataApiSource:
             )["transactionId"]
             if self.t.engine == "postgresql":
                 self._exec("SET TRANSACTION READ ONLY", tx)
-            sql, params = tables_sql(self.t.engine, self.t.schemas)
-            listed = json.loads(self._exec(sql, tx, params).get("formattedRecords") or "[]")
-            # Sorted here, not by the database's collation, so resuming is exact.
-            tables = sorted(
-                (
-                    str(r.get("table_schema") or r.get("TABLE_SCHEMA")),
-                    str(r.get("table_name") or r.get("TABLE_NAME")),
-                )
-                for r in listed
-            )[: self.t.max_tables]
-            cov.listed = len(tables)
-            todo = [t for t in tables if after is None or list(t) > list(after)]
-            cov.eligible = len(todo)
-            done = True
-            for schema, name in todo:
-                if not budget.has(0):
-                    done = False
-                    break
-                try:
-                    r = self._exec(
-                        select_sql(self.t.engine, schema, name, self.t.max_rows_per_table), tx
-                    )
-                    rows = json.loads(r.get("formattedRecords") or "[]")
-                except Exception as err:  # one table must not stop the pass
-                    cov.unreadable += 1
-                    log_event("item.unreadable", source=self.target, error=error_name(err))
-                    after = [schema, name]
-                    continue
-                size = len(json.dumps(rows, default=str))
-                budget.take(size)
-                columns = list(dict.fromkeys(k for row in rows for k in row))
-                table = scan_rows("sql", columns, rows, detector, self.t.max_rows_per_table)
-                cov.scanned += 1
-                cov.bytes_scanned += size
-                cov.formats["sql"] = cov.formats.get("sql", 0) + 1
-                cov.partial += int(len(rows) >= self.t.max_rows_per_table)
-                cov.test_values += table.test_values
-                cov.suppressed += table.suppressed
-                cov.redaction_markers += table.redaction_markers
-                findings = _findings(
-                    table,
-                    engine=engine,
-                    identifier=self.identifier,
-                    db_type="cluster",
-                    database=self.t.database,
-                    name=f"{schema}.{name}",
-                    read_by="data_api",
-                    snapshot_time=None,
-                    link=link,
-                    seen_at=seen_at,
-                )
-                for f in findings:
-                    f["_pass"] = pass_id
-                store.replace_location(f"{self.id}\n{schema}.{name}", findings)
-                after = [schema, name]
+            res = sample_tables(
+                execute,
+                _dialect(self.t.engine),
+                detector=detector,
+                has_room=lambda: budget.has(0),
+                take=budget.take,
+                on_table=on_table,
+                after=after,
+                schemas=self.t.schemas,
+                max_rows=self.t.max_rows_per_table,
+                max_tables=self.t.max_tables,
+                source=self.target,
+            )
+            cov.listed, cov.eligible, cov.scanned = res.listed, res.eligible, res.scanned
+            cov.unreadable, cov.partial, cov.bytes_scanned = res.unreadable, res.partial, res.bytes
+            cov.test_values, cov.suppressed = res.test_values, res.suppressed
+            cov.redaction_markers = res.redaction_markers
+            if res.scanned:
+                cov.formats["sql"] = res.scanned
+            after, done = res.after, res.done
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
             done = False

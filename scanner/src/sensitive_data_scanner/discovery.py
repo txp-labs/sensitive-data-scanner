@@ -72,7 +72,7 @@ class GlueTable:
 class Store:
     """One data store, listed by discovery or named in the configuration."""
 
-    kind: str  # s3 | cloudwatch_logs | dynamodb | glue_table | rds
+    kind: str  # s3 | cloudwatch_logs | dynamodb | glue_table | rds, or an adapter's kind
     name: str
     origin: str = "discovery"  # discovery | config
     tags: dict[str, str] | None = None
@@ -133,6 +133,11 @@ class Discovery:
 def _needs_tags(config: Config, kind: str) -> bool:
     rules: list[StoreRule] = [*config.allow, *config.deny, *(r.match for r in config.sampling)]
     return any(r.needs_tags and r.kind in (None, kind) for r in rules)
+
+
+def needs_tags(config: Config, kind: str) -> bool:
+    """Whether an allow, deny or sampling rule for `kind` looks at tags (fetch them only then)."""
+    return _needs_tags(config, kind)
 
 
 def _tag_list(tags: list[dict[str, Any]] | None) -> dict[str, str]:
@@ -501,6 +506,13 @@ def discover(config: Config, clients: Clients, region: str, account: str = "") -
         steps.append(("rds", lambda: _discover_rds(config, clients, out)))
     if "glue_table" in config.discover:
         steps.append(("glue_table", lambda: _discover_glue(config, clients, region, account, out)))
+    from .sources.aws import ADAPTERS  # noqa: PLC0415 - the adapters import this module
+    from .sources.base import Context  # noqa: PLC0415
+
+    ctx = Context(config, clients, region, account)
+    for kind, adapter in ADAPTERS.items():
+        if kind in config.discover:
+            steps.append((kind, lambda a=adapter: a.discover(ctx, out)))
     for kind, step in steps:
         try:
             step()
@@ -518,6 +530,7 @@ def discover(config: Config, clients: Clients, region: str, account: str = "") -
 
 NOTES = {
     "export_pending": ("deferred", "export_pending"),
+    "no_grant": ("skipped", "no_grant"),
     "budget": ("deferred", "budget"),
     "no_snapshot": ("skipped", "no_snapshot"),
     "export_failed": ("error", "export_failed"),

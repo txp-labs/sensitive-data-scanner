@@ -19,6 +19,8 @@ Metadata:
           [RdsExportKmsKeyArn, EnableDynamoDBExport, DynamoDBExportKmsKeyArn]
       - Label: { default: Opt-in read-only SQL (Data API) }
         Parameters: [DataApiTargets, DataApiClusterArns, DataApiSecretArns]
+      - Label: { default: "Redshift and Redshift Serverless (opt-in reads)" }
+        Parameters: [RedshiftRead, RedshiftDbUser]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -45,7 +47,7 @@ Parameters:
   Discover:
     Type: String
     Default: all
-    Description: DISCOVER - all, or any of s3, logs, dynamodb, glue, rds.
+    Description: DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -96,6 +98,21 @@ Parameters:
     Type: CommaDelimitedList
     Default: ""
     Description: The Secrets Manager secret ARNs named in DataApiTargets (read-only database users).
+  RedshiftRead:
+    Type: String
+    AllowedValues: ["off", iam, db-user]
+    Default: "off"
+    Description: >-
+      REDSHIFT_READ - off (discover and report only), iam (the scanner's IAM
+      identity: Redshift maps it to the database user IAMR:<role>, created on
+      first use with PUBLIC privileges only; grant it SELECT), or db-user
+      (temporary credentials for RedshiftDbUser, an existing read-only user, on
+      provisioned clusters; Serverless uses iam). No password is stored.
+  RedshiftDbUser:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([A-Za-z_][A-Za-z0-9_$]{0,126})?$"
+    Description: REDSHIFT_DB_USER - the existing read-only database user, for RedshiftRead db-user.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -130,6 +147,9 @@ Conditions:
     - !Condition DynamoDBExport
     - !Not [!Equals [!Ref DynamoDBExportKmsKeyArn, ""]]
   DataApi: !Not [!Equals [!Ref DataApiTargets, ""]]
+  RedshiftReads: !Not [!Equals [!Ref RedshiftRead, "off"]]
+  RedshiftIam: !Equals [!Ref RedshiftRead, iam]
+  RedshiftDbUserMode: !Equals [!Ref RedshiftRead, db-user]
 
 Resources:
   ResultsBucket:
@@ -266,6 +286,15 @@ Resources:
                   - rds:DescribeDBSnapshots
                   - rds:DescribeExportTasks
                 Resource: "*"
+              # --- Redshift and Redshift Serverless: describe, to discover and report
+              - Sid: DescribeRedshift
+                Effect: Allow
+                Action:
+                  - redshift:DescribeClusters
+                  - redshift-serverless:ListWorkgroups
+                  - redshift-serverless:ListNamespaces
+                  - redshift-serverless:ListTagsForResource
+                Resource: "*"
               # --- Push findings to the central sink
               - !If
                 - HasBus
@@ -332,6 +361,19 @@ Resources:
                   - logs:PutRetentionPolicy
                   - logs:PutSubscriptionFilter
                   - logs:PutDataProtectionPolicy
+                  - redshift:CreateClusterUser
+                  - redshift:JoinGroup
+                  - redshift:Modify*
+                  - redshift:Delete*
+                  - redshift:Pause*
+                  - redshift:Resume*
+                  - redshift:Reboot*
+                  - redshift:Restore*
+                  - redshift-serverless:Create*
+                  - redshift-serverless:Update*
+                  - redshift-serverless:Delete*
+                  - redshift-serverless:Restore*
+                  - redshift-data:BatchExecuteStatement
                 Resource: "*"
               - Sid: NeverAskLakeFormation
                 Effect: Deny
@@ -461,6 +503,51 @@ Resources:
             Action: secretsmanager:GetSecretValue
             Resource: !Split [",", !Join [",", !Ref DataApiSecretArns]]
 
+  # Redshift reads through the Data API (only with RedshiftRead iam or db-user)
+  RedshiftReadPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: RedshiftReads
+    Properties:
+      RoleName: !Ref ScannerRole
+      PolicyName: redshift-read-only-sql
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The statements are the scanner's own sampled SELECTs; the database
+          # user's grants (SELECT only) are what make them read-only.
+          - Sid: ReadOnlySqlOnRedshift
+            Effect: Allow
+            Action: [redshift-data:ExecuteStatement, redshift-data:ListDatabases]
+            Resource:
+              - !Sub arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:cluster:*
+              - !Sub arn:${AWS::Partition}:redshift-serverless:${AWS::Region}:${AWS::AccountId}:workgroup/*
+          - Sid: OwnStatementsOnly
+            Effect: Allow
+            Action: [redshift-data:DescribeStatement, redshift-data:GetStatementResult]
+            Resource: "*"
+            Condition:
+              StringEquals: { "redshift-data:statement-owner-iam-userid": "${aws:userid}" }
+          - Sid: ServerlessIamCredentials
+            Effect: Allow
+            Action: redshift-serverless:GetCredentials
+            Resource: !Sub arn:${AWS::Partition}:redshift-serverless:${AWS::Region}:${AWS::AccountId}:workgroup/*
+          - !If
+            - RedshiftIam
+            - Sid: ClusterIamCredentials
+              Effect: Allow
+              Action: redshift:GetClusterCredentialsWithIAM
+              Resource: !Sub arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbname:*/*
+            - !Ref AWS::NoValue
+          - !If
+            - RedshiftDbUserMode
+            - Sid: ClusterDbUserCredentials
+              Effect: Allow
+              Action: redshift:GetClusterCredentials
+              Resource:
+                - !Sub arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbuser:*/${RedshiftDbUser}
+                - !Sub arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbname:*/*
+            - !Ref AWS::NoValue
+
   Function:
     Type: AWS::Lambda::Function
     DependsOn: LogGroup
@@ -497,6 +584,8 @@ Resources:
           DYNAMODB_EXPORT: !Ref EnableDynamoDBExport
           DYNAMODB_EXPORT_KMS_KEY_ARN: !Ref DynamoDBExportKmsKeyArn
           RDS_DATA_API: !Ref DataApiTargets
+          REDSHIFT_READ: !Ref RedshiftRead
+          REDSHIFT_DB_USER: !Ref RedshiftDbUser
 
   ScheduleRole:
     Type: AWS::IAM::Role
