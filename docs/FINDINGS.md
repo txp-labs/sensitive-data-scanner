@@ -15,8 +15,9 @@ value shows up in findings, events, logs, exception messages or object reprs.
 - Version 1.2 adds discovery and data-lake formats: the `discovery` run
   summary (every store, read or not, and why), `kmsDenied` in coverage, `#`
   in a masked bucket or table name, `column` and `catalog` on an S3 object,
-  the `parquet`, `orc` and `avro` formats, the `glue_table` coverage kind and
-  the `columnar` skip kind. All additive.
+  the `parquet`, `orc`, `avro` and `sql` formats, the `rds_column` resource,
+  the `glue_table` and `rds` coverage kinds and the `columnar` skip kind. All
+  additive.
 
 ## Where findings go
 
@@ -164,6 +165,37 @@ per class per column:
 | `catalog` | For an object read as part of a Glue table: its `database` and `table`, masked like keys |
 | `offsets[].pointer` | `/<row>/<column>`: the row within the file (from 0), and the column |
 
+### An RDS or Aurora finding: a database column (1.2)
+
+```json
+{
+  "resource": {
+    "type": "rds_column",
+    "engine": "aurora-postgresql",
+    "dbType": "cluster",
+    "cluster": "orders",
+    "database": "app",
+    "table": "public.customers",
+    "column": "card_number",
+    "readBy": "snapshot_export",
+    "snapshotTime": "2026-09-29T06:10:00+00:00"
+  },
+  "format": "parquet",
+  "class": "card",
+  "count": 2,
+  "offsets": [],
+  "link": "https://us-west-2.console.aws.amazon.com/rds/home?region=us-west-2#database:id=orders;is-cluster=true"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `engine`, `dbType`, `cluster` | The engine, and the DB cluster (or, with `dbType: instance`, DB instance) identifier |
+| `database`, `table`, `column` | Where the values are: `table` is `schema.table` (for MySQL, `database.table`), so the location reads `schema.table.column` |
+| `readBy` | `snapshot_export` (an export of the latest automated snapshot, deleted after reading) or `data_api` (opt-in read-only SQL; format `sql`) |
+| `snapshotTime` | When the exported snapshot was taken. The id does not include it, so a finding keeps its id from one snapshot to the next |
+| `offsets` | Empty: the rows are not addressable once the export is deleted. `count` adds up across the table's files |
+
 ### A DynamoDB finding
 
 One class of data in one attribute path of one item:
@@ -218,7 +250,7 @@ One entry per source says what was, and was not, read:
 
 | Field | Meaning |
 |---|---|
-| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query), or `glue_table` with `database.table` (1.2) |
+| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, or `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2) |
 | `listed`, `eligible`, `scanned` | Objects listed, events returned, or DynamoDB items evaluated (`ScannedCount`); the new or changed ones (for DynamoDB, the items returned); the ones read this run |
 | `sampledOut`, `samplePercent` | Left out by sampling. Sampling is stated, never silent |
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
@@ -262,7 +294,7 @@ coverage gap is visible rather than silent.
 | `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb` or `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error` |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -271,6 +303,8 @@ coverage gap is visible rather than silent.
 | `logGroupClass`, `tableStatus`, `catalogObject` | Why an `unsupported` store is unsupported (`catalogObject`: `view`, `not_s3`, `resource_link`) |
 | `location` | A Glue table's S3 location, `bucket/prefix`, masked |
 | `lakeFormation` | The Glue table is registered with Lake Formation |
+| `engine`, `dbType`, `snapshotTime`, `exportStatus` | For RDS: the engine, cluster or instance, the snapshot read, and the export's state |
+| `readBy`, `pitr` | For DynamoDB: `export` when the table is read from an Export to S3; `pitr: false` when it is too large and has no point-in-time recovery |
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind

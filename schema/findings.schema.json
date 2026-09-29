@@ -116,6 +116,34 @@
               "const": true
             }
           }
+        },
+        {
+          "description": "One column of one table of an RDS or Aurora database (1.2): schema.table.column.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "engine", "dbType", "cluster", "database", "table", "column", "readBy"],
+          "properties": {
+            "type": { "const": "rds_column" },
+            "engine": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+            "dbType": { "enum": ["cluster", "instance"] },
+            "cluster": {
+              "description": "The DB cluster or DB instance identifier.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "database": { "$ref": "#/$defs/maskedName" },
+            "table": {
+              "description": "schema.table (for MySQL, database.table).",
+              "$ref": "#/$defs/maskedName"
+            },
+            "column": { "$ref": "#/$defs/maskedName" },
+            "readBy": { "enum": ["snapshot_export", "data_api"] },
+            "snapshotTime": {
+              "description": "When the exported snapshot was taken. Not part of the finding id.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "keyMasked": { "const": true }
+          }
         }
       ]
     },
@@ -146,7 +174,7 @@
         "format": {
           "enum": [
             "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
-            "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro"
+            "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro", "sql"
           ]
         },
         "class": { "$ref": "#/$defs/class" },
@@ -193,7 +221,7 @@
         "suppressed", "redactionMarkers", "passComplete", "backlog", "error"
       ],
       "properties": {
-        "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table"] },
+        "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds"] },
         "target": { "$ref": "#/$defs/maskedName" },
         "listed": { "type": "integer", "minimum": 0 },
         "eligible": { "type": "integer", "minimum": 0 },
@@ -227,7 +255,8 @@
     "storeReason": {
       "enum": [
         "denied", "not_allowed", "self", "too_large", "unsupported", "unsupported_format",
-        "kms_access", "access_denied", "lake_formation", "tags_unreadable", "budget", "error"
+        "kms_access", "access_denied", "lake_formation", "tags_unreadable", "budget", "error",
+        "export_not_configured", "export_pending", "export_failed", "no_snapshot", "pitr_off"
       ]
     },
     "discovery": {
@@ -243,7 +272,7 @@
             "additionalProperties": false,
             "required": ["kind", "name", "origin", "status"],
             "properties": {
-              "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table"] },
+              "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds"] },
               "name": { "$ref": "#/$defs/maskedName" },
               "nameMasked": { "const": true },
               "origin": { "enum": ["discovery", "config"] },
@@ -263,7 +292,15 @@
               "tableStatus": { "type": "string", "pattern": "^[A-Z_]{1,60}$" },
               "location": { "$ref": "#/$defs/maskedName" },
               "lakeFormation": { "const": true },
-              "catalogObject": { "enum": ["resource_link", "view", "not_s3"] }
+              "catalogObject": { "enum": ["resource_link", "view", "not_s3"] },
+              "engine": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+              "dbType": { "enum": ["cluster", "instance"] },
+              "snapshotTime": { "type": "string", "format": "date-time" },
+              "readBy": { "enum": ["export", "data_api"] },
+              "exportStatus": {
+                "enum": ["starting", "in_progress", "canceling", "complete", "completed", "canceled", "failed"]
+              },
+              "pitr": { "const": false }
             }
           }
         },
@@ -280,7 +317,7 @@
         },
         "listErrors": {
           "type": "object",
-          "propertyNames": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table"] },
+          "propertyNames": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds"] },
           "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,80}$" }
         }
       }

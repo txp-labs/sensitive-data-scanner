@@ -175,9 +175,58 @@ def dynamodb_resource(
     return out
 
 
+def rds_link(region: str, identifier: str, db_type: str) -> str:
+    """The cluster's or instance's page in the RDS console."""
+    return (
+        f"https://{region}.console.aws.amazon.com/rds/home?region={region}"
+        f"#database:id={urllib.parse.quote(identifier, safe='')};"
+        f"is-cluster={'true' if db_type == 'cluster' else 'false'}"
+    )
+
+
+def rds_resource(
+    *,
+    engine: str,
+    identifier: str,
+    db_type: str,
+    database: str,
+    table: str,
+    column: str,
+    read_by: str,
+    snapshot_time: str | None = None,
+) -> dict[str, Any]:
+    """One column of one table of an RDS or Aurora database (`schema.table.column`)."""
+    names = {
+        "cluster": identifier,
+        "database": database,
+        "table": table,
+        "column": column,
+    }
+    masked = {k: redact_digits(v) for k, v in names.items()}
+    out: dict[str, Any] = {
+        "type": "rds_column",
+        "engine": engine,
+        "dbType": db_type,
+        **masked,
+        "readBy": read_by,
+    }
+    if snapshot_time:
+        # The time, not the snapshot's name: an automated snapshot is named after
+        # the cluster, and the name would carry whatever the cluster's name does.
+        out["snapshotTime"] = snapshot_time
+    if masked != names:
+        out["keyMasked"] = True
+    return out
+
+
+# Resource fields that say which copy was read, not where the data lives.
+_NOT_IN_ID = frozenset({"snapshotTime"})
+
+
 def finding_id(resource: dict[str, Any], cls: str) -> str:
     """Stable across runs for the same location and class (and object version)."""
-    basis = "|".join(f"{k}={resource[k]}" for k in sorted(resource)) + f"|class={cls}"
+    keys = sorted(k for k in resource if k not in _NOT_IN_ID)
+    basis = "|".join(f"{k}={resource[k]}" for k in keys) + f"|class={cls}"
     return hashlib.sha256(basis.encode()).hexdigest()[:32]
 
 

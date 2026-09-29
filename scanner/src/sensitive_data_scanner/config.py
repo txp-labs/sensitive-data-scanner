@@ -137,6 +137,7 @@ DISCOVER_KINDS = {
     "logs": "cloudwatch_logs",
     "dynamodb": "dynamodb",
     "glue": "glue_table",
+    "rds": "rds",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -145,12 +146,13 @@ _KIND_ALIASES = {
     "dynamodb": "dynamodb",
     "glue": "glue_table",
     "glue_table": "glue_table",
+    "rds": "rds",
 }
 
 
 def discover_kinds(raw: str | None) -> frozenset[str]:
-    """`DISCOVER`: `all`, or a comma-separated list of `s3`, `logs`, `dynamodb`, `glue`.
-    Empty: off."""
+    """`DISCOVER`: `all`, or a comma-separated list of `s3`, `logs`, `dynamodb`, `glue`,
+    `rds`. Empty: off."""
     names = [n.lower() for n in _list(raw)]
     if not names or names == ["none"]:
         return frozenset()
@@ -253,6 +255,83 @@ def sampling_rules(raw: str | None) -> tuple[SamplingRule, ...]:
     return tuple(out)
 
 
+_ARN = re.compile(r"^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:[0-9]{12}:[A-Za-z0-9:/_.+=,@!-]{1,1600}$")
+_DATA_API_FIELDS = frozenset(
+    {"clusterArn", "secretArn", "database", "engine", "schemas", "maxRowsPerTable", "maxTables"}
+)
+
+
+@dataclass(frozen=True)
+class DataApiTarget:
+    """An Aurora cluster read with the RDS Data API (opt-in, for small databases)."""
+
+    cluster_arn: str
+    secret_arn: str
+    database: str
+    engine: str  # postgresql | mysql
+    schemas: tuple[str, ...] = ()
+    max_rows_per_table: int = 1000
+    max_tables: int = 200
+
+
+def data_api_targets(raw: str | None) -> list[DataApiTarget]:
+    """`RDS_DATA_API`: a JSON list of clusters to read with read-only SQL (off by default)."""
+    if not raw or not raw.strip():
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ValueError("RDS_DATA_API is not valid JSON") from None
+    if not isinstance(data, list):
+        raise ValueError("RDS_DATA_API must be a JSON list")
+    out = []
+    for t in data:
+        if not isinstance(t, dict) or set(t) - _DATA_API_FIELDS:
+            raise ValueError("RDS_DATA_API: unknown field in an entry")
+        for k in ("clusterArn", "secretArn"):
+            if not isinstance(t.get(k), str) or not _ARN.match(t[k]):
+                raise ValueError("RDS_DATA_API: clusterArn and secretArn must be ARNs")
+        if not isinstance(t.get("database"), str) or not t["database"]:
+            raise ValueError("RDS_DATA_API: database is required")
+        engine = t.get("engine")
+        if engine not in ("postgresql", "mysql"):
+            raise ValueError("RDS_DATA_API: engine must be postgresql or mysql")
+        schemas = t.get("schemas") or []
+        if not isinstance(schemas, list) or not all(isinstance(x, str) for x in schemas):
+            raise ValueError("RDS_DATA_API: schemas must be a list of names")
+        rows = t.get("maxRowsPerTable", 1000)
+        tables = t.get("maxTables", 200)
+        if not isinstance(rows, int) or not 1 <= rows <= 100_000:
+            raise ValueError("RDS_DATA_API: maxRowsPerTable must be 1-100000")
+        if not isinstance(tables, int) or not 1 <= tables <= 10_000:
+            raise ValueError("RDS_DATA_API: maxTables must be 1-10000")
+        out.append(
+            DataApiTarget(
+                cluster_arn=t["clusterArn"],
+                secret_arn=t["secretArn"],
+                database=t["database"],
+                engine=engine,
+                schemas=tuple(schemas),
+                max_rows_per_table=rows,
+                max_tables=tables,
+            )
+        )
+    return out
+
+
+def _arn(v: str | None) -> str | None:
+    t = (v or "").strip()
+    if not t:
+        return None
+    if not _ARN.match(t):
+        raise ValueError("a setting that takes an ARN has something else")
+    return t
+
+
+def _bool(v: str | None) -> bool:
+    return (v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Config:
     results_bucket: str
@@ -287,6 +366,19 @@ class Config:
     # Columnar and data-lake formats.
     columnar_max_rows: int = 10_000
     glue_lake_formation: str = "read"  # read (with the scanner's own IAM) | skip
+    # Exports: RDS and Aurora snapshots, and large DynamoDB tables, to the results
+    # bucket's exports/ prefix; scanned as Parquet or DynamoDB JSON, then deleted.
+    rds_export_role_arn: str | None = None
+    rds_export_kms_key_arn: str | None = None
+    max_exports_per_run: int = 1
+    export_min_interval_days: int = 7
+    dynamodb_export: bool = False
+    dynamodb_export_kms_key_arn: str | None = None
+    data_api_targets: list[DataApiTarget] = field(default_factory=list)
+
+    @property
+    def exports_prefix(self) -> str:
+        return f"{self.results_prefix}exports/"
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -334,4 +426,11 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         max_run_seconds=_int(e.get("MAX_RUN_SECONDS"), 0, 0, 24 * 3600),
         columnar_max_rows=_int(e.get("COLUMNAR_MAX_ROWS"), 10_000, 1, 10_000_000),
         glue_lake_formation=_choice(e.get("GLUE_LAKE_FORMATION"), ("read", "skip"), "read"),
+        rds_export_role_arn=_arn(e.get("RDS_EXPORT_ROLE_ARN")),
+        rds_export_kms_key_arn=_arn(e.get("RDS_EXPORT_KMS_KEY_ARN")),
+        max_exports_per_run=_int(e.get("MAX_EXPORTS_PER_RUN"), 1, 0, 20),
+        export_min_interval_days=_int(e.get("EXPORT_MIN_INTERVAL_DAYS"), 7, 0, 365),
+        dynamodb_export=_bool(e.get("DYNAMODB_EXPORT")),
+        dynamodb_export_kms_key_arn=_arn(e.get("DYNAMODB_EXPORT_KMS_KEY_ARN")),
+        data_api_targets=data_api_targets(e.get("RDS_DATA_API")),
     )

@@ -68,12 +68,31 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `lake_formation`; `GLUE_LAKE_FORMATION=skip` leaves registered tables
   unread and reported.
 
+- RDS and Aurora by snapshot export (`DISCOVER` with `rds`): the latest
+  automated snapshot of each cluster and standalone instance is exported to
+  the results bucket's `exports/rds/` prefix with the customer's KMS key
+  (`RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN`), read as Parquet by
+  column, and deleted. Findings name the engine, cluster, database and
+  `schema.table.column`. At most `MAX_EXPORTS_PER_RUN` exports start per run,
+  and a store is exported again after `EXPORT_MIN_INTERVAL_DAYS`. No
+  database credentials and no load on the database.
+- An opt-in read-only SQL mode for small Aurora databases (`RDS_DATA_API`,
+  off by default): `SELECT … LIMIT n` per table through the Data API, in a
+  transaction that is always rolled back (read-only on PostgreSQL), with
+  quoted identifiers and bound parameters.
+- DynamoDB Export to S3 for tables too large to Scan (`DYNAMODB_EXPORT`):
+  point-in-time, no read capacity used, read like the DynamoDB source and
+  deleted afterwards. A large table without point-in-time recovery is
+  reported as `pitr_off`.
+
 ### Findings schema
 - `schemaVersion` is now **1.2**, additive: the `discovery` summary,
   `kmsDenied` in coverage, `#` allowed in a masked bucket or table name,
-  `column` and `catalog` on an S3 object, the `parquet`, `orc` and `avro`
-  formats, the `glue_table` coverage kind, the `columnar` skip kind and the
-  `lake_formation` reason. EventBridge parts now also split `coverage` and
+  `column` and `catalog` on an S3 object, the `rds_column` resource, the
+  `parquet`, `orc`, `avro` and `sql` formats, the `glue_table` and `rds`
+  coverage kinds, the `columnar` skip kind, and the `lake_formation`,
+  `export_not_configured`, `export_pending`, `export_failed`, `no_snapshot`
+  and `pitr_off` reasons. EventBridge parts now also split `coverage` and
   `discovery.stores`.
 
 ### Internal
@@ -89,8 +108,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   now masked in findings, like an object key, and a finding whose log group
   or stream name was masked no longer carries a console link (the link held
   the name unmasked). The no-leak suite covers discovery, with stores whose
-  names hold values, and the columnar formats and catalog, with values in
-  cells, column names, nested keys and table names.
+  names hold values, the columnar formats and catalog, with values in cells,
+  column names, nested keys and table names, and the RDS export and Data API
+  paths, with values in cluster, database, table and column names.
+- A nine-digit run in a name is now masked whatever separator and digits
+  follow it (`orders-123456789-1`); before, a following `-1` let it through.
+  RDS findings carry the snapshot's time, not its name, which repeats the
+  cluster's.
 
 ### Docs
 - `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,

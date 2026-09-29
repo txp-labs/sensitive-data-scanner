@@ -15,13 +15,14 @@ account**.
 
 The scanner runs **inside the cloud account it scans**. It **discovers** the
 stores in the account and region (S3 buckets, CloudWatch log groups,
-DynamoDB tables, Glue Data Catalog tables), or reads the ones you name,
-looks for sensitive data, and
+DynamoDB tables, Glue Data Catalog tables, and RDS and Aurora databases by
+snapshot export), or reads the ones you name, looks for sensitive data, and
 writes **findings only** to a results store in the same account:
 
 - the kind of data (card number, US SSN or ITIN, date of birth, and more);
 - where it was found: account, region, object and version (and for Parquet,
-  ORC, Avro and catalog tables, the column, database and table); log group,
+  ORC, Avro, catalog tables and databases, the column, table and database);
+  log group,
   stream and time; or DynamoDB table, a hash of the item's key and the
   attribute path; and the Amazon Connect contact;
 - how many, how confident, and where in the item (offsets);

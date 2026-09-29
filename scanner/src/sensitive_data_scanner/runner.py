@@ -40,6 +40,9 @@ from .safety import ScanError, error_name, log_event
 from .sources.base import Budget, FindingStore, SourceRun
 from .sources.cloudwatch_logs import CloudWatchLogsSource
 from .sources.dynamodb import DynamoDBSource
+from .sources.dynamodb_export import DynamoDBExportSource
+from .sources.exports import ExportQuota
+from .sources.rds import RdsDataApiSource, RdsExportSource
 from .sources.s3 import S3Source
 
 if TYPE_CHECKING:
@@ -47,6 +50,8 @@ if TYPE_CHECKING:
     from mypy_boto3_events import EventBridgeClient
     from mypy_boto3_glue import GlueClient
     from mypy_boto3_logs import CloudWatchLogsClient
+    from mypy_boto3_rds import RDSClient
+    from mypy_boto3_rds_data import RDSDataServiceClient
     from mypy_boto3_s3 import S3Client
 
 LOCK_STALE_SECONDS = 20 * 60
@@ -75,6 +80,8 @@ class Clients:
     events: EventBridgeClient | None = None
     dynamodb: DynamoDBClient | None = None
     glue: GlueClient | None = None
+    rds: RDSClient | None = None
+    rds_data: RDSDataServiceClient | None = None
 
 
 class Keys:
@@ -226,6 +233,14 @@ def plan(
     for t in config.dynamodb_targets:
         store = named("dynamodb", t.table)
         add(store, _dynamodb_source(config, clients, region, store, t))
+    if config.data_api_targets and clients.rds_data is None:
+        raise ValueError("no RDS Data API client")
+    for d in config.data_api_targets:
+        src = RdsDataApiSource(clients.rds_data, target=d, region=region)  # type: ignore[arg-type]
+        store = named("rds", src.identifier)
+        store.extra["readBy"] = "data_api"
+        add(store, src)
+    quota = ExportQuota(config.max_exports_per_run)
     if discovery is None:
         return sources, stores
     # A catalog table's prefix is read by the table's source, not again by its bucket's.
@@ -246,6 +261,48 @@ def plan(
             add(store, _s3_source(config, clients, store, region=region, exclude=exclude))
         elif store.kind == "glue_table":
             add(store, _s3_source(config, clients, store, region=region))
+        elif store.kind == "dynamodb" and store.extra.get("readBy") == "export":
+            if clients.dynamodb is None:
+                raise ValueError("no DynamoDB client")
+            add(
+                store,
+                DynamoDBExportSource(
+                    clients.dynamodb,
+                    clients.s3,
+                    table=store.name,
+                    table_arn=str(store.extra.get("tableArn", "")),
+                    region=region,
+                    results_bucket=config.results_bucket,
+                    exports_prefix=config.exports_prefix,
+                    quota=quota,
+                    kms_key_arn=config.dynamodb_export_kms_key_arn,
+                    max_object_bytes=config.max_object_bytes,
+                    max_inflated_bytes=config.max_inflated_bytes,
+                    min_interval_days=config.export_min_interval_days,
+                ),
+            )
+        elif store.kind == "rds":
+            if clients.rds is None:
+                raise ValueError("no RDS client")
+            add(
+                store,
+                RdsExportSource(
+                    clients.rds,
+                    clients.s3,
+                    identifier=store.name,
+                    db_type=str(store.extra.get("dbType", "cluster")),
+                    engine=str(store.extra.get("engine", "")),
+                    region=region,
+                    results_bucket=config.results_bucket,
+                    exports_prefix=config.exports_prefix,
+                    role_arn=str(config.rds_export_role_arn),
+                    kms_key_arn=str(config.rds_export_kms_key_arn),
+                    quota=quota,
+                    max_rows=config.columnar_max_rows,
+                    max_object_bytes=config.max_object_bytes,
+                    min_interval_days=config.export_min_interval_days,
+                ),
+            )
         elif store.kind == "cloudwatch_logs":
             add(
                 store,
@@ -256,7 +313,7 @@ def plan(
                     lookback_days=config.logs_lookback_days,
                 ),
             )
-        elif store.kind == "dynamodb":
+        elif store.kind == "dynamodb" and store.extra.get("readBy") != "export":
             add(store, _dynamodb_source(config, clients, region, store, DynamoTarget(store.name)))
     return sources, stores
 
@@ -336,6 +393,7 @@ def run_scan(
         left = {k: sum(1 for s in sources if s.kind == k) for k in caps}
         coverage: list[Coverage] = []
         by_source: dict[str, Coverage] = {}
+        notes: dict[str, tuple[str | None, dict[str, Any]]] = {}
         deferred: str | None = None
         for i, source in enumerate(sources):
             kind_budget = kinds.get(source.kind)
@@ -358,6 +416,7 @@ def run_scan(
             cursors[source.id] = result.cursor
             coverage.append(result.coverage)
             by_source[source.id] = result.coverage
+            notes[source.id] = (result.note, result.extra)
             log_event(
                 "source.done",
                 source=source.target,
@@ -368,7 +427,11 @@ def run_scan(
         for st in stores:
             covs = [by_source[i] for i in st.source_ids if i in by_source]
             if covs:
-                settle(st, covs)
+                got = [notes[i] for i in st.source_ids if i in notes]
+                extra: dict[str, Any] = {}
+                for _, e in got:
+                    extra.update(e)
+                settle(st, covs, [n for n, _ in got], extra)
             elif st.status == "pending" and st.source_ids:
                 st.status = "deferred"
                 st.reason = "budget"

@@ -219,6 +219,12 @@ glue = [
 logs = [
     { name = "mypy-boto3-logs" },
 ]
+rds = [
+    { name = "mypy-boto3-rds" },
+]
+rds-data = [
+    { name = "mypy-boto3-rds-data" },
+]
 s3 = [
     { name = "mypy-boto3-s3" },
 ]
@@ -1128,6 +1134,24 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-rds"
+version = "1.43.82"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/93/e57ab79538d90798c95f0f28030107e0c1e1ce4b237aa260525ddac07fe6/mypy_boto3_rds-1.43.82.tar.gz", hash = "sha256:3120ff8c12e9d8ab151517ab99199bbd63c9c9b952e4aab34940f95f69798eb4", size = 87711, upload-time = "2026-08-27T23:50:04.525Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/b8/34d9ada73bfec3a50bfc7506e9c45c519409ee0f3e4ef3abef6931083a0f/mypy_boto3_rds-1.43.82-py3-none-any.whl", hash = "sha256:9e12cd32e651d23943eaff31ae9a885490f8d98b9bc443743ffad63792d5e9bf", size = 94472, upload-time = "2026-08-27T23:50:02.883Z" },
+]
+
+[[package]]
+name = "mypy-boto3-rds-data"
+version = "1.43.37"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/fc/f1b986ccec57dcacaf04b849ceecd004b1a855a3f091696a0c9213fe614f/mypy_boto3_rds_data-1.43.37.tar.gz", hash = "sha256:d7591fb812253e3acbe8d7417a8fb6df16107cbf5e7aef82ec67e2d9aa2b3432", size = 16682, upload-time = "2026-06-29T21:57:07.843Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/f9/f960c8b695ef05783dd392174aacc69945be7f25012a1dfab31e0c206c1c/mypy_boto3_rds_data-1.43.37-py3-none-any.whl", hash = "sha256:c9b27cd4fd47c51b243da76fa0e92681f218969f6e6af7861953a63335969fbc", size = 20806, upload-time = "2026-06-29T21:57:06.105Z" },
+]
+
+[[package]]
 name = "mypy-boto3-s3"
 version = "1.43.93"
 source = { registry = "https://pypi.org/simple" }
@@ -1861,7 +1885,7 @@ columnar = [
     { name = "pyarrow" },
 ]
 dev = [
-    { name = "boto3-stubs", extra = ["dynamodb", "events", "glue", "logs", "s3"] },
+    { name = "boto3-stubs", extra = ["dynamodb", "events", "glue", "logs", "rds", "rds-data", "s3"] },
     { name = "fastavro" },
     { name = "jsonschema" },
     { name = "moto", extra = ["events", "glue", "s3"] },
@@ -1885,7 +1909,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 columnar = [{ name = "pyarrow", specifier = ">=21" }]
 dev = [
-    { name = "boto3-stubs", extras = ["dynamodb", "events", "glue", "logs", "s3"], specifier = ">=1.43.103" },
+    { name = "boto3-stubs", extras = ["dynamodb", "events", "glue", "logs", "rds", "rds-data", "s3"], specifier = ">=1.43.103" },
     { name = "fastavro", specifier = ">=1.12" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "moto", extras = ["events", "glue", "logs", "s3"], specifier = ">=5.2.3" },

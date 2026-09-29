@@ -68,6 +68,10 @@ class Budget:
 class SourceRun:
     coverage: Coverage
     cursor: dict[str, Any]
+    # For the run summary: why a store was not read this run (an export that is
+    # still running, no snapshot yet), and facts about it (the snapshot read).
+    note: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

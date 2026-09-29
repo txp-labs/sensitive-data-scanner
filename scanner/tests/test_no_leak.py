@@ -362,6 +362,110 @@ def test_no_value_leaves_columnar_formats_or_the_catalog(
     assert leaks(repr(result)) == []
 
 
+def test_no_value_leaves_the_exports_or_the_data_api(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """An RDS snapshot export whose cluster, table and column names hold values, and a
+    Data API read of a table named by a card number: nothing but masked names leaves."""
+    from botocore.stub import ANY
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from table_fixtures import arrow_table, parquet_bytes
+    from test_exports import CLUSTER_ARN, KEY, ROLE, SECRET_ARN, client, target
+
+    ident = f"orders-{SSN_A}"
+    rds, stub = client("rds")
+    rd, dstub = client("rds-data")
+    env.clients.rds = rds
+    env.clients.rds_data = rd
+    stub.add_response(
+        "describe_db_clusters",
+        {"DBClusters": [{"DBClusterIdentifier": ident, "Engine": "aurora-postgresql"}]},
+    )
+    stub.add_response("describe_db_instances", {"DBInstances": []})
+    stub.add_response(
+        "describe_db_cluster_snapshots",
+        {
+            "DBClusterSnapshots": [
+                {
+                    "DBClusterSnapshotArn": (
+                        f"arn:aws:rds:us-west-2:123456789012:cluster-snapshot:rds:{ident}-1"
+                    ),
+                    "DBClusterSnapshotIdentifier": f"rds:{ident}-1",
+                    "SnapshotCreateTime": __import__("datetime").datetime(2026, 9, 29),
+                    "Status": "available",
+                }
+            ]
+        },
+    )
+    stub.add_response("start_export_task", {"ExportTaskIdentifier": "t"})
+
+    # The Data API reads a table named by a card, with values in its rows.
+    def for_data_api(dstub: Any) -> None:
+        dstub.add_response("begin_transaction", {"transactionId": "tx"})
+        dstub.add_response("execute_statement", {})
+        listed = [{"table_schema": "public", "table_name": f"t_{CARDS['visa']}"}]
+        dstub.add_response("execute_statement", {"formattedRecords": json.dumps(listed)})
+        rows = [{f"c_{CARDS['jcb']}": CARDS["amex"], "ssn": dashed(SSN_B)}]
+        dstub.add_response("execute_statement", {"formattedRecords": json.dumps(rows)})
+        dstub.add_response("rollback_transaction", {})
+
+    for_data_api(dstub)
+    cfg = config(
+        s3_targets=[],
+        discover=frozenset({"rds"}),
+        rds_export_role_arn=ROLE,
+        rds_export_kms_key_arn=KEY,
+        data_api_targets=[target()],
+        event_bus_arn="arn:aws:events:x:1:b/c",
+    )
+    env.run(cfg)
+    task = env.state()["cursors"][f"rds:cluster:{ident}"]["task"]
+    rows = [{f"col_{CARDS['mastercard']}": CARDS["visa"], "ssn": int(SSN_A)}]
+    env.clients.s3.put_object(
+        Bucket=RESULTS,
+        Key=f"exports/rds/{task}/app_{SSN_B}/public.cust_{SSN_B}/1/part-0.gz.parquet",
+        Body=parquet_bytes(arrow_table(rows)),
+    )
+    stub.add_response(
+        "describe_db_clusters",
+        {"DBClusters": [{"DBClusterIdentifier": ident, "Engine": "aurora-postgresql"}]},
+    )
+    stub.add_response("describe_db_instances", {"DBInstances": []})
+    stub.add_response(
+        "describe_export_tasks",
+        {"ExportTasks": [{"Status": "COMPLETE"}]},
+        {"ExportTaskIdentifier": ANY},
+    )
+    for_data_api(dstub)
+    sent: list[dict[str, Any]] = []
+
+    class Bus:
+        def put_events(self, Entries: list[dict[str, Any]]) -> dict[str, Any]:
+            sent.extend(Entries)
+            return {"FailedEntryCount": 0}
+
+    env.clients.events = Bus()  # type: ignore[assignment]
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(cfg)
+    assert doc is not None
+    stub.assert_no_pending_responses()
+    kinds = {(f["resource"]["type"], f["resource"]["readBy"]) for f in doc["findings"]}
+    assert kinds == {("rds_column", "snapshot_export"), ("rds_column", "data_api")}
+    assert all(f["resource"].get("keyMasked") for f in doc["findings"])
+    outputs = {
+        "findings/latest.json": json.dumps(env.latest()),
+        "events": json.dumps(sent),
+        "stdout+stderr": "".join(capsys.readouterr()),
+        "log records": "\n".join(r.getMessage() for r in caplog.records),
+    }
+    for name, blob in outputs.items():
+        assert leaks(blob) == [], name
+    del CLUSTER_ARN, SECRET_ARN
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 
@@ -420,6 +524,11 @@ def test_redact_digits_masks_numbers_and_keeps_dates_and_ids() -> None:
     assert redact_digits(f"receipts/{CARDS['visa']}.txt") == "receipts/################.txt"
     assert redact_digits(f"x/{printed(CARDS['visa'])}") == "x/#### #### #### ####"
     assert redact_digits(f"ssn-{dashed(SSN_A)}.csv") == "ssn-###-##-####.csv"
+    # A nine-digit run is masked whatever follows it (a snapshot name, a suffix).
+    assert redact_digits(f"rds:orders-{SSN_A}-2026-09-29-06-10") == (
+        "rds:orders-#########-2026-09-29-06-10"
+    )
+    assert redact_digits(f"x/{SSN_A}-1.csv") == "x/#########-1.csv"
     for kept in [
         "connect/i/ChatTranscripts/2026/09/28/abc_20260928T15:00_UTC.json",
         "2026/09/28/[$LATEST]0123456789abcdef",

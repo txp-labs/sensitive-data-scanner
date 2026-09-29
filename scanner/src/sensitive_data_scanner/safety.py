@@ -24,7 +24,9 @@ from typing import Final
 from .engine.rules import luhn_valid
 
 _CARD_RE = re.compile(r"(?<![0-9])(?<![0-9][ -])[0-9](?:[ -]?[0-9]){12,18}(?![ -]?[0-9])")
-_SSN_RE = re.compile(r"(?<![0-9])(?<![0-9][ -])[0-9]{3}([ -]?)[0-9]{2}\1[0-9]{4}(?![ -]?[0-9])")
+# A nine-digit run is masked whatever separator follows it: `orders-123456789-1`
+# and `rds:db-123456789-2026-09-29` hide the SSN as well as `123456789.txt` does.
+_SSN_RE = re.compile(r"(?<![0-9])[0-9]{3}([ -]?)[0-9]{2}\1[0-9]{4}(?![0-9])")
 _LONG_RUN = re.compile(r"[0-9]{13,}")
 
 

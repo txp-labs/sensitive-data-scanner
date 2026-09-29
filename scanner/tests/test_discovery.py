@@ -37,7 +37,7 @@ SCHEMA = Draft202012Validator(
     json.loads((REPO / "schema" / "findings.schema.json").read_text()),
     format_checker=Draft202012Validator.FORMAT_CHECKER,
 )
-ALL = frozenset({"s3", "cloudwatch_logs", "dynamodb", "glue_table"})
+ALL = frozenset({"s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds"})
 THREE = frozenset({"s3", "cloudwatch_logs", "dynamodb"})
 SELF_GROUP = "/aws/lambda/sensitive-data-scanner"
 

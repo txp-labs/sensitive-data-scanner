@@ -122,6 +122,12 @@ One run:
 | `MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN` | Per-kind caps inside `MAX_ITEMS_PER_RUN` (0: no separate cap) | 0 |
 | `MAX_RUN_SECONDS` | Wall-time cap on a run, below the Lambda deadline (0: the deadline only) | 0 |
 | `COLUMNAR_MAX_ROWS` | Rows read per Parquet, ORC or Avro file (or catalog CSV/JSON object); the rest is `partial` | 10,000 |
+| `RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN` | The role RDS assumes to write snapshot exports, and the customer's KMS key to encrypt them. Both are needed to read RDS and Aurora | none: RDS stores are reported `export_not_configured` |
+| `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB) a run may start | 1 |
+| `EXPORT_MIN_INTERVAL_DAYS` | Days before a store is exported again | 7 |
+| `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR) | off |
+| `DYNAMODB_EXPORT_KMS_KEY_ARN` | Encrypt DynamoDB exports with this key (`SSE-KMS`) | SSE-S3 |
+| `RDS_DATA_API` | Opt-in: Aurora clusters to read with read-only SQL through the Data API, as a JSON list | none (off) |
 | `GLUE_LAKE_FORMATION` | For Glue tables registered with Lake Formation: `read` (with the scanner's own IAM; a denial is a gap) or `skip` (report them, read nothing) | `read` |
 
 ### Discovery
@@ -137,6 +143,7 @@ region, and a bucket in another region is left to that region's scanner.
 | `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
 | `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT` |
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
+| `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -277,6 +284,82 @@ databases and tables and reads each table at its S3 location:
 - Partitions whose location lies outside the table's location are not yet
   read (`GetPartitions` is a later change).
 
+### RDS and Aurora by snapshot export
+
+With `DISCOVER` including `rds`, the run lists the DB clusters and the DB
+instances that are not in a cluster, and reads each by **snapshot export**:
+no database credentials, no connection, no load on the database.
+
+1. **Snapshot.** The latest `available` automated snapshot
+   (`DescribeDBClusterSnapshots` or `DescribeDBSnapshots`).
+2. **Export.** `StartExportTask` of that snapshot to the results bucket,
+   prefix `exports/rds/<task>/`, written by the export role
+   (`RDS_EXPORT_ROLE_ARN`) and encrypted with the customer's KMS key
+   (`RDS_EXPORT_KMS_KEY_ARN`). A run starts at most `MAX_EXPORTS_PER_RUN`
+   exports (RDS and DynamoDB together), and a store is exported again no
+   sooner than `EXPORT_MIN_INTERVAL_DAYS`. RDS bills an export by the
+   snapshot's size.
+3. **Wait.** Later runs ask `DescribeExportTasks`. Meanwhile the store is
+   `deferred` with reason `export_pending`.
+4. **Read.** The export's Parquet files (`<database>/<schema.table>/…`) are
+   read by column, as in [Columnar formats](#columnar-and-data-lake-formats),
+   across as many runs as the budget needs.
+5. **Clean up.** When every file is read, the export is deleted, and
+   findings the new snapshot no longer has drop out. A failed export is
+   deleted too, reported (`export_failed`), and not retried for the same
+   snapshot.
+
+A finding is one class in one column: `resource.type` `rds_column`, with the
+`engine`, the `cluster` (or instance) identifier, the `database`, the
+`table` (`schema.table`) and the `column`, and the time of the snapshot.
+The rows are gone with the export, so the finding has counts, not offsets.
+Across a table's files, `count` adds up (an upper bound on distinct values).
+
+Engines: Aurora MySQL and PostgreSQL, RDS for MySQL, MariaDB and
+PostgreSQL. Oracle, SQL Server, Db2, Neptune and DocumentDB are reported as
+`unsupported`. A store without the role and key is `export_not_configured`,
+and one with no automated snapshot yet is `no_snapshot`.
+
+### Aurora by read-only SQL (opt-in)
+
+For a small Aurora database where an export is too slow or too costly,
+`RDS_DATA_API` names clusters to read through the RDS Data API. **Off by
+default.**
+
+```json
+[
+  {
+    "clusterArn": "arn:aws:rds:us-west-2:111122223333:cluster:orders",
+    "secretArn": "arn:aws:secretsmanager:us-west-2:111122223333:secret:orders-readonly-AbCdEf",
+    "database": "app",
+    "engine": "postgresql",
+    "schemas": ["public"],
+    "maxRowsPerTable": 1000,
+    "maxTables": 200
+  }
+]
+```
+
+- The run lists base tables from `information_schema` (schemas as bound
+  parameters), then runs `SELECT * FROM "schema"."table" LIMIT n` for each.
+  Identifiers are quoted, and these are the only statements.
+- Everything runs in one Data API transaction that is **always rolled
+  back**, and on PostgreSQL begins with `SET TRANSACTION READ ONLY`.
+- The secret should belong to a database user with `SELECT` only. The
+  scanner cannot check that, so it is the deployer's part.
+- Findings are `rds_column` with `readBy: "data_api"` and format `sql`.
+
+### DynamoDB Export to S3 (large tables)
+
+With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
+(`DYNAMODB_MAX_TABLE_BYTES`) is read from an Export to S3 instead. An export
+uses no read capacity and is a point-in-time copy. It needs point-in-time
+recovery (PITR) on the table. A large table without PITR is reported as
+`pitr_off` and not read. The export (DynamoDB JSON, to
+`exports/dynamodb/…`, SSE-S3 or `DYNAMODB_EXPORT_KMS_KEY_ARN`) is started
+within `MAX_EXPORTS_PER_RUN`, read item by item exactly like the DynamoDB
+source (the same `dynamodb_item` findings), and deleted afterwards.
+
 ### The DynamoDB source
 
 `SCAN_DYNAMODB` is a JSON list with one entry per read. This one reads
@@ -397,7 +480,9 @@ scanner's own.
     conditioned on `kms:ViaService` `dynamodb.<region>.amazonaws.com`.
     Tables with an AWS owned or AWS managed key need no KMS permission.
 - **Write**: `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on the
-  results bucket only.
+  results bucket only: `findings/`, `state/`, and the exports the scanner
+  starts under `exports/`, which it deletes once read. Nothing else is ever
+  written. A test holds `delete` to the `exports/` prefix.
 - **Optional**: `events:PutEvents` on the one consumer bus ARN.
 - **No inbound access.** A consumer reads `findings/*` in the results
   bucket, or receives events. It never needs `state/*`.
@@ -437,6 +522,10 @@ named resources because the stores are not known in advance. They are read-only:
 | `logs` | `logs:DescribeLogGroups`, `logs:FilterLogEvents`; `logs:ListTagsForResource` only with tag rules | `*` |
 | `dynamodb` | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`; `dynamodb:ListTagsOfResource` only with tag rules | `*` |
 | `glue` | `glue:GetDatabases`, `glue:GetTables`; `glue:GetTags` only with tag rules; plus the S3 read actions on each table's location | `*` (catalog, databases and tables) |
+| `rds` (snapshot export) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBClusterSnapshots`, `rds:DescribeDBSnapshots`, `rds:StartExportTask`, `rds:DescribeExportTasks`; `iam:PassRole` on the export role only, conditioned on `iam:PassedToService` `export.rds.amazonaws.com`; `kms:CreateGrant` and `kms:DescribeKey` on the export key, conditioned on `kms:ViaService` `rds.<region>.amazonaws.com` and `kms:GrantIsForAWSResource`; `kms:Decrypt` on that key via S3, to read the export | `*` for describe; the export role and key ARNs |
+| RDS export role (assumed by `export.rds.amazonaws.com`) | `s3:PutObject*`, `s3:GetObject*`, `s3:ListBucket`, `s3:DeleteObject*`, `s3:GetBucketLocation` on the results bucket's `exports/rds/` prefix only | the results bucket |
+| `rds` (Data API, opt-in) | `rds-data:BeginTransaction`, `rds-data:ExecuteStatement`, `rds-data:RollbackTransaction` on the named clusters; `secretsmanager:GetSecretValue` on the named secrets | the named ARNs |
+| DynamoDB export | `dynamodb:DescribeContinuousBackups`, `dynamodb:ExportTableToPointInTime`, `dynamodb:DescribeExport`; `s3:PutObject` and `s3:AbortMultipartUpload` on `exports/dynamodb/`; with a key, `kms:GenerateDataKey` and `kms:Decrypt` via S3 | tables `*`; the results bucket |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
 
