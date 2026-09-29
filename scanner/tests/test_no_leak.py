@@ -543,6 +543,43 @@ def test_no_value_leaves_redshift(
         assert leaks(blob) == [], name
 
 
+def test_no_value_leaves_opensearch(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A domain, indices and fields named with values, and values in documents."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_opensearch import ENDPOINT, Aws, domain
+
+    aws = Aws(env)
+    name = f"logs-{SSN_A}"
+    aws.es_stub.add_response("list_domain_names", {"DomainNames": [{"DomainName": name}]})
+    aws.es_stub.add_response(
+        "describe_domains", {"DomainStatusList": [domain(name, Endpoint=ENDPOINT)]}
+    )
+    aws.aoss_stub.add_response("list_collections", {"collectionSummaries": []})
+    index = f"cust-{CARDS['visa']}"
+    aws.indices(ENDPOINT, [index, f"idx-{SSN_B}"])
+    docs = [{f"f_{CARDS['jcb']}": CARDS["amex"], "ssn": dashed(SSN_B), "n": int(SSN_A)}]
+    aws.docs(ENDPOINT, index, docs)
+    aws.http.route(ENDPOINT, f"/idx-{SSN_B}/_search?size=100", {}, 500)
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"opensearch"}),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert len(doc["findings"]) >= 2
+    assert all(f["resource"].get("keyMasked") and f["link"] is None for f in doc["findings"])
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

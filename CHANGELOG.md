@@ -53,18 +53,30 @@ bumps the minor version. Spec changes are listed under **Spec**.
   clusters, stores not configured for reading, and users that can see no
   table are reported (`paused`, `read_not_configured`, `no_grant`). The
   UNLOAD trade-off is documented in docs/ARCHITECTURE.md.
+- OpenSearch ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5): managed domains
+  (`ListDomainNames`, `DescribeDomains`) and Serverless collections are
+  discovered (`DISCOVER` kind `opensearch`); each domain's open indices are
+  sampled with signed HTTPS GETs only (`_cat/indices`, `_search?size=n`,
+  `OPENSEARCH_DOCS_PER_INDEX`, `OPENSEARCH_MAX_INDICES`), and each document
+  read field by field (`store_field`, `readBy: search`). VPC-only domains
+  (`vpc_only`), refused domains (`access_denied`) and Serverless collections
+  (opt-in, `OPENSEARCH_SERVERLESS_READ`) are reported.
 - The adapter interface (`sources/base.py`, `Adapter`) and the generic
   sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
   discovery, the budget and the run summary through them, with no cloud in
   the core. The RDS Data API mode now runs on the same SQL pass.
 - Findings schema **1.3** (additive): the `store_field` resource, the
-  `redshift` kind, the store reasons `read_not_configured`, `paused` and
-  `no_grant`, and the store fields `deployment`, `database` and `state`.
+  `redshift` and `opensearch` kinds, the store reasons
+  `read_not_configured`, `paused`, `no_grant` and `vpc_only`, and the store
+  fields `deployment`, `database` and `state`.
 - `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
   describe permissions, and, only when reading, the Data API on this
   account's clusters and workgroups, its own statements only, and the
   credential call for the mode chosen. User creation, `JoinGroup` and
-  batch statements are denied.
+  batch statements are denied. OpenSearch: describe and list,
+  `es:ESHttpGet` on this account's domains (every other HTTP verb denied),
+  and, only with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on its
+  collections.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.

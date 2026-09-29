@@ -139,6 +139,7 @@ DISCOVER_KINDS = {
     "glue": "glue_table",
     "rds": "rds",
     "redshift": "redshift",
+    "opensearch": "opensearch",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -149,6 +150,7 @@ _KIND_ALIASES = {
     "glue_table": "glue_table",
     "rds": "rds",
     "redshift": "redshift",
+    "opensearch": "opensearch",
 }
 
 
@@ -396,6 +398,11 @@ class Config:
     redshift_max_rows: int = 1000
     redshift_max_tables: int = 500
     redshift_statement_seconds: int = 60
+    # OpenSearch: documents sampled per index, and indices per domain. Serverless
+    # collections are read only when turned on (their data access policy decides).
+    opensearch_docs_per_index: int = 100
+    opensearch_max_indices: int = 500
+    opensearch_serverless_read: bool = False
 
     @property
     def exports_prefix(self) -> str:
@@ -461,6 +468,9 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         redshift_max_rows=_int(e.get("REDSHIFT_MAX_ROWS_PER_TABLE"), 1000, 1, 100_000),
         redshift_max_tables=_int(e.get("REDSHIFT_MAX_TABLES"), 500, 1, 10_000),
         redshift_statement_seconds=_int(e.get("REDSHIFT_STATEMENT_TIMEOUT_SECONDS"), 60, 5, 600),
+        opensearch_docs_per_index=_int(e.get("OPENSEARCH_DOCS_PER_INDEX"), 100, 1, 10_000),
+        opensearch_max_indices=_int(e.get("OPENSEARCH_MAX_INDICES"), 500, 1, 10_000),
+        opensearch_serverless_read=_bool(e.get("OPENSEARCH_SERVERLESS_READ")),
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")

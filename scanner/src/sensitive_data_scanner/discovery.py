@@ -51,7 +51,7 @@ READABLE_TABLE_STATES = frozenset({"ACTIVE", "UPDATING"})
 READABLE_LOG_CLASSES = frozenset({"STANDARD", "INFREQUENT_ACCESS"})
 
 
-_INTERNAL = frozenset({"tableArn"})
+_INTERNAL = frozenset({"tableArn", "endpoint"})
 
 
 @dataclass(frozen=True)

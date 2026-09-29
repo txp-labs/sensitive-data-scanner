@@ -8,6 +8,11 @@ adapter here, keyed by its kind (the name `DISCOVER` and the run summary use).
 from __future__ import annotations
 
 from .base import Adapter
+from .opensearch import OpenSearchAdapter
 from .redshift import RedshiftAdapter
 
-ADAPTERS: dict[str, Adapter] = {a.kind: a for a in (RedshiftAdapter(),)}
+_ALL: list[Adapter] = [
+    RedshiftAdapter(),
+    OpenSearchAdapter(),
+]
+ADAPTERS: dict[str, Adapter] = {a.kind: a for a in _ALL}

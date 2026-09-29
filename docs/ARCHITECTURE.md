@@ -134,6 +134,8 @@ One run:
 | `REDSHIFT_DB_USER` | With `REDSHIFT_READ=db_user`: the existing read-only database user | none |
 | `REDSHIFT_MAX_ROWS_PER_TABLE`, `REDSHIFT_MAX_TABLES` | Rows sampled per table (`LIMIT`), and tables per database | 1,000 and 500 |
 | `REDSHIFT_STATEMENT_TIMEOUT_SECONDS` | How long the run waits for one Data API statement before counting the table unreadable | 60 |
+| `OPENSEARCH_DOCS_PER_INDEX`, `OPENSEARCH_MAX_INDICES` | Documents sampled per index (`_search?size=`), and indices per domain or collection | 100 and 500 |
+| `OPENSEARCH_SERVERLESS_READ` | Read OpenSearch Serverless collections ([below](#opensearch-domains-and-serverless-collections)) | off: reported `read_not_configured` |
 
 ### Discovery
 
@@ -150,6 +152,7 @@ region, and a bucket in another region is left to that region's scanner.
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 | `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
+| `opensearch` | `ListDomainNames`, `DescribeDomains`; Serverless `ListCollections`, `BatchGetCollection` | sampled documents per index over signed HTTPS GETs ([below](#opensearch-domains-and-serverless-collections)) |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -226,6 +229,7 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift) |
 | `skipped` | `paused` | A paused Redshift cluster: a query would not resume it |
 | `skipped` | `no_grant` | Signed in, but the database user can see no table: grant it `SELECT` |
+| `skipped` | `vpc_only` | An OpenSearch domain reachable only inside its VPC, which the scanner's Lambda is not in |
 
 Each store's `gaps` counts what was listed but not read: `kmsDenied`
 (objects under a KMS key the scanner may not use), `unreadable` and
@@ -428,6 +432,44 @@ API reads the same rows with less: no cluster role, nothing written. The
 read-only guarantee is the database user's grants in both cases, because
 `redshift-data:ExecuteStatement` cannot be narrowed to `SELECT` in IAM.
 
+### OpenSearch domains and Serverless collections
+
+With `DISCOVER` including `opensearch`, the run lists the managed domains
+(`ListDomainNames`, then `DescribeDomains` five at a time; OpenSearch and
+Elasticsearch engines alike) and the Serverless collections
+(`ListCollections`, `BatchGetCollection` for their endpoints).
+
+Each domain is read with **signed HTTPS GETs only** (SigV4, the scanner's
+own role):
+
+1. `GET /_cat/indices?format=json` lists the open indices. System indices
+   (names starting with `.`) are left out; data-stream backing indices
+   (`.ds-*`) are read.
+2. `GET /<index>/_search?size=n` samples up to `OPENSEARCH_DOCS_PER_INDEX`
+   documents of each index, up to `OPENSEARCH_MAX_INDICES` indices. An index
+   with more documents than the sample counts as `partial`.
+3. Each document's `_source` is read field by field, with the field's name as
+   context, nested objects leaf by leaf.
+
+Findings are `store_field` with `service` `opensearch` (or
+`opensearch_serverless`), the domain as `store`, the index as `table`, the
+top-level field as `field`, and `readBy: search`; format `json`. A pass
+resumes at the next index across runs, within the budget.
+
+Not read, and reported:
+- **A VPC domain** (`vpc_only`): the scanner's Lambda does not run in the
+  domain's VPC, so its endpoint is out of reach.
+- **A domain being created or deleted** (`unsupported`, with its `state`).
+- **A domain that refuses the role** (`access_denied`): its access policy,
+  or fine-grained access control without a mapping. To include it, map the
+  scanner's role to a backend role with read-only permissions
+  (`indices:data/read/search`, `indices:monitor/stats` for `_cat/indices`).
+- **Serverless collections**, unless `OPENSEARCH_SERVERLESS_READ` is on
+  (`read_not_configured`). IAM's `aoss:APIAccessAll` cannot be narrowed to
+  reads, so each collection's data access policy is what keeps the scanner
+  read-only: grant its role `aoss:ReadDocument` (and `aoss:DescribeIndex`)
+  and nothing else. A collection whose policy does not is `access_denied`.
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -606,6 +648,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `rds` (Data API, opt-in) | `rds-data:BeginTransaction`, `rds-data:ExecuteStatement`, `rds-data:RollbackTransaction` on the named clusters; `secretsmanager:GetSecretValue` on the named secrets | the named ARNs |
 | DynamoDB export | `dynamodb:DescribeContinuousBackups`, `dynamodb:ExportTableToPointInTime`, `dynamodb:DescribeExport`; `s3:PutObject` and `s3:AbortMultipartUpload` on `exports/dynamodb/`; with a key, `kms:GenerateDataKey` and `kms:Decrypt` via S3 | tables `*`; the results bucket |
 | `redshift` | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `redshift-serverless:ListNamespaces`; `redshift-serverless:ListTagsForResource` only with tag rules | `*` |
+| `opensearch` | `es:ListDomainNames`, `es:DescribeDomains`, `aoss:ListCollections`, `aoss:BatchGetCollection`; `es:ListTags`, `aoss:ListTagsForResource` only with tag rules; `es:ESHttpGet` on the domains; with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on the collections | `*`; this account's domains and collections |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
@@ -749,6 +792,9 @@ several things:
 | | `redshift-serverless:GetCredentials` | this account's workgroups | |
 | | `redshift:GetClusterCredentialsWithIAM` | this account's `dbname:*/*` | only with `RedshiftRead` `iam` |
 | | `redshift:GetClusterCredentials` | the one `dbuser:*/<RedshiftDbUser>`, and `dbname:*/*` | only with `RedshiftRead` `db-user` |
+| OpenSearch (discovery) | `es:ListDomainNames`, `es:DescribeDomains`, `es:ListTags`, `aoss:ListCollections`, `aoss:BatchGetCollection`, `aoss:ListTagsForResource` | `*` | |
+| OpenSearch domains | `es:ESHttpGet` (the read verb; `ESHttpPost`, `Put`, `Patch` and `Delete` are denied) | this account's `domain/*/*` in the region | |
+| OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And three explicit denies, as defense in depth against any other policy the
 role might gain:
@@ -756,7 +802,7 @@ role might gain:
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement` |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 
 The RDS **export role** (`RdsExportRole`, trusted by
