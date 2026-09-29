@@ -6,6 +6,48 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
+  lists the S3 buckets in its region, the CloudWatch log groups and the
+  DynamoDB tables in its account, and reads each with the existing adapters.
+  No list to write. The explicit configuration keeps working, and is read
+  first; a store it names is read as configured.
+- Allow and deny overrides (`DISCOVER_ALLOW`, `DISCOVER_DENY`) by name glob
+  or by tag, optionally per kind (`s3:prod-*`, `tag:scan=false`). Deny wins,
+  and a store whose tags cannot be read while a deny-by-tag rule exists is
+  not read. The scanner's own bucket and log group are never read.
+- Per-store sampling (`DISCOVER_SAMPLING`): a percentage, and for S3 a cap on
+  objects per "directory" (`S3_MAX_OBJECTS_PER_PREFIX`); DynamoDB tables are
+  sampled by parallel-scan segment (`DYNAMODB_SAMPLE_PERCENT`), and a table
+  over `DYNAMODB_MAX_TABLE_BYTES` after sampling is skipped as too large.
+- Per-run budget by kind (`MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`,
+  `MAX_TABLE_ITEMS_PER_RUN`) and wall time (`MAX_RUN_SECONDS`), within the
+  existing item and byte budget. Stores the budget does not reach are
+  deferred, and the next run starts with them; each store resumes from its
+  own cursor.
+- The run summary: the findings document's `discovery` lists every store,
+  read or not, and why (`denied`, `not_allowed`, `self`, `too_large`,
+  `unsupported`, `unsupported_format`, `kms_access`, `access_denied`,
+  `tags_unreadable`, deferred for `budget`), with counts of objects not read
+  for KMS, unreadable or unsupported formats. A failed listing is named.
+
+### Findings schema
+- `schemaVersion` is now **1.2**, additive: the `discovery` summary,
+  `kmsDenied` in coverage, and `#` allowed in a masked bucket or table name.
+  EventBridge parts now also split `coverage` and `discovery.stores`.
+
+### Security
+- A bucket or table name holding a number that could be a card or an SSN is
+  now masked in findings, like an object key, and a finding whose log group
+  or stream name was masked no longer carries a console link (the link held
+  the name unmasked). The no-leak suite covers discovery, with stores whose
+  names hold values.
+
+### Docs
+- `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,
+  the run summary, and the read-only IAM each kind of discovery needs.
+  `docs/FINDINGS.md`: schema 1.2 and the run summary.
+
 ## 0.2.0 — 2026-09-29
 
 ### Feature

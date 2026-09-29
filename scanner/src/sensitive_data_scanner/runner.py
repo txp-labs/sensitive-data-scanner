@@ -1,13 +1,20 @@
-"""The batch runner: one scheduled scan of the S3 prefixes, log groups and DynamoDB tables named.
+"""The batch runner: one scheduled scan of the stores named, and of the stores discovered.
 
-It runs in the account it scans. It reads the stores it was given, and writes
-to its results bucket only:
+It runs in the account it scans. It reads the S3 prefixes, log groups and
+DynamoDB tables it was given and, with `DISCOVER` set, every store of those
+kinds that discovery lists and the allow and deny lists let through
+(discovery.py). It writes to its results bucket only:
 
 - `findings/latest.json` and `findings/runs/<runId>.json`: the findings
   document (schema/findings.schema.json);
 - `state/scanner-state.json`: each source's cursor and the findings carried
   between runs, for the next run only (a consumer never needs it);
 - `state/lock.json`: one run at a time.
+
+The run's budget (items, bytes, wall time, and optional per-kind caps on S3
+objects, log events and table items) is shared among the sources. Stores
+the budget does not reach are reported as deferred, and the next run starts
+with them.
 
 With `FINDINGS_EVENT_BUS_ARN` set, it also sends the findings as EventBridge
 events to that bus (events.py).
@@ -23,8 +30,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .config import Config
+from .config import Config, DynamoTarget
 from .detect.analyzer import Detector
+from .discovery import Discovery, Store, discover, settle, summary
 from .engine.spec import load_spec
 from .events import put_findings_events
 from .findings import Coverage, findings_document
@@ -120,40 +128,131 @@ def _take_lock(s3: S3Client, bucket: str, key: str, run_id: str) -> bool:
         return False
 
 
-def build_sources(config: Config, clients: Clients, region: str) -> list[Any]:
-    sources: list[Any] = [
-        S3Source(
-            clients.s3,
-            bucket=b,
-            prefix=p,
-            region=region,
-            sample_percent=config.sample_percent,
-            max_object_bytes=config.max_object_bytes,
-            max_inflated_bytes=config.max_inflated_bytes,
-            skew_seconds=config.s3_skew_seconds,
-        )
-        for b, p in config.s3_targets
-    ]
-    sources.extend(
-        CloudWatchLogsSource(
-            clients.logs, log_group=g, region=region, lookback_days=config.logs_lookback_days
-        )
-        for g in config.log_groups
+def _s3_source(
+    config: Config, clients: Clients, region: str, store: Store, prefix: str
+) -> S3Source:
+    return S3Source(
+        clients.s3,
+        bucket=store.name,
+        prefix=prefix,
+        region=region,
+        sample_percent=store.sample_percent or config.sample_percent,
+        max_object_bytes=config.max_object_bytes,
+        max_inflated_bytes=config.max_inflated_bytes,
+        skew_seconds=config.s3_skew_seconds,
+        max_per_prefix=(
+            store.max_per_prefix
+            if store.max_per_prefix is not None
+            else config.s3_max_objects_per_prefix
+        ),
     )
+
+
+def _dynamodb_source(
+    config: Config, clients: Clients, region: str, store: Store, target: DynamoTarget
+) -> DynamoDBSource:
+    if clients.dynamodb is None:
+        raise ValueError("no DynamoDB client")
+    return DynamoDBSource(
+        clients.dynamodb,
+        target=target,
+        region=region,
+        page_size=config.dynamodb_page_size,
+        max_pages=config.dynamodb_max_pages,
+        sample_percent=store.sample_percent or config.dynamodb_sample_percent,
+    )
+
+
+def plan(
+    config: Config, clients: Clients, region: str, discovery: Discovery | None = None
+) -> tuple[list[Any], list[Store]]:
+    """The sources to run, and every store they come from (named or discovered).
+
+    Stores named in the configuration come first, in its order; each is read
+    as configured (its prefixes, its DynamoDB paths). A discovered store the
+    configuration already names is read once, as configured.
+    """
+    sources: list[Any] = []
+    stores: list[Store] = []
+    by_key: dict[tuple[str, str], Store] = {}
+
+    def named(kind: str, name: str) -> Store:
+        store = by_key.get((kind, name))
+        if store is None:
+            store = Store(kind, name, origin="config")
+            pct, per = config.sampling_for(kind, name, None)
+            store.sample_percent = pct
+            store.max_per_prefix = per
+            by_key[(kind, name)] = store
+            stores.append(store)
+        return store
+
+    def add(store: Store, source: Any) -> None:
+        store.source_ids.append(source.id)
+        sources.append(source)
+
+    for bucket, prefix in config.s3_targets:
+        store = named("s3", bucket)
+        add(store, _s3_source(config, clients, region, store, prefix))
+    for group in config.log_groups:
+        store = named("cloudwatch_logs", group)
+        add(
+            store,
+            CloudWatchLogsSource(
+                clients.logs,
+                log_group=group,
+                region=region,
+                lookback_days=config.logs_lookback_days,
+            ),
+        )
     if config.dynamodb_targets and clients.dynamodb is None:
         raise ValueError("no DynamoDB client")
-    if clients.dynamodb is not None:
-        sources.extend(
-            DynamoDBSource(
-                clients.dynamodb,
-                target=t,
-                region=region,
-                page_size=config.dynamodb_page_size,
-                max_pages=config.dynamodb_max_pages,
+    for t in config.dynamodb_targets:
+        store = named("dynamodb", t.table)
+        add(store, _dynamodb_source(config, clients, region, store, t))
+    if discovery is None:
+        return sources, stores
+    for store in sorted(discovery.stores, key=lambda s: (s.kind, s.name)):
+        known = by_key.get((store.kind, store.name))
+        if known is not None:
+            known.size_bytes = store.size_bytes if known.size_bytes is None else known.size_bytes
+            continue  # read as configured
+        stores.append(store)
+        if store.status != "pending":
+            continue
+        if store.kind == "s3":
+            add(store, _s3_source(config, clients, region, store, ""))
+        elif store.kind == "cloudwatch_logs":
+            add(
+                store,
+                CloudWatchLogsSource(
+                    clients.logs,
+                    log_group=store.name,
+                    region=region,
+                    lookback_days=config.logs_lookback_days,
+                ),
             )
-            for t in config.dynamodb_targets
-        )
-    return sources
+        elif store.kind == "dynamodb":
+            add(store, _dynamodb_source(config, clients, region, store, DynamoTarget(store.name)))
+    return sources, stores
+
+
+def build_sources(config: Config, clients: Clients, region: str) -> list[Any]:
+    """The configured sources only (no discovery)."""
+    return plan(config, clients, region)[0]
+
+
+def rotate(sources: list[Any], stores: list[Store], start: str | None) -> list[Any]:
+    """Configured sources first; discovered ones from `start` round, so a budget that
+    cannot reach every store this run reaches the rest on the next."""
+    configured = {i for s in stores if s.origin == "config" for i in s.source_ids}
+    head = [s for s in sources if s.id in configured]
+    tail = [s for s in sources if s.id not in configured]
+    ids = [s.id for s in tail]
+    if start in ids:
+        k = ids.index(start)
+        tail = tail[k:] + tail[:k]
+    return head + tail
 
 
 def run_scan(
@@ -183,30 +282,57 @@ def run_scan(
         return None
     try:
         detector = detector or Detector(load_spec(), started.date())
-        sources = build_sources(config, clients, region)
+        found = discover(config, clients, region) if config.discover else None
+        sources, stores = plan(config, clients, region, found)
         log_event("run.start", sources=len(sources))
         state = _read_json(clients.s3, bucket, keys.state) or {}
         if state and state.get("version") != STATE_VERSION:
             log_event("state.reset")
             state = {}
         cursors: dict[str, Any] = dict(state.get("cursors") or {})
+        sources = rotate(sources, stores, state.get("rotation"))
         in_scope = {s.id for s in sources}
         store = FindingStore(started.isoformat())
         for f in state.get("findings") or []:
             loc = f.get("_location", "")
             if loc.split("\n", 1)[0] in in_scope:
                 store.items[f["id"]] = f
+        if config.max_run_seconds:
+            deadline = min(deadline, clock() + config.max_run_seconds)
         budget = Budget(config.max_items_per_run, config.max_bytes_per_run, deadline, clock)
+        caps = {
+            "s3": config.max_objects_per_run,
+            "cloudwatch_logs": config.max_log_events_per_run,
+            "dynamodb": config.max_table_items_per_run,
+        }
+        kinds = {
+            k: Budget(n, config.max_bytes_per_run, deadline, clock) for k, n in caps.items() if n
+        }
+        left = {k: sum(1 for s in sources if s.kind == k) for k in caps}
         coverage: list[Coverage] = []
+        by_source: dict[str, Coverage] = {}
+        deferred: str | None = None
         for i, source in enumerate(sources):
+            kind_budget = kinds.get(source.kind)
+            ways = left.get(source.kind, 1)
+            left[source.kind] = max(0, ways - 1)
+            if budget.exhausted() or (kind_budget is not None and kind_budget.exhausted()):
+                deferred = deferred or source.id
+                log_event("source.deferred", source=source.target, kind=source.kind)
+                continue
             share = budget.share(len(sources) - i)
+            if kind_budget is not None:
+                share.max_items = min(share.max_items, kind_budget.share(ways).max_items)
             log_event("source.start", source=source.target, kind=source.kind)
             result = source.run(cursors.get(source.id) or {}, share, detector, store, started)
             if isinstance(source, S3Source) and result.coverage.error is None:
                 source.prune(store, share)
             budget.absorb(share)
+            if kind_budget is not None:
+                kind_budget.absorb(share)
             cursors[source.id] = result.cursor
             coverage.append(result.coverage)
+            by_source[source.id] = result.coverage
             log_event(
                 "source.done",
                 source=source.target,
@@ -214,6 +340,16 @@ def run_scan(
                 passComplete=result.coverage.pass_complete,
                 error=result.coverage.error,
             )
+        for st in stores:
+            covs = [by_source[i] for i in st.source_ids if i in by_source]
+            if covs:
+                settle(st, covs)
+            elif st.status == "pending" and st.source_ids:
+                st.status = "deferred"
+                st.reason = "budget"
+        run_summary = (
+            summary(stores, found.list_errors if found else {}) if config.discover else None
+        )
         doc = findings_document(
             run_id=run_id,
             account=account,
@@ -223,6 +359,7 @@ def run_scan(
             classes=list(load_spec().class_order),
             coverage=coverage,
             findings=store.public(),
+            discovery=run_summary,
         )
         _put_json(
             clients.s3,
@@ -233,6 +370,7 @@ def run_scan(
                 "cursors": cursors,
                 "findings": list(store.items.values()),
                 "lastRunAt": started.isoformat(),
+                "rotation": deferred,
             },
         )
         _put_json(clients.s3, bucket, f"{keys.runs}{run_id}.json", doc)

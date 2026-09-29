@@ -11,7 +11,10 @@ GetObject returned, and a finding names that version.
 
 Sampling: with `sample_percent` below 100, an object is read only if a hash
 of its key falls in the sample (the same objects every pass), and the
-coverage says how many were left out. An object larger than
+coverage says how many were left out. With `max_per_prefix`, at most that
+many objects are read per "directory" (the key up to its last `/`) in a
+pass, and the rest are counted as sampled out: a data lake's thousand
+partition files are represented by the first few of each. An object larger than
 `max_object_bytes` is read up to that size and counted as partial. Audio,
 video, images, office documents and archives are not read; they are counted
 by kind.
@@ -27,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..detect.analyzer import Detector
 from ..findings import Coverage, finding_json, s3_link, s3_resource
-from ..safety import error_name, log_event
+from ..safety import error_name, is_kms_denial, log_event
 from ..scan.item import classify_key, looks_binary, scan_item_text
 from .base import Budget, FindingStore, SourceRun
 
@@ -67,6 +70,7 @@ class S3Source:
         max_object_bytes: int = 20 * 1024**2,
         max_inflated_bytes: int = 100 * 1024**2,
         skew_seconds: int = 300,
+        max_per_prefix: int = 0,
     ) -> None:
         self.client = client
         self.bucket = bucket
@@ -76,6 +80,7 @@ class S3Source:
         self.max_object_bytes = max_object_bytes
         self.max_inflated_bytes = max_inflated_bytes
         self.skew = _dt.timedelta(seconds=skew_seconds)
+        self.max_per_prefix = max_per_prefix
         self.id = f"s3:{bucket}/{prefix}"
         self.target = f"{bucket}/{prefix}"
 
@@ -122,6 +127,8 @@ class S3Source:
         seen_at = now.isoformat()
         done = False
         first_read_error: str | None = None
+        cur_dir: str | None = cursor.get("prefixDir")
+        cur_n = int(cursor.get("prefixCount") or 0)
         try:
             while not done and budget.time_left():
                 args: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
@@ -151,12 +158,21 @@ class S3Source:
                         cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
                         start_after = key
                         continue
+                    directory = key.rsplit("/", 1)[0] if "/" in key else ""
+                    if self.max_per_prefix:
+                        if directory != cur_dir:
+                            cur_dir, cur_n = directory, 0
+                        if cur_n >= self.max_per_prefix:
+                            cov.sampled_out += 1
+                            start_after = key
+                            continue
                     size = min(obj.get("Size", 0), self.max_object_bytes)
                     if not budget.has(size):
                         cov.backlog = True
                         stop = True
                         break
                     budget.take(size)
+                    cur_n += 1
                     try:
                         got = self._read(key, obj.get("Size", 0), cov)
                         if got is not None:
@@ -185,6 +201,8 @@ class S3Source:
                             store.replace_location(f"{self.id}\n{key}", findings)
                     except Exception as err:  # one bad object must not stop the pass
                         cov.unreadable += 1
+                        if is_kms_denial(err):
+                            cov.kms_denied += 1
                         name = error_name(err)
                         first_read_error = first_read_error or name
                         log_event("item.unreadable", source=self.target, error=name)
@@ -203,6 +221,7 @@ class S3Source:
                 "passStartedAt": None,
                 "startAfter": None,
             }
+            cur_dir, cur_n = None, 0
         else:
             if cov.error is None:
                 cov.backlog = True
@@ -211,6 +230,9 @@ class S3Source:
                 "passStartedAt": pass_started,
                 "startAfter": start_after,
             }
+        if self.max_per_prefix:
+            new_cursor["prefixDir"] = cur_dir
+            new_cursor["prefixCount"] = cur_n
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_read_error
         return SourceRun(cov, new_cursor)
