@@ -12,6 +12,7 @@ from .coverage_only import ClusterAdapter, EfsAdapter, FsxAdapter
 from .ebs import BackupAdapter, EbsAdapter
 from .opensearch import OpenSearchAdapter
 from .redshift import RedshiftAdapter
+from .streams import FirehoseAdapter, KinesisAdapter, SqsAdapter
 
 _ALL: list[Adapter] = [
     RedshiftAdapter(),
@@ -22,5 +23,8 @@ _ALL: list[Adapter] = [
     BackupAdapter(),
     EfsAdapter(),
     FsxAdapter(),
+    KinesisAdapter(),
+    FirehoseAdapter(),
+    SqsAdapter(),
 ]
 ADAPTERS: dict[str, Adapter] = {a.kind: a for a in _ALL}

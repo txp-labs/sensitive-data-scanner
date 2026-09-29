@@ -84,7 +84,9 @@ READ = re.compile(
     r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$"
     r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet)"
     r"|ec2:Describe(Volumes|Snapshots)$|ebs:(ListSnapshotBlocks|GetSnapshotBlock)$|backup:List"
-    r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List)"
+    r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List"
+    r"|kinesis:(List|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
+    r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -132,6 +134,13 @@ AIMED: dict[str, Any] = {
     "ClusterDbUserCredentials": _db_user_credentials,
     # Data-plane access to collections; each collection's data access policy grants
     # the role aoss:ReadDocument only (docs/ARCHITECTURE.md).
+    # Receive only, from this account's queues; the code receives from dead-letter queues
+    # alone, with VisibilityTimeout=0, and never deletes (the Deny below).
+    "ReceiveFromDeadLetterQueues": lambda s, a: (
+        a == "sqs:ReceiveMessage"
+        and s["Resource"]
+        == {"Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*"}
+    ),
     "ReadServerlessCollections": lambda s, a: (
         a == "aoss:APIAccessAll" and in_account(s["Resource"], "aoss", "collection/")
     ),
@@ -233,6 +242,9 @@ SERVICES = {
     "backup": "backup",
     "efs": "elasticfilesystem",
     "fsx": "fsx",
+    "kinesis": "kinesis",
+    "firehose": "firehose",
+    "sqs": "sqs",
 }
 
 
@@ -366,6 +378,23 @@ def test_snapshots_are_read_in_place_never_copied_or_attached() -> None:
         "backup:Start*",
         "elasticfilesystem:ClientWrite",
     } <= denied
+
+
+def test_queues_are_received_from_never_consumed() -> None:
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "sqs:DeleteMessage*",
+        "sqs:ChangeMessageVisibility*",
+        "sqs:PurgeQueue",
+        "sqs:StartMessageMoveTask",
+        "kinesis:PutRecord*",
+        "kinesis:RegisterStreamConsumer",
+    } <= denied
+    # The scanner is not a Kinesis consumer: no lease table, no checkpoint.
+    assert not any(a.startswith("dynamodb:PutItem") for a in ALLOWED)
+    source = (PACKAGE / "sources" / "streams.py").read_text()
+    assert "VisibilityTimeout=0" in source
+    assert "delete_message" not in source and "change_message_visibility" not in source
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:
