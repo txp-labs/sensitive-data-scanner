@@ -286,6 +286,10 @@ def plan(
     for st in discovery.stores:
         if st.table is not None and st.status == "pending":
             tables.setdefault(st.table.bucket, []).append(st.table.prefix)
+        # A store read at S3 locations of its own (a Firehose destination) claims them too.
+        for loc in st.extra.get("s3Locations") or [] if st.status == "pending" else []:
+            b, _, p = str(loc).partition("/")
+            tables.setdefault(b, []).append(p)
     for store in sorted(discovery.stores, key=lambda s: (s.kind, s.name)):
         known = by_key.get((store.kind, store.name))
         if known is not None:
@@ -355,8 +359,9 @@ def plan(
             add(store, _dynamodb_source(config, clients, region, store, DynamoTarget(store.name)))
         elif store.kind in ADAPTERS:
             found_source = ADAPTERS[store.kind].source(ctx, store)
-            if found_source is not None:
-                add(store, found_source)
+            for one in found_source if isinstance(found_source, list) else [found_source]:
+                if one is not None:
+                    add(store, one)
     return sources, stores
 
 

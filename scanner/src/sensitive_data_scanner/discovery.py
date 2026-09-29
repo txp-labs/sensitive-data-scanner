@@ -51,7 +51,11 @@ READABLE_TABLE_STATES = frozenset({"ACTIVE", "UPDATING"})
 READABLE_LOG_CLASSES = frozenset({"STANDARD", "INFREQUENT_ACCESS"})
 
 
-_INTERNAL = frozenset({"tableArn", "endpoint"})
+_INTERNAL = frozenset(
+    {"tableArn", "endpoint", "snapshotId", "volumeGiB", "queueUrl", "s3Locations"}
+)
+# Engines the RDS API lists that have their own kind (and adapter) when discovered.
+OWN_KIND = {"docdb": "documentdb", "neptune": "neptune"}
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,11 @@ def _needs_tags(config: Config, kind: str) -> bool:
 def needs_tags(config: Config, kind: str) -> bool:
     """Whether an allow, deny or sampling rule for `kind` looks at tags (fetch them only then)."""
     return _needs_tags(config, kind)
+
+
+def reason_for(error: str | None) -> str:
+    """`access_denied` for an AWS access error, else `error`."""
+    return _reason(error)
 
 
 def _tag_list(tags: list[dict[str, Any]] | None) -> dict[str, str]:
@@ -464,6 +473,8 @@ def _discover_rds(config: Config, clients: Clients, out: Discovery) -> None:
         raise ValueError("no RDS client")
     for page in clients.rds.get_paginator("describe_db_clusters").paginate():
         for c in page.get("DBClusters", []):
+            if OWN_KIND.get(str(c.get("Engine", ""))) in config.discover:
+                continue  # listed by its own adapter (sources/coverage_only.py)
             out.stores.append(
                 _rds_store(
                     config,

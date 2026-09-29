@@ -24,6 +24,10 @@ Metadata:
         Parameters: [RedshiftRead, RedshiftDbUser]
       - Label: { default: OpenSearch }
         Parameters: [OpenSearchServerlessRead]
+      - Label: { default: EBS snapshots (opt-in block reads) }
+        Parameters: [EbsDirectRead]
+      - Label: { default: SQS dead-letter queues (opt-in receives) }
+        Parameters: [SqsDlqRead]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -50,7 +54,10 @@ Parameters:
   Discover:
     Type: String
     Default: all
-    Description: DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift, opensearch.
+    Description: >-
+      DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
+      opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
+      firehose, sqs.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -134,6 +141,22 @@ Parameters:
       aoss:APIAccessAll cannot be narrowed to reads: give the scanner's role
       aoss:ReadDocument (and nothing more) in each collection's data access
       policy. Managed domains are read with es:ESHttpGet only, always.
+  EbsDirectRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      EBS_DIRECT_READ - sample each volume's latest snapshot with the EBS
+      direct APIs (ListSnapshotBlocks, GetSnapshotBlock): no volume is created
+      or attached. Off: volumes and snapshots are discovered and reported.
+  SqsDlqRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      SQS_DLQ_READ - receive from dead-letter queues with VisibilityTimeout=0,
+      never deleting. A receive raises each message's receive count, so a DLQ
+      with its own redrive policy is never read. Live queues are never read.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -173,6 +196,8 @@ Conditions:
   RedshiftDbUserMode: !Equals [!Ref RedshiftRead, db-user]
   OpenSearchServerless: !Equals [!Ref OpenSearchServerlessRead, "true"]
   ConfigInSsm: !Equals [!Select [0, !Split [":", !Sub "${ConfigLocation}:"]], ssm]
+  EbsRead: !Equals [!Ref EbsDirectRead, "true"]
+  SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
 
 Resources:
   ResultsBucket:
@@ -350,6 +375,73 @@ Resources:
                   Action: aoss:APIAccessAll
                   Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
                 - !Ref AWS::NoValue
+              # --- Snapshots, backups and file systems: discover and report
+              - Sid: DescribeSnapshotsBackupsAndFileSystems
+                Effect: Allow
+                Action:
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeSnapshots
+                  - backup:ListBackupVaults
+                  - backup:ListRecoveryPointsByBackupVault
+                  - backup:ListTags
+                  - elasticfilesystem:DescribeFileSystems
+                  - fsx:DescribeFileSystems
+                  - docdb-elastic:ListClusters
+                  - docdb-elastic:ListTagsForResource
+                Resource: "*"
+              - !If
+                - EbsRead
+                - Sid: ReadEbsSnapshotBlocks
+                  Effect: Allow
+                  Action: [ebs:ListSnapshotBlocks, ebs:GetSnapshotBlock]
+                  Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
+                - !Ref AWS::NoValue
+              - !If
+                - EbsRead
+                - Sid: DecryptSnapshotsThroughEbs
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService:
+                        - !Sub ebs.${AWS::Region}.amazonaws.com
+                        - !Sub ec2.${AWS::Region}.amazonaws.com
+                - !Ref AWS::NoValue
+              # --- Streams and queues: Kinesis sampled (never checkpointed), Firehose
+              # destinations read as S3, SQS listed (dead-letter queues opt-in below)
+              - Sid: ReadStreamsAndListQueues
+                Effect: Allow
+                Action:
+                  - kinesis:ListStreams
+                  - kinesis:ListShards
+                  - kinesis:ListTagsForStream
+                  - kinesis:GetShardIterator
+                  - kinesis:GetRecords
+                  - firehose:ListDeliveryStreams
+                  - firehose:DescribeDeliveryStream
+                  - firehose:ListTagsForDeliveryStream
+                  - sqs:ListQueues
+                  - sqs:GetQueueAttributes
+                  - sqs:ListQueueTags
+                Resource: "*"
+              - !If
+                - SqsDlq
+                - Sid: ReceiveFromDeadLetterQueues
+                  Effect: Allow
+                  Action: sqs:ReceiveMessage
+                  Resource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*
+                - !Ref AWS::NoValue
+              - !If
+                - SqsDlq
+                - Sid: DecryptQueuesThroughSqs
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub sqs.${AWS::Region}.amazonaws.com
+                - !Ref AWS::NoValue
               # --- Push findings to the central sink
               - !If
                 - HasBus
@@ -370,6 +462,7 @@ Resources:
                       kms:ViaService:
                         - !Sub s3.${AWS::Region}.amazonaws.com
                         - !Sub dynamodb.${AWS::Region}.amazonaws.com
+                        - !Sub kinesis.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
               # --- Defense in depth: never write anywhere else, never escalate
               - Sid: NoWritesOutsideOwnBucket
@@ -439,6 +532,59 @@ Resources:
                   - aoss:Create*
                   - aoss:Update*
                   - aoss:Delete*
+                  - ebs:StartSnapshot
+                  - ebs:PutSnapshotBlock
+                  - ebs:CompleteSnapshot
+                  - ec2:CreateSnapshot*
+                  - ec2:CreateVolume
+                  - ec2:CopySnapshot
+                  - ec2:DeleteSnapshot
+                  - ec2:DeleteVolume
+                  - ec2:ModifySnapshot*
+                  - ec2:ModifyVolume*
+                  - ec2:AttachVolume
+                  - ec2:DetachVolume
+                  - backup:Create*
+                  - backup:Delete*
+                  - backup:Put*
+                  - backup:Start*
+                  - backup:Update*
+                  - elasticfilesystem:Create*
+                  - elasticfilesystem:Delete*
+                  - elasticfilesystem:Put*
+                  - elasticfilesystem:Update*
+                  - elasticfilesystem:ClientWrite
+                  - elasticfilesystem:ClientRootAccess
+                  - fsx:Create*
+                  - fsx:Delete*
+                  - fsx:Update*
+                  - docdb-elastic:Create*
+                  - docdb-elastic:Delete*
+                  - docdb-elastic:Update*
+                  - kinesis:PutRecord*
+                  - kinesis:Create*
+                  - kinesis:Delete*
+                  - kinesis:Update*
+                  - kinesis:MergeShards
+                  - kinesis:SplitShard
+                  - kinesis:RegisterStreamConsumer
+                  - kinesis:*StreamEncryption
+                  - kinesis:*RetentionPeriod
+                  - firehose:Create*
+                  - firehose:Delete*
+                  - firehose:Update*
+                  - firehose:Put*
+                  - firehose:Start*
+                  - firehose:Stop*
+                  - sqs:DeleteMessage*
+                  - sqs:ChangeMessageVisibility*
+                  - sqs:SendMessage*
+                  - sqs:PurgeQueue
+                  - sqs:SetQueueAttributes
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:StartMessageMoveTask
+                  - sqs:CancelMessageMoveTask
                 Resource: "*"
               - Sid: NeverAskLakeFormation
                 Effect: Deny
@@ -653,6 +799,8 @@ Resources:
           REDSHIFT_DB_USER: !Ref RedshiftDbUser
           OPENSEARCH_SERVERLESS_READ: !Ref OpenSearchServerlessRead
           CONFIG_LOCATION: !Ref ConfigLocation
+          EBS_DIRECT_READ: !Ref EbsDirectRead
+          SQS_DLQ_READ: !Ref SqsDlqRead
 
   ScheduleRole:
     Type: AWS::IAM::Role

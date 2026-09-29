@@ -147,6 +147,15 @@ DISCOVER_KINDS = {
     "rds": "rds",
     "redshift": "redshift",
     "opensearch": "opensearch",
+    "documentdb": "documentdb",
+    "neptune": "neptune",
+    "ebs": "ebs",
+    "backup": "backup",
+    "efs": "efs",
+    "fsx": "fsx",
+    "kinesis": "kinesis",
+    "firehose": "firehose",
+    "sqs": "sqs",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -158,6 +167,15 @@ _KIND_ALIASES = {
     "rds": "rds",
     "redshift": "redshift",
     "opensearch": "opensearch",
+    "documentdb": "documentdb",
+    "neptune": "neptune",
+    "ebs": "ebs",
+    "backup": "backup",
+    "efs": "efs",
+    "fsx": "fsx",
+    "kinesis": "kinesis",
+    "firehose": "firehose",
+    "sqs": "sqs",
 }
 
 
@@ -410,6 +428,15 @@ class Config:
     opensearch_docs_per_index: int = 100
     opensearch_max_indices: int = 500
     opensearch_serverless_read: bool = False
+    # EBS: read snapshots' blocks with the EBS direct APIs (opt-in), sampled.
+    ebs_direct_read: bool = False
+    ebs_blocks_per_snapshot: int = 256
+    # Kinesis: records sampled per shard from TRIM_HORIZON, and shards per stream.
+    kinesis_records_per_shard: int = 100
+    kinesis_max_shards: int = 50
+    # SQS: dead-letter queues are received from (VisibilityTimeout=0) only when on.
+    sqs_dlq_read: bool = False
+    sqs_messages_per_queue: int = 100
 
     @property
     def exports_prefix(self) -> str:
@@ -478,6 +505,12 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         opensearch_docs_per_index=_int(e.get("OPENSEARCH_DOCS_PER_INDEX"), 100, 1, 10_000),
         opensearch_max_indices=_int(e.get("OPENSEARCH_MAX_INDICES"), 500, 1, 10_000),
         opensearch_serverless_read=_bool(e.get("OPENSEARCH_SERVERLESS_READ")),
+        ebs_direct_read=_bool(e.get("EBS_DIRECT_READ")),
+        ebs_blocks_per_snapshot=_int(e.get("EBS_BLOCKS_PER_SNAPSHOT"), 256, 4, 20_000),
+        kinesis_records_per_shard=_int(e.get("KINESIS_RECORDS_PER_SHARD"), 100, 1, 10_000),
+        kinesis_max_shards=_int(e.get("KINESIS_MAX_SHARDS"), 50, 1, 10_000),
+        sqs_dlq_read=_bool(e.get("SQS_DLQ_READ")),
+        sqs_messages_per_queue=_int(e.get("SQS_MESSAGES_PER_QUEUE"), 100, 1, 1000),
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
