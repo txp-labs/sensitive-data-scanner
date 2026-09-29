@@ -208,7 +208,9 @@ class RedshiftSource:
             if self.serverless
             else f"cluster-details?cluster={q}"
         )
-        return console_link(self.region, f"redshiftv2/home?region={self.region}#{page}")
+        return console_link(
+            self.region, f"redshiftv2/home?region={self.region}#{page}", (self.identifier,)
+        )
 
     def databases(self) -> list[str]:
         names: set[str] = set()

@@ -1,4 +1,11 @@
-"""The scanner's configuration, from environment variables. Nothing here is secret."""
+"""The scanner's configuration. Nothing here is secret.
+
+It comes from environment variables, and, because Lambda holds only 4 KB of
+those, also from a configuration document: the invoke payload's `config`, or
+a JSON file named by `CONFIG_LOCATION` (or the payload's `configLocation`) in
+S3 or SSM Parameter Store. A document uses the environment variables' names;
+what it sets wins over the environment, and the payload wins over the file.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,7 @@ import fnmatch
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -507,4 +514,119 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
+    return config
+
+
+# ------------------------------------------------------------------ configuration documents
+
+# Settings holding JSON: a document may give them as JSON values, not strings.
+_JSON_SETTINGS = frozenset({"SCAN_DYNAMODB", "DISCOVER_SAMPLING", "RDS_DATA_API"})
+# Read by read_config but set by Lambda, never by a document.
+_NOT_FROM_DOCUMENTS = frozenset({"AWS_LAMBDA_LOG_GROUP_NAME"})
+MAX_CONFIG_BYTES = 1024 * 1024
+_S3_LOCATION = re.compile(r"^s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/(.{1,1024})$")
+_SSM_ARN = re.compile(r"^arn:aws[a-z-]*:ssm:[a-z0-9-]+:[0-9]{12}:parameter/.{1,2000}$")
+
+
+class _Asked(dict[str, str]):
+    """An environment that records every name read_config asks for."""
+
+    def __init__(self, data: Mapping[str, str]) -> None:
+        super().__init__(data)
+        self.asked: set[str] = set()
+
+    def get(self, key: str, default: str | None = None) -> str | None:  # type: ignore[override]
+        self.asked.add(key)
+        return super().get(key, default)
+
+
+def _setting(name: str, value: Any) -> str:
+    """One document value as the string its environment variable would hold."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int | float):
+        return str(value)
+    if name in _JSON_SETTINGS and isinstance(value, list | dict):
+        return json.dumps(value)
+    if isinstance(value, list) and all(isinstance(x, str) for x in value):
+        return ",".join(value)
+    raise ValueError("a configuration document has a value of the wrong type")
+
+
+def document_settings(doc: Any) -> dict[str, str]:
+    """A configuration document (a JSON object of settings) as environment strings."""
+    if not isinstance(doc, dict):
+        raise ValueError("a configuration document must be a JSON object")
+    out = {}
+    for name, value in doc.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", name):
+            raise ValueError("a configuration document has a setting name it does not accept")
+        if name in _NOT_FROM_DOCUMENTS:
+            raise ValueError("a configuration document may not set that setting")
+        out[name] = _setting(name, value)
+    return out
+
+
+def parse_document(raw: bytes | str) -> Any:
+    if len(raw) > MAX_CONFIG_BYTES:
+        raise ValueError("the configuration document is too large")
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise ValueError("the configuration document is not valid JSON") from None
+
+
+def read_location(location: str, client: Callable[[str], Any]) -> bytes | str:
+    """The configuration file at `s3://bucket/key`, or in SSM (`ssm:<name>` or its ARN)."""
+    loc = location.strip()
+    m = _S3_LOCATION.match(loc)
+    if m:
+        body = client("s3").get_object(Bucket=m[1], Key=m[2])["Body"]
+        data: bytes = body.read(MAX_CONFIG_BYTES + 1)
+        return data
+    if loc.startswith("ssm:") or _SSM_ARN.match(loc):
+        name = loc[4:] if loc.startswith("ssm:") else loc
+        if not name:
+            raise ValueError("CONFIG_LOCATION names no parameter")
+        got = client("ssm").get_parameter(Name=name, WithDecryption=True)
+        value: str = got["Parameter"]["Value"]
+        return value
+    raise ValueError("CONFIG_LOCATION must be s3://bucket/key or ssm:<parameter name>")
+
+
+def load_config(
+    event: Any = None,
+    client: Callable[[str], Any] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Config:
+    """The configuration for one invocation: environment, then the file, then the payload.
+
+    `event` is the invoke payload. Only its `config` (a document) and
+    `configLocation` (a file) are read; any other payload, such as an empty
+    scheduled one, leaves the environment as it is. A setting a document names
+    that the scanner does not read is an error, so a typo is not silently ignored.
+    """
+    e = dict(os.environ if env is None else env)
+    payload = event if isinstance(event, dict) else {}
+    documents: list[dict[str, str]] = []
+    location = payload.get("configLocation") or e.get("CONFIG_LOCATION") or ""
+    if not isinstance(location, str):
+        raise ValueError("configLocation must be a string")
+    if location.strip():
+        if client is None:
+            raise ValueError("a configuration file needs an AWS client")
+        documents.append(document_settings(parse_document(read_location(location, client))))
+    if payload.get("config") is not None:
+        documents.append(document_settings(payload["config"]))
+    for d in documents:
+        e.update(d)
+    asked = _Asked(e)
+    config = read_config(asked)
+    unknown = {name for d in documents for name in d} - asked.asked
+    if unknown:
+        raise ValueError("a configuration document names a setting the scanner does not read")
     return config

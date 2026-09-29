@@ -115,6 +115,11 @@ FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
 
 - Every setting, and the permissions it needs:
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **More than 4 KB of settings** (Lambda's cap on environment variables):
+  put them in a JSON document with the same names. Pass it in the invoke
+  payload as `{"config": {...}}`, or name a file in S3 or SSM with
+  `CONFIG_LOCATION`
+  ([Configuration beyond 4 KB](docs/ARCHITECTURE.md#configuration-beyond-4-kb)).
 - **Every account and region of an organization:** `deploy/estate-stackset.yaml`
   deploys `deploy/scanner.yaml` through a service-managed StackSet to the
   organizational units and regions you name, with read-only IAM per source,

@@ -181,6 +181,40 @@ bumps the minor version. Spec changes are listed under **Spec**.
   pushed to the existing central EventBridge bus. Releases attach both
   templates.
 
+### Fixed
+From the first run in a real account (stugum-dev,
+[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)):
+- **A missing state file on the first run.** Without `s3:ListBucket`, S3
+  answers a missing object with 403, not 404, and the first run failed.
+  - The runner now counts a 403 on the state file as "no state yet" when the
+    lock it has just written can be read. A KMS denial, or a denial that also
+    covers the lock, still fails the run.
+  - `docs/ARCHITECTURE.md` now lists `s3:ListBucket` on the results bucket
+    (on the results prefix, if there is one). `scanner.yaml` already
+    granted it; `test_template.py` now keeps it there.
+- **Configuration beyond Lambda's 4 KB of environment variables.** The
+  settings can also come from a JSON document: the invoke payload's
+  `config`, or a file named by `CONFIG_LOCATION` (or the payload's
+  `configLocation`), either an S3 object or an SSM parameter.
+  - The document uses the variable names. The payload wins over the file,
+    and the file over the environment.
+  - A name the scanner does not read is an error.
+  - Environment variables alone work as before.
+  - `scanner.yaml` takes `ConfigLocation`, with `ssm:GetParameter` only
+    under `/sensitive-data-scanner/`.
+- **Console links on findings with a masked key.** A finding now loses its
+  link only when a name the link carries was masked.
+  - A DynamoDB item keyed by a tenant id with a bare nine-digit run keeps
+    its link to the table. The link names the table, never the key.
+  - The same holds for a masked column (S3 table objects, RDS, Redshift) or
+    index (OpenSearch).
+  - The no-leak suite covers a `T#t_…` key.
+- **`SHA256SUMS` names every asset as GitHub serves it.** buildx's
+  `owner~repo~id.dockerbuild` record is served as
+  `owner.repo.id.dockerbuild`, so `sha256sum -c` reported it missing. The
+  release workflow renames such files before checksumming, then checks the
+  published names against the list.
+
 ### Findings schema
 - `schemaVersion` is now **1.2**, additive: the `discovery` summary,
   `kmsDenied` in coverage, `#` allowed in a masked bucket or table name,

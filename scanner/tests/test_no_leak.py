@@ -733,6 +733,78 @@ def test_no_value_leaves_streams_or_queues(
         assert leaks(blob) == [], name_
 
 
+# A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
+# tables (#24). The run passes the SSN structure rules, so it is masked however
+# masking is tuned; the finding keeps its link because the link names the table only.
+TENANT = "T#t_314159265"
+
+
+def test_a_masked_key_keeps_a_link_that_holds_no_value(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+
+    item = load_item("stugum-positive")
+    item["pk"] = {"S": TENANT}
+    item["sk"] = {"S": f"CALL#{CARDS['mastercard']}"}
+    ddb = Ddb()
+    ddb.describe()
+    ddb.query(page([item]))
+    env.clients.dynamodb = ddb.client
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            dynamodb_targets=[target(partition=TENANT)],
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert doc["findings"]
+    for f in doc["findings"]:
+        assert f["resource"]["key"]["pk"] == "T#t_#########"
+        assert f["resource"]["keyMasked"] is True
+        assert f["link"] == (
+            "https://us-west-2.console.aws.amazon.com/dynamodbv2/home?region=us-west-2"
+            "#item-explorer?table=example-call-tests"
+        )
+    for name, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name
+        assert "314159265" not in blob, name
+        assert CARDS["mastercard"] not in blob, name
+
+
+def test_a_link_built_from_a_masked_name_is_dropped() -> None:
+    from sensitive_data_scanner.findings import (
+        console_link,
+        dynamodb_link,
+        dynamodb_resource,
+        link_for,
+        s3_link,
+        s3_resource,
+    )
+
+    table = f"orders-{SSN_A}"
+    res = dynamodb_resource(table, {"pk": "a"}, "h", "x")
+    assert link_for(res, dynamodb_link("us-west-2", table)) is None
+    # The object's key is in its link: a masked key drops it.
+    key = f"receipts/{SSN_B}.txt"
+    assert link_for(s3_resource("b", key, None), s3_link("us-west-2", "b", key, None)) is None
+    # A masked column is not in the object's link: it stays.
+    res = s3_resource("b", "t.parquet", None, column=f"c_{SSN_B}")
+    assert res["keyMasked"] is True
+    assert link_for(res, s3_link("us-west-2", "b", "t.parquet", None)) is not None
+    # A link that does not say what it was built from is dropped when anything is masked.
+    assert link_for({"keyMasked": True}, console_link("us-west-2", "x")) is None
+    assert (
+        link_for({}, console_link("us-west-2", "x")) == "https://us-west-2.console.aws.amazon.com/x"
+    )
+    assert type(link_for({}, dynamodb_link("us-west-2", "t"))) is str
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

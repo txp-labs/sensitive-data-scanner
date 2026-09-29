@@ -81,13 +81,43 @@ class ClassFinding:
         self.offsets.extend(offsets)
 
 
-def s3_link(region: str, bucket: str, key: str, version_id: str | None) -> str:
+class Link(str):
+    """A console link that knows the names it was built from.
+
+    A finding keeps its link only when none of those names is changed by
+    masking (`link_for`): a link names the store, and never an item's key, so
+    masking a DynamoDB key or a column name does not cost the finding its link.
+    A link built from a masked name is dropped, because it would carry what the
+    mask hid. The region and the page's fixed text are never values.
+    """
+
+    names: tuple[str, ...]
+
+    def __new__(cls, url: str, names: tuple[str, ...]) -> Link:
+        link = super().__new__(cls, url)
+        link.names = names
+        return link
+
+
+def link_for(resource: dict[str, Any], link: str | None) -> str | None:
+    """The link a finding may carry: a plain string, or None."""
+    if link is None:
+        return None
+    if isinstance(link, Link):
+        return None if any(redact_digits(n) != n for n in link.names) else str(link)
+    # A link that does not say what it was built from: dropped whenever anything was masked.
+    return None if resource.get("keyMasked") or resource.get("nameMasked") else str(link)
+
+
+def s3_link(region: str, bucket: str, key: str, version_id: str | None) -> Link:
+    """The object's page: it names the bucket and the key."""
     q = {"region": region, "bucketType": "general", "prefix": key}
     if version_id and version_id != "null":
         q["versionId"] = version_id
-    return (
+    return Link(
         f"https://{region}.console.aws.amazon.com/s3/object/{urllib.parse.quote(bucket)}?"
-        + urllib.parse.urlencode(q)
+        + urllib.parse.urlencode(q),
+        (bucket, key),
     )
 
 
@@ -96,12 +126,16 @@ def _cw_escape(s: str) -> str:
     return urllib.parse.quote(urllib.parse.quote(s, safe=""), safe="").replace("%", "$")
 
 
-def logs_link(region: str, group: str, stream: str, timestamp_ms: int) -> str:
+def logs_link(region: str, group: str, stream: str, timestamp_ms: int) -> Link:
+    """The event's page: it names the group and the stream, and the event's time."""
     frag = (
         f"logsV2:log-groups/log-group/{_cw_escape(group)}/log-events/{_cw_escape(stream)}"
         + _cw_escape(f"?start={timestamp_ms}&end={timestamp_ms + 1}")
     )
-    return f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}#{frag}"
+    return Link(
+        f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}#{frag}",
+        (group, stream),
+    )
 
 
 def s3_resource(
@@ -141,11 +175,12 @@ def log_resource(group: str, stream: str, timestamp_ms: int) -> dict[str, Any]:
     return out
 
 
-def dynamodb_link(region: str, table: str) -> str:
+def dynamodb_link(region: str, table: str) -> Link:
     """The table's item explorer. It names no key: the reviewer queries by the masked key."""
-    return (
+    return Link(
         f"https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}"
-        f"#item-explorer?table={urllib.parse.quote(table, safe='')}"
+        f"#item-explorer?table={urllib.parse.quote(table, safe='')}",
+        (table,),
     )
 
 
@@ -175,12 +210,13 @@ def dynamodb_resource(
     return out
 
 
-def rds_link(region: str, identifier: str, db_type: str) -> str:
-    """The cluster's or instance's page in the RDS console."""
-    return (
+def rds_link(region: str, identifier: str, db_type: str) -> Link:
+    """The cluster's or instance's page in the RDS console. It names no table or column."""
+    return Link(
         f"https://{region}.console.aws.amazon.com/rds/home?region={region}"
         f"#database:id={urllib.parse.quote(identifier, safe='')};"
-        f"is-cluster={'true' if db_type == 'cluster' else 'false'}"
+        f"is-cluster={'true' if db_type == 'cluster' else 'false'}",
+        (identifier,),
     )
 
 
@@ -251,9 +287,14 @@ def store_field_resource(
     return out
 
 
-def console_link(region: str, path: str) -> str:
-    """A page in the account's own AWS console (`path` after the host, already quoted)."""
-    return f"https://{region}.console.aws.amazon.com/{path}"
+def console_link(region: str, path: str, names: tuple[str, ...] | None = None) -> str:
+    """A page in the account's own AWS console (`path` after the host, already quoted).
+
+    With `names`, the names the path was built from, it is a `Link` that survives
+    masking elsewhere in the resource; without, it is dropped whenever anything is masked.
+    """
+    url = f"https://{region}.console.aws.amazon.com/{path}"
+    return url if names is None else Link(url, names)
 
 
 # Resource fields that say which copy was read, not where the data lives.
@@ -291,7 +332,7 @@ def finding_json(
         "via": sorted(cf.via),
         "offsets": offsets,
         "offsetsTruncated": len(cf.offsets) > MAX_OFFSETS_PER_FINDING,
-        "link": None if resource.get("keyMasked") or resource.get("nameMasked") else link,
+        "link": link_for(resource, link),
         "firstSeenAt": first_seen_at or seen_at,
         "lastSeenAt": seen_at,
     }

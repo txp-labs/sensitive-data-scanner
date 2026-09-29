@@ -13,7 +13,8 @@ Metadata:
       - Label: { default: Code }
         Parameters: [ImageUri, CodeS3BucketPrefix, CodeS3Key]
       - Label: { default: What to read }
-        Parameters: [Discover, DiscoverAllow, DiscoverDeny, DiscoverSampling, AllowKmsDecrypt]
+        Parameters:
+          [Discover, DiscoverAllow, DiscoverDeny, DiscoverSampling, AllowKmsDecrypt, ConfigLocation]
       - Label: { default: "Exports: RDS, Aurora, large DynamoDB tables" }
         Parameters:
           [RdsExportKmsKeyArn, EnableDynamoDBExport, DynamoDBExportKmsKeyArn]
@@ -71,6 +72,15 @@ Parameters:
     Type: String
     Default: ""
     Description: DISCOVER_SAMPLING - a JSON list of per-store sampling rules.
+  ConfigLocation:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(|s3://.+|ssm:/sensitive-data-scanner/.+)$"
+    Description: >-
+      CONFIG_LOCATION - a JSON configuration document beyond Lambda's 4 KB of
+      environment variables (docs/ARCHITECTURE.md, Configuration): an S3 object
+      (s3://bucket/key) or an SSM parameter under /sensitive-data-scanner/
+      (ssm:/sensitive-data-scanner/<name>). It wins over the settings above.
   AllowKmsDecrypt:
     Type: String
     AllowedValues: ["true", "false"]
@@ -185,6 +195,7 @@ Conditions:
   RedshiftIam: !Equals [!Ref RedshiftRead, iam]
   RedshiftDbUserMode: !Equals [!Ref RedshiftRead, db-user]
   OpenSearchServerless: !Equals [!Ref OpenSearchServerlessRead, "true"]
+  ConfigInSsm: !Equals [!Select [0, !Split [":", !Sub "${ConfigLocation}:"]], ssm]
   EbsRead: !Equals [!Ref EbsDirectRead, "true"]
   SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
 
@@ -269,10 +280,20 @@ Resources:
                   - s3:DeleteObject
                   - s3:AbortMultipartUpload
                 Resource: !Sub ${ResultsBucket.Arn}/*
+              # ListBucket also makes S3 answer a missing object (the first run's
+              # state file) with 404, not 403. The scanner copes without it (#24).
               - Sid: OwnResultsBucketList
                 Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt ResultsBucket.Arn
+              # --- its configuration document in SSM, when ConfigLocation names one
+              - !If
+                - ConfigInSsm
+                - Sid: ReadOwnConfigParameter
+                  Effect: Allow
+                  Action: ssm:GetParameter
+                  Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/*
+                - !Ref AWS::NoValue
               - Sid: OwnLogs
                 Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
@@ -777,6 +798,7 @@ Resources:
           REDSHIFT_READ: !Ref RedshiftRead
           REDSHIFT_DB_USER: !Ref RedshiftDbUser
           OPENSEARCH_SERVERLESS_READ: !Ref OpenSearchServerlessRead
+          CONFIG_LOCATION: !Ref ConfigLocation
           EBS_DIRECT_READ: !Ref EbsDirectRead
           SQS_DLQ_READ: !Ref SqsDlqRead
 
