@@ -159,7 +159,7 @@ def _step(steps: list[dict[str, Any]], name: str) -> Any:
     for s in steps:
         if name in s:
             return s[name]
-    raise ValueError(f"normalize.yaml has no step {name}")
+    raise ValueError("normalize.yaml is missing a step")
 
 
 def _normalize(raw: dict[str, Any]) -> NormalizeSpec:
@@ -209,7 +209,7 @@ def spec_dir() -> Path:
 def parse_spec(classes_raw: dict[str, Any], normalize_raw: dict[str, Any]) -> Spec:
     for raw in (classes_raw, normalize_raw):
         if str(raw.get("specVersion")) != SPEC_VERSION:
-            raise ValueError(f"unsupported specVersion {raw.get('specVersion')!r}")
+            raise ValueError("unsupported specVersion")
     classes = {name: _class(name, c) for name, c in classes_raw["classes"].items()}
     carry = classes_raw.get("promptCarryover") or {}
     return Spec(

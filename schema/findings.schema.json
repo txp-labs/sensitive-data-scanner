@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
+  "title": "Sensitive-data scanner findings, version 1.0",
+  "description": "What one scan found in one account and region: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "schemaVersion", "scannerVersion", "specVersion", "runId", "account", "region",
+    "startedAt", "finishedAt", "classes", "coverage", "findings", "findingsTotal",
+    "findingsTruncated", "totals"
+  ],
+  "properties": {
+    "schema": { "const": "sensitive-data-scanner.findings" },
+    "schemaVersion": { "const": "1.0" },
+    "scannerVersion": { "type": "string", "maxLength": 32 },
+    "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+    "account": { "type": "string", "pattern": "^[0-9]{12}$" },
+    "region": { "type": "string", "pattern": "^[a-z]{2}(-[a-z]+)+-[0-9]$" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "classes": { "type": "array", "items": { "$ref": "#/$defs/class" } },
+    "coverage": { "type": "array", "items": { "$ref": "#/$defs/coverage" } },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "findingsTotal": { "type": "integer", "minimum": 0 },
+    "findingsTruncated": { "type": "boolean" },
+    "totals": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/class" },
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "part": { "type": "integer", "minimum": 1 },
+    "parts": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "maskedName": {
+      "description": "A name from the account (bucket, key, log group or stream). Any run that could be a card number or an SSN is masked with '#'.",
+      "type": "string",
+      "maxLength": 1024
+    },
+    "resource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "bucket", "key", "versionId"],
+          "properties": {
+            "type": { "const": "s3_object" },
+            "bucket": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
+            "key": { "$ref": "#/$defs/maskedName" },
+            "versionId": { "type": "string", "maxLength": 1024 },
+            "keyMasked": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "logGroup", "logStream", "timestamp"],
+          "properties": {
+            "type": { "const": "log_event" },
+            "logGroup": { "$ref": "#/$defs/maskedName" },
+            "logStream": { "$ref": "#/$defs/maskedName" },
+            "timestamp": { "type": "integer", "minimum": 0 },
+            "nameMasked": { "const": true }
+          }
+        }
+      ]
+    },
+    "offset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0, "description": "UTF-16 code units" },
+        "end": { "type": "integer", "minimum": 1 },
+        "pointer": {
+          "type": "string",
+          "description": "RFC 6901 JSON Pointer to the string the offsets are in, for a JSON item."
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "resource", "format", "class", "severity", "count", "occurrences", "confidence",
+        "confidenceCounts", "via", "offsets", "offsetsTruncated", "link", "firstSeenAt",
+        "lastSeenAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "resource": { "$ref": "#/$defs/resource" },
+        "format": {
+          "enum": [
+            "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
+            "connect_flow_log"
+          ]
+        },
+        "class": { "$ref": "#/$defs/class" },
+        "severity": { "enum": ["high", "medium", "low"] },
+        "count": { "type": "integer", "minimum": 0, "description": "Distinct values" },
+        "occurrences": { "type": "integer", "minimum": 1 },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "confidenceCounts": {
+          "type": "object",
+          "propertyNames": { "enum": ["high", "medium", "low"] },
+          "additionalProperties": { "type": "integer", "minimum": 1 }
+        },
+        "via": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["prompt", "shape", "context"] }
+        },
+        "offsets": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/offset" } },
+        "offsetsTruncated": { "type": "boolean" },
+        "link": {
+          "description": "A deep link into the account's own AWS console, or null when the name had to be masked.",
+          "type": ["string", "null"],
+          "pattern": "^https://[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/"
+        },
+        "connect": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "contactId": { "type": "string", "maxLength": 64 },
+            "instanceId": { "type": "string", "maxLength": 64 }
+          }
+        },
+        "firstSeenAt": { "type": "string", "format": "date-time" },
+        "lastSeenAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "target", "listed", "eligible", "scanned", "sampledOut", "samplePercent",
+        "partial", "unreadable", "bytesScanned", "skipped", "formats", "testValues",
+        "suppressed", "redactionMarkers", "passComplete", "backlog", "error"
+      ],
+      "properties": {
+        "kind": { "enum": ["s3", "cloudwatch_logs"] },
+        "target": { "$ref": "#/$defs/maskedName" },
+        "listed": { "type": "integer", "minimum": 0 },
+        "eligible": { "type": "integer", "minimum": 0 },
+        "scanned": { "type": "integer", "minimum": 0 },
+        "sampledOut": { "type": "integer", "minimum": 0 },
+        "samplePercent": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "partial": { "type": "integer", "minimum": 0 },
+        "unreadable": { "type": "integer", "minimum": 0 },
+        "bytesScanned": { "type": "integer", "minimum": 0 },
+        "skipped": {
+          "type": "object",
+          "propertyNames": { "enum": ["audio", "video", "image", "document", "archive", "binary"] },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "formats": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "testValues": { "type": "integer", "minimum": 0 },
+        "suppressed": { "type": "integer", "minimum": 0 },
+        "redactionMarkers": { "type": "integer", "minimum": 0 },
+        "passComplete": { "type": "boolean" },
+        "backlog": { "type": "boolean" },
+        "error": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._:-]{1,80}$" }
+      }
+    }
+  }
+}

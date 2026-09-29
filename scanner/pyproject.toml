@@ -7,13 +7,16 @@ license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [{ name = "txp-labs, LLC" }]
 dependencies = [
+    "boto3>=1.40",
     "presidio-analyzer>=2.2.364,<2.3",
     "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
 dev = [
+  "boto3-stubs[events,logs,s3]>=1.40",
   "jsonschema>=4.26.0",
+  "moto[events,logs,s3]>=5.1",
   "mypy>=1.18",
   "pytest>=8.4",
   "ruff>=0.13",
@@ -35,6 +38,7 @@ packages = ["src/sensitive_data_scanner"]
 "../LICENSE" = "sensitive_data_scanner/LICENSE"
 "../NOTICE" = "sensitive_data_scanner/NOTICE"
 "../third_party/presidio/LICENSE" = "sensitive_data_scanner/third_party/presidio/LICENSE"
+"../schema/findings.schema.json" = "sensitive_data_scanner/schema/findings.schema.json"
 
 [tool.ruff]
 line-length = 100
@@ -48,7 +52,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sensitive_data_scanner", "conftest", "synthetic"]
+known-first-party = ["sensitive_data_scanner", "conftest", "synthetic", "aws_fixtures"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLC0415"]
