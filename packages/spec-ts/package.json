@@ -1,0 +1,24 @@
+{
+  "name": "@txp-labs/sensitive-data-spec",
+  "version": "0.0.0",
+  "description": "The sensitive-data spec (classes, normalization, prompt carryover) for in-memory redaction of conversation turns.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/txp-labs/sensitive-data-scanner.git",
+    "directory": "packages/spec-ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "typescript": "7.0.2"
+  }
+}
