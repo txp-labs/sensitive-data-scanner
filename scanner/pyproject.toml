@@ -14,9 +14,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "boto3-stubs[events,logs,s3]>=1.40",
+  "boto3-stubs[events,logs,s3]>=1.43.103",
   "jsonschema>=4.26.0",
-  "moto[events,logs,s3]>=5.1",
+  "moto[events,logs,s3]>=5.2.3",
   "mypy>=1.18",
   "pytest>=8.4",
   "ruff>=0.13",
@@ -28,7 +28,7 @@ lambda = [
 ]
 
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.32.4"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
