@@ -36,7 +36,7 @@
   "$defs": {
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "maskedName": {
-      "description": "A name from the account (bucket, key, log group or stream). Any run that could be a card number or an SSN is masked with '#'.",
+      "description": "A name from the account (bucket, key, log group or stream, DynamoDB key value or attribute path). Any run that could be a card number or an SSN is masked with '#'.",
       "type": "string",
       "maxLength": 1024
     },
@@ -64,6 +64,34 @@
             "logStream": { "$ref": "#/$defs/maskedName" },
             "timestamp": { "type": "integer", "minimum": 0 },
             "nameMasked": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "table", "keyHash", "key", "attributePath"],
+          "properties": {
+            "type": { "const": "dynamodb_item" },
+            "table": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{3,255}$" },
+            "keyHash": {
+              "description": "HMAC-SHA256 of the item's key under a salt kept in the scanner's state: stable across runs, never the key.",
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "key": {
+              "description": "The item's key attributes, each value masked like an S3 object key.",
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/maskedName" }
+            },
+            "attributePath": {
+              "description": "The attribute the values are in, with [] for every list element (stepResults[].observedDtmf). The offsets' pointers name the exact element.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "keyMasked": { "const": true },
+            "planted": {
+              "description": "The path is configured as planted test input (a test script's steps), not a leak.",
+              "const": true
+            }
           }
         }
       ]
@@ -95,7 +123,7 @@
         "format": {
           "enum": [
             "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
-            "connect_flow_log"
+            "connect_flow_log", "dynamodb_item"
           ]
         },
         "class": { "$ref": "#/$defs/class" },
@@ -142,7 +170,7 @@
         "suppressed", "redactionMarkers", "passComplete", "backlog", "error"
       ],
       "properties": {
-        "kind": { "enum": ["s3", "cloudwatch_logs"] },
+        "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb"] },
         "target": { "$ref": "#/$defs/maskedName" },
         "listed": { "type": "integer", "minimum": 0 },
         "eligible": { "type": "integer", "minimum": 0 },

@@ -1,7 +1,8 @@
 # sensitive-data-scanner
 
 Find card numbers, US Social Security numbers and other sensitive data in your
-own cloud storage and logs, **without the data ever leaving your account**.
+own cloud storage, logs and tables, **without the data ever leaving your
+account**.
 
 > **Status: 0.1.0, tested and not yet run against real AWS.**
 > - **Proven by tests:** detection, the AWS adapters (against moto), the
@@ -12,12 +13,14 @@ own cloud storage and logs, **without the data ever leaving your account**.
 ## What it does
 
 The scanner runs **inside the cloud account it scans**. It reads the stores
-you name (buckets and prefixes, log groups), looks for sensitive data, and
+you name (buckets and prefixes, log groups, DynamoDB tables), looks for
+sensitive data, and
 writes **findings only** to a results store in the same account:
 
 - the kind of data (card number, US SSN, date of birth, and more);
-- where it was found: account, region, object and version, or log group,
-  stream and time, and the Amazon Connect contact;
+- where it was found: account, region, object and version; log group,
+  stream and time; or DynamoDB table, a hash of the item's key and the
+  attribute path; and the Amazon Connect contact;
 - how many, how confident, and where in the item (offsets);
 - how much was scanned, sampled or skipped.
 
@@ -49,8 +52,11 @@ Detection uses [Microsoft Presidio](https://github.com/microsoft/presidio)
   whatever its shape. A Luhn-failing entry right after a card prompt is
   still a card, with low confidence.
 - **Source adapters:** S3 (with Amazon Connect chat and Contact Lens
-  transcripts and Lex logs), and CloudWatch Logs (Connect flow logs, Lex V2
-  conversation logs, Lambda logs). Azure and Google Cloud come later.
+  transcripts and Lex logs), CloudWatch Logs (Connect flow logs, Lex V2
+  conversation logs, Lambda logs), and DynamoDB (a paginated Query or Scan,
+  read attribute by attribute; keypad entries are read after the prompt
+  that asked for them, and planted test inputs are told apart from leaks).
+  Azure and Google Cloud come later.
 - **The findings contract:** a documented, versioned schema
   ([docs/FINDINGS.md](docs/FINDINGS.md)), so any tool can consume the
   results.
@@ -84,6 +90,8 @@ RESULTS_BUCKET=my-scanner-results
 SCAN_BUCKETS=amazon-connect-1a2b3c
 SCAN_PREFIXES=amazon-connect-1a2b3c/connect/my-instance/
 SCAN_LOG_GROUPS=/aws/connect/my-instance,/aws/lex/PaymentBot
+# optional: DynamoDB tables, as JSON (see docs/ARCHITECTURE.md)
+SCAN_DYNAMODB='[{"table":"call-tests","partition":"T#t_123","sortPrefix":"R#","include":["stepResults[].observedDtmf","stepResults[].heard","steps"],"keypad":["stepResults[].observedDtmf","steps[].digits"],"prompts":["stepResults[].heard","steps[].text"],"planted":["steps"]}]'
 # optional: push findings to your own EventBridge bus as they are written
 FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
 ```
@@ -137,7 +145,7 @@ not on npm yet.
 |---|---|
 | `spec/`, `vectors/` | The spec (classes, normalization) and the synthetic test vectors |
 | `packages/spec-ts/` | The TypeScript package |
-| `scanner/` | The Python runner: Presidio recognizers, AWS adapters, findings |
+| `scanner/` | The Python runner: Presidio recognizers, AWS adapters (S3, CloudWatch Logs, DynamoDB), findings |
 | `schema/` | The findings JSON Schema |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [findings](docs/FINDINGS.md), [releasing](docs/RELEASING.md) |
 

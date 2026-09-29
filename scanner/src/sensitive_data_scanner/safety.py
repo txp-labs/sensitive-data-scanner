@@ -50,6 +50,7 @@ EVENTS: Final = frozenset(
         "source.failed",
         "item.unreadable",
         "finding.gone",
+        "source.throttled",
         "state.reset",
         "events.sent",
         "events.failed",

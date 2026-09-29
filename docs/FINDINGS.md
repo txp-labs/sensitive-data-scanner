@@ -112,16 +112,49 @@ One class of data at one location.
 | Field | Meaning |
 |---|---|
 | `id` | A stable hash of the resource and class. It stays the same across runs for the same location (and object version). Key triage decisions on it. |
-| `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). |
+| `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). `dynamodb_item`: `table`, `keyHash`, `key` and `attributePath` (below). |
 | `connect` | The Amazon Connect contact and instance, when the item names one: a chat or Contact Lens transcript, or a flow log event. |
-| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv` or `text`. |
+| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text` or `dynamodb_item`. |
 | `class`, `severity` | The spec class (`card`, `us_ssn`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
 | `count` | Distinct values of the class in the item. The same card read out by a caller and read back by the agent counts once. |
 | `occurrences` | Every place a value appears in the item. |
 | `confidence` | The highest confidence among the occurrences; `confidenceCounts` gives them all. |
 | `via` | How the values were found: `prompt` (a bot or agent asked for this class), `context` (a context word was nearby) or `shape` (the value alone looks like it). |
 | `offsets` | Where each occurrence is, at most 50 (`offsetsTruncated` says if more exist). `start` and `end` are UTF-16 code units. For a JSON item, `pointer` (RFC 6901) names the string they are in. A value split across a caller's turns has one offset per turn. |
-| `link` | A deep link into the account's own AWS console: the S3 object version, or the log event. A reviewer follows it with their own access. It is `null` when the key had to be masked. |
+| `link` | A deep link into the account's own AWS console: the S3 object version, the log event, or the DynamoDB table's item explorer (it names no key; query by the masked key). A reviewer follows it with their own access. It is `null` when the key had to be masked. |
+
+### A DynamoDB finding
+
+One class of data in one attribute path of one item:
+
+```json
+{
+  "resource": {
+    "type": "dynamodb_item",
+    "table": "stugum",
+    "keyHash": "3f1c…(64 hex)",
+    "key": { "pk": "T#t_0123abcd", "sk": "R#2026-09-29T15:00:00Z#r_0123" },
+    "attributePath": "stepResults[].observedDtmf"
+  },
+  "format": "dynamodb_item",
+  "class": "us_ssn",
+  "via": ["prompt"],
+  "offsets": [{ "pointer": "/stepResults/3/observedDtmf", "start": 0, "end": 9 }],
+  "link": "https://us-west-2.console.aws.amazon.com/dynamodbv2/home?region=us-west-2#item-explorer?table=stugum"
+}
+```
+
+(Other fields as above.)
+
+| Field | Meaning |
+|---|---|
+| `keyHash` | HMAC-SHA256 of the item's key under a random salt in the scanner's state. Stable across runs; never the key. |
+| `key` | The key attributes, each value masked like an S3 object key; `keyMasked: true` when anything was masked. |
+| `attributePath` | The attribute, with `[]` for every list element. Each offset's `pointer` names the exact element. Findings in different paths are different findings. |
+| `planted` | `true` when the path is configured as planted test input (a test script's steps), not a leak. |
+
+The DynamoDB resource, format and coverage kind are additive in schema 1.0:
+they appear only when a DynamoDB source is configured.
 
 ### Names are masked
 
@@ -133,8 +166,8 @@ be a card number or an SSN is replaced with `#`:
 - any run of 13 or more digits.
 
 The resource then carries `keyMasked: true` (or `nameMasked: true`). Object
-keys, log stream names, source targets and error names all go through the
-same masking.
+keys, log stream names, DynamoDB key values and attribute paths, source
+targets and error names all go through the same masking.
 
 ### Coverage
 
@@ -142,8 +175,8 @@ One entry per source says what was, and was not, read:
 
 | Field | Meaning |
 |---|---|
-| `kind`, `target` | `s3` with `bucket/prefix`, or `cloudwatch_logs` with the log group |
-| `listed`, `eligible`, `scanned` | Objects listed or events returned; the new or changed ones; the ones read this run |
+| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, or `dynamodb` with the table (`<table> (query)` for a partition Query) |
+| `listed`, `eligible`, `scanned` | Objects listed, events returned, or DynamoDB items evaluated (`ScannedCount`); the new or changed ones (for DynamoDB, the items returned); the ones read this run |
 | `sampledOut`, `samplePercent` | Left out by sampling. Sampling is stated, never silent |
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
 | `unreadable` | Listed but could not be read (a KMS key the scanner may not use, or an object deleted mid-run) |
@@ -152,7 +185,7 @@ One entry per source says what was, and was not, read:
 | `formats` | Items by format |
 | `testValues` | Published test card numbers and sample SSNs, set apart and never findings |
 | `suppressed` | Numbers next to a word like "order" or "phone", with no card word |
-| `redactionMarkers` | Contact Lens and Comprehend markers (`[PII]`, `[SSN]`, …): redaction at work, not a finding |
+| `redactionMarkers` | Contact Lens and Comprehend markers (`[PII]`, `[SSN]`, …) and `[REDACTED]` / `[REDACTED:<label>]` labels: redaction at work, not a finding |
 | `passComplete`, `backlog` | Whether everything eligible has been read, or work carries over to the next run |
 | `error` | The AWS error name when the source could not be read (`AccessDenied`, `NoSuchBucket`), else `null` |
 

@@ -37,6 +37,9 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
             s3=boto3.client("s3", region_name=region),
             logs=boto3.client("logs", region_name=region),
             events=boto3.client("events", region_name=region) if config.event_bus_arn else None,
+            dynamodb=(
+                boto3.client("dynamodb", region_name=region) if config.dynamodb_targets else None
+            ),
         )
         doc = run_scan(
             config,

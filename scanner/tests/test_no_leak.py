@@ -1,8 +1,10 @@
 """No value leaves: not in findings, events, logs, exception messages or reprs.
 
 Every vector is scanned end to end (as an S3 object and as log events),
-along with #1067's synthetic values in every stored form, and every output is
-searched for every candidate value. A second set of tests audits the source:
+along with #1067's synthetic values in every stored form, and the DynamoDB
+fixtures (positive and negative controls, and items whose key holds a
+value) through the DynamoDB source. Every output is searched for every
+candidate value. A second set of tests audits the source:
 the only log call is `safety.log_event` with a fixed event name, and no
 exception carries a message from below.
 """
@@ -20,13 +22,16 @@ import pytest
 
 from aws_fixtures import RESULTS, Env, config, epoch_ms
 from conftest import all_conversation_vectors, turns_of
+from ddb_fixtures import FIXTURES, Ddb, load_item, page, target
 from sensitive_data_scanner import safety
 from sensitive_data_scanner.detect.analyzer import Detector
 from sensitive_data_scanner.engine.conversation import classify
 from sensitive_data_scanner.engine.normalize import normalize
 from sensitive_data_scanner.engine.spec import load_spec
 from sensitive_data_scanner.safety import ScanError, redact_digits
+from sensitive_data_scanner.scan.attributes import AttributeRules, scan_attributes
 from sensitive_data_scanner.scan.item import scan_item_text
+from sensitive_data_scanner.scan.paths import parse_path
 from synthetic import CARDS, SSN_A, SSN_B, all_values, dashed, printed, spaced, spoken_groups
 
 SPEC = load_spec()
@@ -45,6 +50,8 @@ def candidates() -> set[str]:
                 for m in re.finditer(r"[0-9](?:[ -]?[0-9]){5,}", text):
                     out.add(m[0])
                     out.add(re.sub(r"[ -]", "", m[0]))
+    for path in FIXTURES.glob("*.json"):
+        out.update(m[0] for m in re.finditer(r"[0-9]{6,}", path.read_text()))
     return out
 
 
@@ -144,6 +151,63 @@ def test_no_value_in_findings_events_or_logs(
             outputs[obj["Key"]] = data.decode()
     for name, blob in outputs.items():
         assert leaks(blob) == [], name
+
+
+def ddb_items() -> list[dict[str, Any]]:
+    """The positive and negative controls, and the positive one keyed by a card and an SSN."""
+    keyed = load_item("stugum-positive")
+    keyed["pk"] = {"S": f"CUST#{SSN_B}"}
+    keyed["sk"] = {"S": f"CARD#{CARDS['mastercard']}"}
+    return [load_item("stugum-positive"), load_item("stugum-negative"), keyed]
+
+
+def test_no_value_leaves_the_dynamodb_source(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+
+    ddb = Ddb()
+    ddb.describe()
+    ddb.error("query", "ProvisionedThroughputExceededException")  # a throttle is logged
+    ddb.query(page(ddb_items()))
+    env.clients.dynamodb = ddb.client
+    sent: list[dict[str, Any]] = []
+
+    class Bus:
+        def put_events(self, Entries: list[dict[str, Any]]) -> dict[str, Any]:
+            sent.extend(Entries)
+            return {"FailedEntryCount": 0}
+
+    env.clients.events = Bus()  # type: ignore[assignment]
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(s3_targets=[], dynamodb_targets=[target()], event_bus_arn="arn:aws:events:x:1:b/c")
+    )
+    assert doc is not None
+    assert doc["findingsTotal"] >= 12  # both keyed items, steps and stepResults, three classes
+    outputs = {
+        "findings/latest.json": json.dumps(env.latest()),
+        "events": json.dumps(sent),
+        "stdout+stderr": "".join(capsys.readouterr()),
+        "log records": "\n".join(r.getMessage() for r in caplog.records),
+    }
+    for name, blob in outputs.items():
+        assert leaks(blob) == [], name
+    detector = __import__("aws_fixtures").shared_detector()
+    rules = AttributeRules(
+        keypad=(parse_path("stepResults[].observedDtmf"), parse_path("steps[].digits")),
+        prompts=(parse_path("stepResults[].heard"), parse_path("steps[].text")),
+    )
+    results = [scan_attributes(item, detector, rules) for item in ddb_items()]
+    assert results[0].by_path  # the positive control was found
+    blobs = [repr(r) + repr(list(r.by_path.values())) for r in results]
+    assert leaks("\n".join(blobs)) == []
+
+
+def test_ddb_candidates_hold_the_fixture_values() -> None:
+    assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 
 
 def test_a_value_in_an_object_key_is_masked(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
