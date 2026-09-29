@@ -25,6 +25,8 @@ Metadata:
         Parameters: [OpenSearchServerlessRead]
       - Label: { default: EBS snapshots (opt-in block reads) }
         Parameters: [EbsDirectRead]
+      - Label: { default: SQS dead-letter queues (opt-in receives) }
+        Parameters: [SqsDlqRead]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -53,7 +55,8 @@ Parameters:
     Default: all
     Description: >-
       DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
-      opensearch, documentdb, neptune, ebs, backup, efs, fsx.
+      opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
+      firehose, sqs.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -136,6 +139,14 @@ Parameters:
       EBS_DIRECT_READ - sample each volume's latest snapshot with the EBS
       direct APIs (ListSnapshotBlocks, GetSnapshotBlock): no volume is created
       or attached. Off: volumes and snapshots are discovered and reported.
+  SqsDlqRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      SQS_DLQ_READ - receive from dead-letter queues with VisibilityTimeout=0,
+      never deleting. A receive raises each message's receive count, so a DLQ
+      with its own redrive policy is never read. Live queues are never read.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -175,6 +186,7 @@ Conditions:
   RedshiftDbUserMode: !Equals [!Ref RedshiftRead, db-user]
   OpenSearchServerless: !Equals [!Ref OpenSearchServerlessRead, "true"]
   EbsRead: !Equals [!Ref EbsDirectRead, "true"]
+  SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
 
 Resources:
   ResultsBucket:
@@ -375,6 +387,40 @@ Resources:
                         - !Sub ebs.${AWS::Region}.amazonaws.com
                         - !Sub ec2.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
+              # --- Streams and queues: Kinesis sampled (never checkpointed), Firehose
+              # destinations read as S3, SQS listed (dead-letter queues opt-in below)
+              - Sid: ReadStreamsAndListQueues
+                Effect: Allow
+                Action:
+                  - kinesis:ListStreams
+                  - kinesis:ListShards
+                  - kinesis:ListTagsForStream
+                  - kinesis:GetShardIterator
+                  - kinesis:GetRecords
+                  - firehose:ListDeliveryStreams
+                  - firehose:DescribeDeliveryStream
+                  - firehose:ListTagsForDeliveryStream
+                  - sqs:ListQueues
+                  - sqs:GetQueueAttributes
+                  - sqs:ListQueueTags
+                Resource: "*"
+              - !If
+                - SqsDlq
+                - Sid: ReceiveFromDeadLetterQueues
+                  Effect: Allow
+                  Action: sqs:ReceiveMessage
+                  Resource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*
+                - !Ref AWS::NoValue
+              - !If
+                - SqsDlq
+                - Sid: DecryptQueuesThroughSqs
+                  Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub sqs.${AWS::Region}.amazonaws.com
+                - !Ref AWS::NoValue
               # --- Push findings to the central sink
               - !If
                 - HasBus
@@ -395,6 +441,7 @@ Resources:
                       kms:ViaService:
                         - !Sub s3.${AWS::Region}.amazonaws.com
                         - !Sub dynamodb.${AWS::Region}.amazonaws.com
+                        - !Sub kinesis.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
               # --- Defense in depth: never write anywhere else, never escalate
               - Sid: NoWritesOutsideOwnBucket
@@ -493,6 +540,30 @@ Resources:
                   - docdb-elastic:Create*
                   - docdb-elastic:Delete*
                   - docdb-elastic:Update*
+                  - kinesis:PutRecord*
+                  - kinesis:Create*
+                  - kinesis:Delete*
+                  - kinesis:Update*
+                  - kinesis:MergeShards
+                  - kinesis:SplitShard
+                  - kinesis:RegisterStreamConsumer
+                  - kinesis:*StreamEncryption
+                  - kinesis:*RetentionPeriod
+                  - firehose:Create*
+                  - firehose:Delete*
+                  - firehose:Update*
+                  - firehose:Put*
+                  - firehose:Start*
+                  - firehose:Stop*
+                  - sqs:DeleteMessage*
+                  - sqs:ChangeMessageVisibility*
+                  - sqs:SendMessage*
+                  - sqs:PurgeQueue
+                  - sqs:SetQueueAttributes
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:StartMessageMoveTask
+                  - sqs:CancelMessageMoveTask
                 Resource: "*"
               - Sid: NeverAskLakeFormation
                 Effect: Deny
@@ -707,6 +778,7 @@ Resources:
           REDSHIFT_DB_USER: !Ref RedshiftDbUser
           OPENSEARCH_SERVERLESS_READ: !Ref OpenSearchServerlessRead
           EBS_DIRECT_READ: !Ref EbsDirectRead
+          SQS_DLQ_READ: !Ref SqsDlqRead
 
   ScheduleRole:
     Type: AWS::IAM::Role

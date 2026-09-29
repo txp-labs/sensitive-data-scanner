@@ -73,17 +73,30 @@ bumps the minor version. Spec changes are listed under **Spec**.
     `neptune`): reported as `no_snapshot_export`.
   - EFS and FSx (`efs`, `fsx`): reported as `needs_task`; the opt-in Fargate
     file-system task is designed in docs/ARCHITECTURE.md, not built.
+- Streams and queues ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - Kinesis Data Streams (`kinesis`): each shard sampled from `TRIM_HORIZON`
+    (`KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS`), never checkpointed:
+    no lease, no sequence number kept.
+  - Firehose (`firehose`): every S3 location a delivery stream writes to
+    (destination, error output, backup) is read by the S3 source, once; the
+    bucket's own source leaves those prefixes to it.
+  - SQS (`sqs`): dead-letter queues only, opt-in (`SQS_DLQ_READ`), received
+    with `VisibilityTimeout=0` and never deleted; a DLQ with its own redrive
+    policy is never read (`redrive_would_change`), and live queues never
+    (`live_queue`).
 - The adapter interface (`sources/base.py`, `Adapter`) and the generic
   sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
   discovery, the budget and the run summary through them, with no cloud in
   the core. The RDS Data API mode now runs on the same SQL pass.
 - Findings schema **1.3** (additive): the `store_field` resource, the
-  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`
-  and `fsx` kinds, the `block` format, the store reasons
-  `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
-  `no_snapshot_export`, `needs_task`, `backup_copy` and `archived`, and the
-  store fields `deployment`, `database`, `state`, `resource`,
-  `olderSnapshots`, `recoveryPoints` and `fileSystemType`.
+  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`,
+  `fsx`, `kinesis`, `firehose` and `sqs` kinds, the `block` format, the store
+  reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
+  `live_queue`, `redrive_would_change` and `no_s3_destination`, and the store
+  fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
+  `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue` and
+  `approximateMessages`.
 - `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
   describe permissions, and, only when reading, the Data API on this
   account's clusters and workgroups, its own statements only, and the
@@ -94,7 +107,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   collections. Snapshots, backups and file systems: describe and list, and,
   only with `EbsDirectRead`, `ebs:ListSnapshotBlocks`/`GetSnapshotBlock` on
   this region's snapshots and `kms:Decrypt` through EBS; every snapshot,
-  volume, backup and file-system write is denied.
+  volume, backup and file-system write is denied. Streams and queues: list,
+  describe and Kinesis `GetShardIterator`/`GetRecords`; `kms:Decrypt` through
+  Kinesis; only with `SqsDlqRead`, `sqs:ReceiveMessage` and `kms:Decrypt`
+  through SQS; message deletes, visibility changes, sends, purges and every
+  stream and queue write are denied.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.

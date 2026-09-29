@@ -631,6 +631,108 @@ def test_no_value_leaves_snapshots_backups_or_clusters(
         assert leaks(blob) == [], name_
 
 
+def test_no_value_leaves_streams_or_queues(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Kinesis stream, a Firehose stream and its prefix, and a dead-letter queue, named with
+    values and carrying values."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_streams import describe, stubs
+
+    s = stubs(env, "kinesis", "firehose", "sqs")
+    stream = f"clicks-{SSN_A}"
+    s["kinesis"].add_response(
+        "list_streams",
+        {
+            "StreamNames": [stream],
+            "HasMoreStreams": False,
+            "StreamSummaries": [
+                {"StreamName": stream, "StreamARN": "arn:k", "StreamStatus": "ACTIVE"}
+            ],
+        },
+    )
+    s["kinesis"].add_response(
+        "list_shards",
+        {
+            "Shards": [
+                {
+                    "ShardId": "shardId-000000000000",
+                    "HashKeyRange": {"StartingHashKey": "0", "EndingHashKey": "1"},
+                    "SequenceNumberRange": {"StartingSequenceNumber": "1"},
+                }
+            ]
+        },
+    )
+    s["kinesis"].add_response("get_shard_iterator", {"ShardIterator": "it"})
+    data = json.dumps({f"k_{CARDS['mir']}": CARDS["visa"], "ssn": dashed(SSN_B)}).encode()
+    s["kinesis"].add_response(
+        "get_records",
+        {"Records": [{"SequenceNumber": "1", "Data": data, "PartitionKey": SSN_A}]},
+    )
+    env.put(f"fh/{SSN_B}/part-1", json.dumps({"card": CARDS["jcb"]}))
+    s["firehose"].add_response(
+        "list_delivery_streams",
+        {"DeliveryStreamNames": [f"fh-{SSN_B}"], "HasMoreDeliveryStreams": False},
+    )
+    s["firehose"].add_response(
+        "describe_delivery_stream",
+        describe(
+            f"fh-{SSN_B}",
+            [
+                {
+                    "DestinationId": "d",
+                    "S3DestinationDescription": {
+                        "BucketARN": f"arn:aws:s3:::{DATA}",
+                        "Prefix": f"fh/{SSN_B}/",
+                        "RoleARN": "arn:aws:iam::123456789012:role/r",
+                        "BufferingHints": {},
+                        "CompressionFormat": "UNCOMPRESSED",
+                        "EncryptionConfiguration": {},
+                    },
+                }
+            ],
+        ),
+    )
+    dlq = f"dlq-{CARDS['amex']}"
+    url = f"https://sqs.us-west-2.amazonaws.com/123456789012/{dlq}"
+    src = "https://sqs.us-west-2.amazonaws.com/123456789012/src"
+    s["sqs"].add_response("list_queues", {"QueueUrls": [url, src]})
+    s["sqs"].add_response(
+        "get_queue_attributes", {"Attributes": {"QueueArn": f"arn:aws:sqs:us-west-2:1:{dlq}"}}
+    )
+    s["sqs"].add_response(
+        "get_queue_attributes",
+        {
+            "Attributes": {
+                "QueueArn": "arn:aws:sqs:us-west-2:1:src",
+                "RedrivePolicy": json.dumps(
+                    {"deadLetterTargetArn": f"arn:aws:sqs:us-west-2:1:{dlq}"}
+                ),
+            }
+        },
+    )
+    body = json.dumps({"pan": CARDS["discover"], "dob": "DOB 7/4/1981", "n": SSN_A})
+    s["sqs"].add_response("receive_message", {"Messages": [{"MessageId": SSN_B, "Body": body}]})
+    s["sqs"].add_response("receive_message", {"Messages": []})
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"kinesis", "firehose", "sqs"}),
+            sqs_dlq_read=True,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    services = {f["resource"].get("service", f["resource"]["type"]) for f in doc["findings"]}
+    assert services == {"kinesis", "sqs", "s3_object"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

@@ -40,7 +40,7 @@
       "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3).",
       "enum": [
         "s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift", "opensearch",
-        "documentdb", "neptune", "ebs", "backup", "efs", "fsx"
+        "documentdb", "neptune", "ebs", "backup", "efs", "fsx", "kinesis", "firehose", "sqs"
       ]
     },
     "maskedName": {
@@ -295,7 +295,8 @@
         "kms_access", "access_denied", "lake_formation", "tags_unreadable", "budget", "error",
         "export_not_configured", "export_pending", "export_failed", "no_snapshot", "pitr_off",
         "read_not_configured", "paused", "no_grant", "vpc_only", "no_snapshot_export",
-        "needs_task", "backup_copy", "archived"
+        "needs_task", "backup_copy", "archived", "live_queue", "redrive_would_change",
+        "no_s3_destination"
       ]
     },
     "discovery": {
@@ -362,6 +363,22 @@
                 "type": "object",
                 "propertyNames": { "pattern": "^[A-Za-z0-9]{1,40}$" },
                 "additionalProperties": { "type": "integer", "minimum": 0 }
+              },
+              "destinations": {
+                "description": "Firehose: where the delivery stream delivers (1.3). Its S3 locations are read; Redshift and OpenSearch by their own kinds.",
+                "type": "array",
+                "items": {
+                  "enum": ["S3", "Redshift", "OpenSearch", "Splunk", "HttpEndpoint", "Snowflake", "Iceberg"]
+                }
+              },
+              "deadLetterQueue": {
+                "description": "SQS: another queue's redrive policy points at this one (1.3).",
+                "const": true
+              },
+              "approximateMessages": {
+                "description": "SQS: ApproximateNumberOfMessages when listed (1.3).",
+                "type": "integer",
+                "minimum": 0
               },
               "fileSystemType": {
                 "description": "FSx: LUSTRE, WINDOWS, ONTAP or OPENZFS (1.3).",
