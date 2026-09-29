@@ -8,9 +8,9 @@ never calls in.
 
 Each event: `source` "sensitive-data-scanner", `detail-type` "Findings v1",
 and a `detail` that is a findings document (the same schema as
-findings/latest.json) holding a slice of the run's findings. An event stays
-under EventBridge's 256 KB limit; a run with more findings sends several,
-numbered by `part` and `parts`.
+findings/latest.json) holding a slice of the run's findings, coverage and
+discovered stores. An event stays under EventBridge's 256 KB limit; a larger
+run sends several, numbered by `part` and `parts`.
 """
 
 from __future__ import annotations
@@ -29,19 +29,43 @@ MAX_ENTRIES_PER_CALL = 10
 
 
 def event_details(document: dict[str, Any]) -> list[dict[str, Any]]:
-    """The document split into event details, each under the size limit."""
-    base = {k: v for k, v in document.items() if k != "findings"}
-    chunks: list[list[dict[str, Any]]] = [[]]
-    size = len(json.dumps(base))
-    for f in document["findings"]:
-        n = len(json.dumps(f)) + 1
+    """The document split into event details, each under the size limit.
+
+    `findings`, `coverage` and the discovery summary's `stores` are the lists
+    that grow with the estate; each is split across the parts, and the union
+    of the parts is the document. Everything else is repeated in every part.
+    """
+    discovery = document.get("discovery")
+    base = {k: v for k, v in document.items() if k not in ("findings", "coverage", "discovery")}
+    head = dict(discovery, stores=[]) if isinstance(discovery, dict) else None
+    fixed = len(json.dumps(base)) + (len(json.dumps(head)) if head is not None else 0) + 64
+    entries: list[tuple[str, Any]] = [("findings", f) for f in document.get("findings", [])]
+    entries += [("coverage", c) for c in document.get("coverage", [])]
+    if isinstance(discovery, dict):
+        entries += [("stores", s) for s in discovery.get("stores", [])]
+    chunks: list[list[tuple[str, Any]]] = [[]]
+    size = fixed
+    for entry in entries:
+        n = len(json.dumps(entry[1])) + 1
         if chunks[-1] and size + n > MAX_DETAIL_BYTES:
             chunks.append([])
-            size = len(json.dumps(base))
-        chunks[-1].append(f)
+            size = fixed
+        chunks[-1].append(entry)
         size += n
     parts = len(chunks)
-    return [{**base, "part": i + 1, "parts": parts, "findings": c} for i, c in enumerate(chunks)]
+    out = []
+    for i, chunk in enumerate(chunks):
+        detail: dict[str, Any] = {
+            **base,
+            "part": i + 1,
+            "parts": parts,
+            "findings": [v for k, v in chunk if k == "findings"],
+            "coverage": [v for k, v in chunk if k == "coverage"],
+        }
+        if head is not None:
+            detail["discovery"] = dict(head, stores=[v for k, v in chunk if k == "stores"])
+        out.append(detail)
+    return out
 
 
 def put_findings_events(client: EventBridgeClient, bus_arn: str, document: dict[str, Any]) -> int:

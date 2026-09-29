@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.1,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.2,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -23,7 +23,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.1"
+FINDINGS_SCHEMA_VERSION = "1.2"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -105,9 +105,10 @@ def logs_link(region: str, group: str, stream: str, timestamp_ms: int) -> str:
 
 def s3_resource(bucket: str, key: str, version_id: str | None) -> dict[str, Any]:
     masked = redact_digits(key)
-    out: dict[str, Any] = {"type": "s3_object", "bucket": bucket, "key": masked}
+    masked_bucket = redact_digits(bucket)
+    out: dict[str, Any] = {"type": "s3_object", "bucket": masked_bucket, "key": masked}
     out["versionId"] = version_id or "null"
-    if masked != key:
+    if masked != key or masked_bucket != bucket:
         out["keyMasked"] = True
     return out
 
@@ -143,14 +144,15 @@ def dynamodb_resource(
     """An item by its key hash, with the key's values masked like an S3 object key."""
     masked = {name: redact_digits(value) for name, value in sorted(key.items())}
     path = redact_digits(attribute_path)
+    masked_table = redact_digits(table)
     out: dict[str, Any] = {
         "type": "dynamodb_item",
-        "table": table,
+        "table": masked_table,
         "keyHash": key_hash,
         "key": masked,
         "attributePath": path,
     }
-    if masked != dict(sorted(key.items())) or path != attribute_path:
+    if masked != dict(sorted(key.items())) or path != attribute_path or masked_table != table:
         out["keyMasked"] = True
     if planted:
         out["planted"] = True
@@ -187,7 +189,7 @@ def finding_json(
         "via": sorted(cf.via),
         "offsets": offsets,
         "offsetsTruncated": len(cf.offsets) > MAX_OFFSETS_PER_FINDING,
-        "link": link if resource.get("keyMasked") is not True else None,
+        "link": None if resource.get("keyMasked") or resource.get("nameMasked") else link,
         "firstSeenAt": first_seen_at or seen_at,
         "lastSeenAt": seen_at,
     }
@@ -218,10 +220,11 @@ class Coverage:
     pass_complete: bool = False
     backlog: bool = False
     error: str | None = None
+    kms_denied: int = 0
 
     def as_json(self) -> dict[str, Any]:
         d = asdict(self)
-        return {
+        out: dict[str, Any] = {
             "kind": d["kind"],
             "target": redact_digits(d["target"]),
             "listed": d["listed"],
@@ -241,6 +244,9 @@ class Coverage:
             "backlog": d["backlog"],
             "error": d["error"],
         }
+        if self.kms_denied:
+            out["kmsDenied"] = self.kms_denied
+        return out
 
 
 def findings_document(
@@ -253,13 +259,14 @@ def findings_document(
     classes: list[str],
     coverage: list[Coverage],
     findings: list[dict[str, Any]],
+    discovery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ranked = sorted(findings, key=lambda f: (-_CONF_RANK[f["severity"]], -f["count"], f["id"]))
     kept = ranked[:MAX_FINDINGS_IN_DOCUMENT]
     totals: dict[str, int] = {}
     for f in findings:
         totals[f["class"]] = totals.get(f["class"], 0) + f["count"]
-    return {
+    doc: dict[str, Any] = {
         "schema": FINDINGS_SCHEMA,
         "schemaVersion": FINDINGS_SCHEMA_VERSION,
         "scannerVersion": __version__,
@@ -276,3 +283,6 @@ def findings_document(
         "findingsTruncated": len(findings) > len(kept),
         "totals": dict(sorted(totals.items())),
     }
+    if discovery is not None:
+        doc["discovery"] = discovery
+    return doc

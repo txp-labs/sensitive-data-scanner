@@ -13,9 +13,9 @@ account**.
 
 ## What it does
 
-The scanner runs **inside the cloud account it scans**. It reads the stores
-you name (buckets and prefixes, log groups, DynamoDB tables), looks for
-sensitive data, and
+The scanner runs **inside the cloud account it scans**. It **discovers** the
+stores in the account and region (S3 buckets, CloudWatch log groups,
+DynamoDB tables), or reads the ones you name, looks for sensitive data, and
 writes **findings only** to a results store in the same account:
 
 - the kind of data (card number, US SSN, date of birth, and more);
@@ -23,7 +23,9 @@ writes **findings only** to a results store in the same account:
   stream and time; or DynamoDB table, a hash of the item's key and the
   attribute path; and the Amazon Connect contact;
 - how many, how confident, and where in the item (offsets);
-- how much was scanned, sampled or skipped.
+- how much was scanned, sampled or skipped, and every store it did not read,
+  with the reason (denied, KMS access, too large, unsupported format, or
+  deferred to the next run by the budget).
 
 **It never records the values themselves.** No card number, SSN or other
 detected value is written to its results, events, logs or error messages. A
@@ -82,7 +84,8 @@ Every release publishes:
 The handler is `sensitive_data_scanner.handler.handler`. Schedule it with
 EventBridge Scheduler at least daily, and give it:
 
-- read-only access to the stores you name;
+- read-only access to the stores you name, or list and read access for
+  discovery;
 - write access to its own results bucket only.
 
 Configure it with environment variables, for example:
@@ -92,6 +95,10 @@ RESULTS_BUCKET=my-scanner-results
 SCAN_BUCKETS=amazon-connect-1a2b3c
 SCAN_PREFIXES=amazon-connect-1a2b3c/connect/my-instance/
 SCAN_LOG_GROUPS=/aws/connect/my-instance,/aws/lex/PaymentBot
+# or discover every bucket, log group and table in the account and region,
+# with overrides by name or tag
+DISCOVER=all
+DISCOVER_DENY=s3:*-cloudtrail,tag:sensitive-data-scan=off
 # optional: DynamoDB tables, as JSON (see docs/ARCHITECTURE.md)
 SCAN_DYNAMODB='[{"table":"stugum","partition":"T#t_0123abcd","sortPrefix":"RUN#","include":["stepResults[kind=sendDtmf].observedDtmf","stepResults[kind=waitForPrompt].observedText","steps","lastHeardText","errorMessage"],"keypad":["stepResults[kind=sendDtmf].observedDtmf","steps[kind=sendDtmf].digits"],"prompts":["stepResults[kind=waitForPrompt].observedText"],"planted":["steps"],"orderBy":"stepIndex"}]'
 # optional: push findings to your own EventBridge bus as they are written

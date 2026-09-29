@@ -1,4 +1,4 @@
-# Findings, schema version 1.1
+# Findings, schema version 1.2
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,10 +8,13 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.1"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.2"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
+- Version 1.2 adds discovery: the `discovery` run summary (every store, read
+  or not, and why), `kmsDenied` in coverage, and `#` in a masked bucket or
+  table name. All additive.
 
 ## Where findings go
 
@@ -44,7 +47,8 @@ the scanned account onto that bus:
 ```
 
 - The `detail` is a findings document (the same schema) holding a slice of
-  the run's findings.
+  the run's findings, coverage and discovered stores. The union of the
+  parts is the document.
 - Each event stays under EventBridge's 256 KB limit, so a large run is split:
   `part` counts from 1 up to `parts`.
 - The consumer's bus policy allows `events:PutEvents` from the scanned
@@ -57,7 +61,7 @@ the scanned account onto that bus:
 ```json
 {
   "schema": "sensitive-data-scanner.findings",
-  "schemaVersion": "1.1",
+  "schemaVersion": "1.2",
   "scannerVersion": "0.2.0",
   "specVersion": "0.1",
   "runId": "20260929T060000Z-1a2b3c4d",
@@ -70,7 +74,8 @@ the scanned account onto that bus:
   "findings": [ "…" ],
   "findingsTotal": 3,
   "findingsTruncated": false,
-  "totals": { "card": 2, "us_ssn": 1 }
+  "totals": { "card": 2, "us_ssn": 1 },
+  "discovery": { "…": "present when discovery is on (below)" }
 }
 ```
 
@@ -161,14 +166,16 @@ The DynamoDB resource, format and coverage kind are new in schema 1.1
 
 ### Names are masked
 
-In a bucket key, log group or log stream name, any run of digits that could
-be a card number or an SSN is replaced with `#`:
+In a bucket name or key, log group or log stream name, DynamoDB table name,
+or a discovered store's name, any run of digits that could be a card number
+or an SSN is replaced with `#`:
 
 - a Luhn-valid run of 13-19 digits;
 - a 3-2-4 or bare nine-digit run;
 - any run of 13 or more digits.
 
-The resource then carries `keyMasked: true` (or `nameMasked: true`). Object
+The resource then carries `keyMasked: true` (or `nameMasked: true`), and
+its `link` is `null`: a console link would carry the name unmasked. Object
 keys, log stream names, DynamoDB key values and attribute paths, source
 targets and error names all go through the same masking.
 
@@ -191,6 +198,48 @@ One entry per source says what was, and was not, read:
 | `redactionMarkers` | Contact Lens and Comprehend markers (`[PII]`, `[SSN]`, …) and `[REDACTED]` / `[REDACTED:<label>]` labels: redaction at work, not a finding |
 | `passComplete`, `backlog` | Whether everything eligible has been read, or work carries over to the next run |
 | `error` | The AWS error name when the source could not be read (`AccessDenied`, `NoSuchBucket`), else `null` |
+| `kmsDenied` | Items not read because the scanner may not use their KMS key (1.2; present when not zero) |
+
+### Discovery: the run summary (1.2)
+
+With discovery on (`DISCOVER`), the document carries `discovery`: every
+store in the account and region, discovered or named in the configuration,
+and what the run did with it. A store that was not read says why, so a
+coverage gap is visible rather than silent.
+
+```json
+"discovery": {
+  "stores": [
+    { "kind": "dynamodb", "name": "events", "origin": "discovery", "status": "skipped",
+      "reason": "too_large", "sizeBytes": 53687091200 },
+    { "kind": "s3", "name": "example-archive", "origin": "discovery", "status": "error",
+      "reason": "kms_access", "error": "AccessDenied", "gaps": { "kmsDenied": 12, "unreadable": 12 } },
+    { "kind": "s3", "name": "example-connect-data", "origin": "config", "status": "scanned" }
+  ],
+  "storesTotal": 3,
+  "storesTruncated": false,
+  "byStatus": { "error": 1, "scanned": 1, "skipped": 1 },
+  "byReason": { "kms_access": 1, "too_large": 1 },
+  "listErrors": {}
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `kind`, `name` | `s3`, `cloudwatch_logs` or `dynamodb`, and the store's name, masked like a key (`nameMasked: true`) |
+| `origin` | `discovery`, or `config` for a store named in the configuration |
+| `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `tags_unreadable`, `budget`, `error` |
+| `error` | The AWS error name, for `error` |
+| `sizeBytes` | The table's or log group's size, when AWS reports it |
+| `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
+| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat` |
+| `backlog` | More to read on the next run |
+| `logGroupClass`, `tableStatus` | Why an `unsupported` store is unsupported |
+
+`stores` lists the stores not read first, and holds at most 5,000
+(`storesTruncated`). `listErrors` names a listing that failed, by kind
+(`{"s3": "AccessDenied"}`).
 
 ## Versioning
 

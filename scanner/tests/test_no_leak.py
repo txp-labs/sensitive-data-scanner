@@ -204,6 +204,88 @@ def test_no_value_leaves_the_dynamodb_source(
     assert leaks("\n".join(blobs)) == []
 
 
+def test_no_value_leaves_discovery(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Stores whose very names hold a card number or an SSN, found by discovery, read,
+    denied and deferred: the summary, findings, events and logs mask every name."""
+    from botocore.stub import ANY
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from sensitive_data_scanner.config import store_rules
+
+    s3 = env.clients.s3
+    card_bucket = f"{CARDS['visa']}-exports"
+    denied_bucket = f"{SSN_A}-denied"
+    for b in (card_bucket, denied_bucket):
+        s3.create_bucket(Bucket=b, CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+    s3.put_object(Bucket=card_bucket, Key=f"k/{SSN_B}.txt", Body=f"card {CARDS['jcb']}".encode())
+    group = f"/app/cust-{SSN_B}"
+    t = epoch_ms(__import__("datetime").datetime.now(__import__("datetime").UTC)) - 3_600_000
+    env.log(group, f"stream-{CARDS['amex']}", [(t, f"ssn {dashed(SSN_A)}")])
+    table = f"orders-{CARDS['mastercard']}"
+    ddb = Ddb()
+    ddb.stub.add_response("list_tables", {"TableNames": [table]})
+    desc = {
+        "Table": {
+            "TableName": table,
+            "TableStatus": "ACTIVE",
+            "TableSizeBytes": 10,
+            "TableArn": f"arn:aws:dynamodb:us-west-2:123456789012:table/{table}",
+            "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+            "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+        }
+    }
+    ddb.stub.add_response("describe_table", desc)
+    ddb.stub.add_response("describe_table", desc)
+    ddb.stub.add_response(
+        "scan",
+        {
+            "Items": [{"pk": {"S": f"C#{CARDS['discover']}"}, "ssn": {"S": dashed(SSN_B)}}],
+            "Count": 1,
+            "ScannedCount": 1,
+        },
+        {"TableName": table, "Limit": ANY},
+    )
+    env.clients.dynamodb = ddb.client
+    sent: list[dict[str, Any]] = []
+
+    class Bus:
+        def put_events(self, Entries: list[dict[str, Any]]) -> dict[str, Any]:
+            sent.extend(Entries)
+            return {"FailedEntryCount": 0}
+
+    env.clients.events = Bus()  # type: ignore[assignment]
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"s3", "cloudwatch_logs", "dynamodb"}),
+            deny=store_rules(f"s3:{SSN_A}-*"),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert {f["resource"]["type"] for f in doc["findings"]} == {
+        "s3_object",
+        "log_event",
+        "dynamodb_item",
+    }
+    reasons = {s.get("reason") for s in doc["discovery"]["stores"]}
+    assert "denied" in reasons
+    assert sum(1 for s in doc["discovery"]["stores"] if s.get("nameMasked")) >= 4
+    outputs = {
+        "findings/latest.json": json.dumps(env.latest()),
+        "events": json.dumps(sent),
+        "stdout+stderr": "".join(capsys.readouterr()),
+        "log records": "\n".join(r.getMessage() for r in caplog.records),
+    }
+    for name, blob in outputs.items():
+        assert leaks(blob) == [], name
+
+
 def test_ddb_candidates_hold_the_fixture_values() -> None:
     assert {"010180", "123456789", "5555666677778888", SSN_B, CARDS["mastercard"]} <= CANDIDATES
 

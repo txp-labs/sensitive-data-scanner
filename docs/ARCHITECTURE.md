@@ -29,13 +29,14 @@ EventBridge Scheduler (at least daily)
         │
         ▼
 Lambda: sensitive_data_scanner.handler.handler   (container image or zip)
+        │  lists (with DISCOVER): ListBuckets, DescribeLogGroups, ListTables
         │  reads (read-only)                        writes (its own bucket only)
         ├── S3: ListObjectsV2, GetObject ──────────► results bucket
-        │     named buckets/prefixes                  findings/latest.json
+        │     named or discovered buckets             findings/latest.json
         ├── CloudWatch Logs: FilterLogEvents          findings/runs/<runId>.json
-        │     named log groups                        state/ (cursors, lock)
+        │     named or discovered log groups          state/ (cursors, lock)
         ├── DynamoDB: DescribeTable, Query / Scan
-        │     named tables
+        │     named or discovered tables
         │
         └── optional: events:PutEvents ────────────► consumer-owned EventBridge bus
                                                        (another account)
@@ -47,9 +48,12 @@ One run:
    means one run at a time. A lock older than 20 minutes is stale and is
    taken over.
 2. **State.** The run reads each source's cursor and the findings carried
-   over from the previous run.
+   over from the previous run. With `DISCOVER`, it first lists the stores in
+   the account and region ([Discovery](#discovery)).
 3. **Sources.** Each source gets an even share of the run's budget: items,
-   bytes and time (the Lambda deadline minus 90 seconds).
+   bytes and time (the Lambda deadline minus 90 seconds, or
+   `MAX_RUN_SECONDS`), within any per-kind cap. Sources the budget does not
+   reach are deferred to the next run, which starts with them.
    - **S3.** The source lists in key order and reads only objects modified
      since the last complete pass (less a five-minute skew). A pass that
      runs out of budget resumes after its last key. Each read is one object
@@ -104,6 +108,106 @@ One run:
 | `SCAN_DYNAMODB` | DynamoDB tables to read, as a JSON list (below) | none |
 | `DYNAMODB_PAGE_SIZE` | Items per Query or Scan page (`Limit`) | 100 |
 | `DYNAMODB_MAX_PAGES` | Pages per table per run (the page cap) | 200 |
+| `DISCOVER` | Kinds of store to discover: `all`, or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)) | off |
+| `DISCOVER_ALLOW`, `DISCOVER_DENY` | Allow and deny rules for discovered stores, comma-separated | none |
+| `DISCOVER_SAMPLING` | Per-store sampling rules, as a JSON list | none |
+| `S3_MAX_OBJECTS_PER_PREFIX` | Objects read per "directory" per pass (0: no cap) | 0 |
+| `DYNAMODB_SAMPLE_PERCENT` | Percent of a scanned table to read (one parallel-scan segment) | 100 |
+| `DYNAMODB_MAX_TABLE_BYTES` | A discovered table larger than this, after sampling, is skipped as `too_large` (0: no cap) | 10 GiB |
+| `MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN` | Per-kind caps inside `MAX_ITEMS_PER_RUN` (0: no separate cap) | 0 |
+| `MAX_RUN_SECONDS` | Wall-time cap on a run, below the Lambda deadline (0: the deadline only) | 0 |
+
+### Discovery
+
+With `DISCOVER` set, the run lists the stores in its own account and region
+and reads each one, with no list for the user to write. The scanner is
+deployed once per account and region, so each deployment discovers its own
+region, and a bucket in another region is left to that region's scanner.
+
+| Kind | Listed with | Read as |
+|---|---|---|
+| `s3` | `ListBuckets` with `BucketRegion` set to the run's region | the whole bucket, by the S3 source |
+| `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
+| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT` |
+
+**The explicit configuration keeps working.** `SCAN_BUCKETS`,
+`SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
+first in every run, whether discovery is on or off. A discovered store that
+the configuration also names is read once, as configured: its prefixes, its
+DynamoDB paths. The allow and deny lists apply to discovered stores only.
+
+**Allow and deny.** `DISCOVER_ALLOW` and `DISCOVER_DENY` take
+comma-separated rules:
+
+| Rule | Matches |
+|---|---|
+| `s3:prod-*` | S3 buckets whose name matches the glob |
+| `logs:/aws/lambda/*` | Log groups (`*` also matches `/`) |
+| `dynamodb:orders` | One table |
+| `*-archive` | A name of any kind |
+| `tag:scan=false` | Stores with that tag and value (a glob) |
+| `tag:pii` | Stores with that tag, any value |
+| `s3:tag:team=data*` | A tag rule for one kind |
+
+- A deny rule wins over an allow rule. With an allow list, only the stores it
+  matches are read.
+- Tags are read only when a rule needs them (`s3:GetBucketTagging`,
+  `logs:ListTagsForResource`, `dynamodb:ListTagsOfResource`). If a store's
+  tags cannot be read and a deny-by-tag rule exists, the store is skipped as
+  `tags_unreadable`: a store that might be denied is never read.
+- The scanner's own results bucket and its own log group
+  (`AWS_LAMBDA_LOG_GROUP_NAME`) are never read (`self`).
+
+**Per-store sampling.** `DISCOVER_SAMPLING` is a JSON list; the first entry
+whose `match` (a rule as above) fits a store sets its sampling:
+
+```json
+[
+  { "match": "s3:datalake-*", "samplePercent": 10, "maxObjectsPerPrefix": 20 },
+  { "match": "dynamodb:tag:size=huge", "samplePercent": 5 }
+]
+```
+
+- S3: `samplePercent` is the stable key-hash sample; `maxObjectsPerPrefix`
+  reads at most that many objects per "directory" (the key up to its last
+  `/`) in a pass, so a partitioned data lake is represented by the first few
+  files of each partition. The rest are counted as `sampledOut`.
+- DynamoDB: `samplePercent` reads one parallel-scan segment
+  (`Segment` 0 of `TotalSegments = round(100 / samplePercent)`), which
+  DynamoDB spreads over the whole key space. `sampledOut` is an estimate.
+  A table whose size times its sample is over `DYNAMODB_MAX_TABLE_BYTES` is
+  skipped as `too_large`.
+
+**Budget and resume.** The run's budget is `MAX_ITEMS_PER_RUN` and
+`MAX_BYTES_PER_RUN`, with optional per-kind caps (`MAX_OBJECTS_PER_RUN`,
+`MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN`) and a wall-time cap
+(`MAX_RUN_SECONDS`, and always the Lambda deadline). Each source gets an even
+share of what is left. When the budget runs out, the stores not reached are
+reported as `deferred` (reason `budget`), and the next run starts with the
+first of them (`rotation` in the state), so every store is reached over a
+few runs. Each store's own cursor resumes where its last read stopped.
+
+**The run summary.** The findings document's `discovery` object lists every
+store, discovered or configured, with what happened to it:
+
+| `status` | `reason` | Meaning |
+|---|---|---|
+| `scanned` | | Read this run (`backlog` if it has more to read) |
+| `scanned` | `unsupported_format` | Listed, but every object was a kind the scanner cannot read |
+| `deferred` | `budget` | Not reached this run; the next run starts here |
+| `skipped` | `denied`, `not_allowed` | The deny list, or not on the allow list |
+| `skipped` | `self` | The scanner's own bucket or log group |
+| `skipped` | `too_large` | Over the size cap, after sampling |
+| `skipped` | `unsupported` | A log group of the `DELIVERY` class, or a table not `ACTIVE` |
+| `skipped` | `kms_access` | A table whose KMS key is out of reach |
+| `skipped` | `tags_unreadable` | Tags could not be read while a deny-by-tag rule exists |
+| `error` | `kms_access`, `access_denied`, `error` | The store could not be read; `error` names the AWS error |
+
+Each store's `gaps` counts what was listed but not read: `kmsDenied`
+(objects under a KMS key the scanner may not use), `unreadable` and
+`unsupportedFormat`. A listing that fails (`ListBuckets` denied) is named in
+`listErrors`, and the other kinds are still listed. Store names are masked
+like object keys.
 
 ### The DynamoDB source
 
@@ -220,7 +324,7 @@ scanner's own.
   - `kms:Decrypt` where the objects use SSE-KMS;
   - `logs:FilterLogEvents` on the named log groups;
   - `dynamodb:DescribeTable`, `dynamodb:Query` and `dynamodb:Scan` on the
-    named tables (grant `Scan` only where an entry names no partition);
+    named tables (with discovery, see the table after the example) (grant `Scan` only where an entry names no partition);
   - `kms:Decrypt` on a table's customer managed key, where it has one,
     conditioned on `kms:ViaService` `dynamodb.<region>.amazonaws.com`.
     Tables with an AWS owned or AWS managed key need no KMS permission.
@@ -255,6 +359,20 @@ For DynamoDB, the statements look like this (a table `stugum` in
 
 No write action (`PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`)
 and no index ARN is needed. The scanner reads the base table only.
+
+**Discovery** adds list and describe actions, which cannot be narrowed to
+named resources because the stores are not known in advance. They are read-only:
+
+| Kind | Actions | Resource |
+|---|---|---|
+| `s3` | `s3:ListAllMyBuckets`; `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`; `s3:GetBucketTagging` only with tag rules | `*` (buckets `arn:aws:s3:::*`, objects `arn:aws:s3:::*/*`) |
+| `logs` | `logs:DescribeLogGroups`, `logs:FilterLogEvents`; `logs:ListTagsForResource` only with tag rules | `*` |
+| `dynamodb` | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`; `dynamodb:ListTagsOfResource` only with tag rules | `*` |
+| KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
+
+A deny list in configuration is not an IAM boundary. To keep the scanner
+out of a store for certain, deny it in IAM as well (an explicit `Deny` on
+the bucket, table or log group), and it is then reported as `access_denied`.
 
 The IAM policy and the schedule belong to whoever deploys the scanner, for
 example Mermera's customer template. This repository creates no AWS
