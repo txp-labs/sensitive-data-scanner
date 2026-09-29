@@ -61,14 +61,29 @@ bumps the minor version. Spec changes are listed under **Spec**.
   read field by field (`store_field`, `readBy: search`). VPC-only domains
   (`vpc_only`), refused domains (`access_denied`) and Serverless collections
   (opt-in, `OPENSEARCH_SERVERLESS_READ`) are reported.
+- Snapshots, backups and file systems ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - EBS (`DISCOVER` kind `ebs`): volumes and this account's snapshots; each
+    volume read through its latest snapshot with the EBS direct APIs
+    (`EBS_DIRECT_READ`, opt-in; `EBS_BLOCKS_PER_SNAPSHOT`), sampled blocks'
+    printable text, no volume created or attached. Volumes with no snapshot,
+    archived snapshots and older snapshots are reported.
+  - AWS Backup (`backup`): vaults with their recovery points by type, reported
+    as `backup_copy` (EBS points are read as EBS snapshots).
+  - DocumentDB (including elastic clusters) and Neptune (`documentdb`,
+    `neptune`): reported as `no_snapshot_export`.
+  - EFS and FSx (`efs`, `fsx`): reported as `needs_task`; the opt-in Fargate
+    file-system task is designed in docs/ARCHITECTURE.md, not built.
 - The adapter interface (`sources/base.py`, `Adapter`) and the generic
   sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
   discovery, the budget and the run summary through them, with no cloud in
   the core. The RDS Data API mode now runs on the same SQL pass.
 - Findings schema **1.3** (additive): the `store_field` resource, the
-  `redshift` and `opensearch` kinds, the store reasons
-  `read_not_configured`, `paused`, `no_grant` and `vpc_only`, and the store
-  fields `deployment`, `database` and `state`.
+  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`
+  and `fsx` kinds, the `block` format, the store reasons
+  `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `no_snapshot_export`, `needs_task`, `backup_copy` and `archived`, and the
+  store fields `deployment`, `database`, `state`, `resource`,
+  `olderSnapshots`, `recoveryPoints` and `fileSystemType`.
 - `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
   describe permissions, and, only when reading, the Data API on this
   account's clusters and workgroups, its own statements only, and the
@@ -76,7 +91,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   batch statements are denied. OpenSearch: describe and list,
   `es:ESHttpGet` on this account's domains (every other HTTP verb denied),
   and, only with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on its
-  collections.
+  collections. Snapshots, backups and file systems: describe and list, and,
+  only with `EbsDirectRead`, `ebs:ListSnapshotBlocks`/`GetSnapshotBlock` on
+  this region's snapshots and `kms:Decrypt` through EBS; every snapshot,
+  volume, backup and file-system write is denied.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.

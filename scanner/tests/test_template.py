@@ -82,7 +82,9 @@ READ = re.compile(
     r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$"
     r"|redshift:DescribeClusters$|redshift-serverless:List"
     r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$"
-    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet))"
+    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet)"
+    r"|ec2:Describe(Volumes|Snapshots)$|ebs:(ListSnapshotBlocks|GetSnapshotBlock)$|backup:List"
+    r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -223,6 +225,14 @@ SERVICES = {
     "redshift-data": "redshift-data",
     "opensearch": "es",
     "opensearchserverless": "aoss",
+    "docdb": "rds",
+    "neptune": "rds",
+    "docdb-elastic": "docdb-elastic",
+    "ec2": "ec2",
+    "ebs": "ebs",
+    "backup": "backup",
+    "efs": "elasticfilesystem",
+    "fsx": "fsx",
 }
 
 
@@ -340,6 +350,22 @@ def test_opensearch_is_read_with_get_only() -> None:
     serverless = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
     gated = [s for s in serverless if isinstance(s, dict) and "Fn::If" in s]
     assert any(s["Fn::If"][0] == "OpenSearchServerless" for s in gated)
+
+
+def test_snapshots_are_read_in_place_never_copied_or_attached() -> None:
+    blocks = next(s for s in statements() if s.get("Sid") == "ReadEbsSnapshotBlocks")
+    assert actions(blocks) == ["ebs:ListSnapshotBlocks", "ebs:GetSnapshotBlock"]
+    assert blocks["Resource"] == {"Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"}
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "ebs:StartSnapshot",
+        "ebs:PutSnapshotBlock",
+        "ec2:CreateVolume",
+        "ec2:AttachVolume",
+        "ec2:CreateSnapshot*",
+        "backup:Start*",
+        "elasticfilesystem:ClientWrite",
+    } <= denied
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:

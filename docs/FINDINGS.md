@@ -20,10 +20,13 @@ value shows up in findings, events, logs, exception messages or object reprs.
   additive.
 - Version 1.3 adds the stores found by the adapters: the `store_field`
   resource (one field of a store that is not S3, logs, DynamoDB or RDS, such
-  as a Redshift column or an OpenSearch field), the `redshift` and
-  `opensearch` kinds, the store reasons `read_not_configured`, `paused`,
-  `no_grant` and `vpc_only`, and the store fields `deployment`, `database`
-  and `state`. The kinds are one list
+  as a Redshift column, an OpenSearch field or an EBS volume's blocks), the
+  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`
+  and `fsx` kinds, the `block` format, the store reasons
+  `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `no_snapshot_export`, `needs_task`, `backup_copy` and `archived`, and the
+  store fields `deployment`, `database`, `state`, `resource`,
+  `olderSnapshots`, `recoveryPoints` and `fileSystemType`. The kinds are one list
   (`$defs/storeKind`) for coverage, the run summary and listing errors. All
   additive.
 
@@ -133,7 +136,7 @@ One class of data at one location.
 | `id` | A stable hash of the resource and class. It stays the same across runs for the same location (and object version). Key triage decisions on it. |
 | `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). `dynamodb_item`: `table`, `keyHash`, `key` and `attributePath` (below). |
 | `connect` | The Amazon Connect contact and instance, when the item names one: a chat or Contact Lens transcript, or a flow log event. |
-| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`. |
+| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`, `sql`, or (1.3) `block` (raw EBS blocks). |
 | `class`, `severity` | The spec class (`card`, `us_ssn`, `us_itin`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
 | `count` | Distinct values of the class in the item. The same card read out by a caller and read back by the agent counts once. |
 | `occurrences` | Every place a value appears in the item. |
@@ -230,10 +233,11 @@ one field of one store as `store_field`. A Redshift column:
 
 | Field | Meaning |
 |---|---|
-| `service` | The product: `redshift` (a provisioned cluster), `redshift_serverless` (a workgroup), `opensearch` (a managed domain) or `opensearch_serverless` (a collection) |
+| `service` | The product: `redshift` (a provisioned cluster), `redshift_serverless` (a workgroup), `opensearch` (a managed domain), `opensearch_serverless` (a collection) or `ebs` (a volume, or a snapshot whose volume is gone) |
 | `store` | The cluster or workgroup (and, for later kinds, the domain, stream, queue, parameter or secret), masked like a key |
-| `database`, `table`, `field` | Where the values are, as far as the store has them: for Redshift the database, `schema.table` and the column; for OpenSearch the index (`table`) and the document's top-level field |
-| `readBy` | How it was read: `data_api` for Redshift, `search` for OpenSearch |
+| `database`, `table`, `field` | Where the values are, as far as the store has them: for Redshift the database, `schema.table` and the column; for OpenSearch the index (`table`) and the document's top-level field; for EBS `field: blocks` (the raw blocks; no file path) |
+| `readBy` | How it was read: `data_api` for Redshift, `search` for OpenSearch, `ebs_direct` for EBS |
+| `snapshotTime` | For EBS: when the snapshot read was taken. Not part of the id |
 | `offsets` | Empty: a sampled row is not addressable later. `count` is distinct values in the sample |
 
 The shape names no cloud, so a store elsewhere (a database hosted anywhere)
@@ -293,7 +297,7 @@ One entry per source says what was, and was not, read:
 
 | Field | Meaning |
 |---|---|
-| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2), `redshift` with `cluster:<id>` or `workgroup:<name>`, or `opensearch` with `domain:<name>` or `collection:<name>` (1.3) |
+| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2), `redshift` with `cluster:<id>` or `workgroup:<name>`, `opensearch` with `domain:<name>` or `collection:<name>`, or `ebs` with the volume or snapshot id (1.3) |
 | `listed`, `eligible`, `scanned` | Objects listed, events returned, or DynamoDB items evaluated (`ScannedCount`); the new or changed ones (for DynamoDB, the items returned); the ones read this run |
 | `sampledOut`, `samplePercent` | Left out by sampling. Sampling is stated, never silent |
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
@@ -334,10 +338,10 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`; and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`; and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table) and `vpc_only` (an OpenSearch domain inside a VPC) |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault) and `archived` (an archived EBS snapshot) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -349,6 +353,9 @@ coverage gap is visible rather than silent.
 | `engine`, `dbType`, `snapshotTime`, `exportStatus` | For RDS: the engine, cluster or instance, the snapshot read, and the export's state |
 | `readBy`, `pitr` | For DynamoDB: `export` when the table is read from an Export to S3; `pitr: false` when it is too large and has no point-in-time recovery |
 | `deployment`, `database`, `state` | (1.3) `provisioned` or `serverless` (Redshift), `managed` or `serverless` (OpenSearch); the database connected to by default; and the store's state when that is why it was not read |
+| `resource`, `olderSnapshots` | (1.3) For EBS: `volume` or `snapshot`, and the earlier snapshots counted, not read |
+| `recoveryPoints` | (1.3) For a Backup vault: its recovery points by resource type |
+| `fileSystemType` | (1.3) For FSx: `LUSTRE`, `WINDOWS`, `ONTAP` or `OPENZFS` |
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind
