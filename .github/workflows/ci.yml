@@ -74,8 +74,18 @@ jobs:
       - name: Install
         run: npm ci --ignore-scripts
 
+      - name: Compiled spec is up to date
+        run: npm run gen:spec:check
+
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Tests
+      - name: Tests (every vector)
         run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: No runtime dependencies
+        run: |
+          node -e 'const p=require("./package.json"); const d=Object.keys(p.dependencies||{}); if(d.length){console.error("runtime dependencies:",d); process.exit(1)}'

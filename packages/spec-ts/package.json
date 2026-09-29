@@ -1,7 +1,7 @@
 {
   "name": "@txp-labs/sensitive-data-spec",
-  "version": "0.0.0",
-  "description": "The sensitive-data spec (classes, normalization, prompt carryover) for in-memory redaction of conversation turns.",
+  "version": "0.1.0",
+  "description": "The sensitive-data spec (classes, normalization, prompt carryover) and a zero-dependency classifier for in-memory redaction of conversation turns.",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -13,12 +13,30 @@
   "engines": {
     "node": ">=22.18"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "build": "tsc -p tsconfig.build.json",
+    "gen:spec": "node scripts/gen-spec.ts",
+    "gen:spec:check": "node scripts/gen-spec.ts --check",
+    "parity": "node scripts/parity.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.3",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
   }
 }
