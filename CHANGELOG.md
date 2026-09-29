@@ -6,6 +6,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.1.0 — 2026-09-29
+
 ### Spec
 - The sensitive-data spec, version 0.1: `spec/classes.yaml` and
   `spec/normalize.yaml`, JSON Schemas for them and for the vectors, and the
@@ -47,6 +49,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - The no-leak suite scans every vector end to end and asserts that no value
   appears in findings, events, logs, exception messages or reprs. It also
   audits every logging call and every raised exception in the source.
+
+- Packaging: a Lambda container image (Python 3.12 slim, runtime interface
+  client, base images pinned by digest) and a Lambda zip (python3.12,
+  x86_64). The release workflow builds both, attaches SPDX SBOMs and SHA-256
+  checksums to the GitHub Release, and pushes the image to GHCR.
+  `docs/RELEASING.md` describes the steps and what is pending (signing,
+  hosting).
 
 ### Internal
 - CI: Python (ruff, mypy, pytest), Node (typecheck, tests), gitleaks and

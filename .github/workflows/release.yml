@@ -1,0 +1,152 @@
+# Release on a tag v*: build the Lambda zip, the wheel and sdist, and the
+# container image; attach SPDX SBOMs and SHA-256 checksums to a GitHub Release;
+# push the image to GHCR. No AWS resources, no npm publish, no signing yet
+# (see docs/RELEASING.md).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Versions agree with the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          py=$(python3 -c 'import tomllib;print(tomllib.load(open("scanner/pyproject.toml","rb"))["project"]["version"])')
+          ts=$(python3 -c 'import json;print(json.load(open("packages/spec-ts/package.json"))["version"])')
+          echo "tag ${version}, scanner ${py}, spec-ts ${ts}"
+          test "${version}" = "${py}"
+          test "${version}" = "${ts}"
+          grep -q "^## ${version} " CHANGELOG.md
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  artifacts:
+    name: Zip, wheel and SBOM
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+      - name: Build
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/build-lambda-zip.sh "${VERSION}" out
+          (cd scanner && uv build --out-dir ../out)
+          mkdir -p sbom-src && (cd sbom-src && unzip -q ../out/*-lambda-*.zip)
+      - name: SBOM of the Lambda zip (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: sbom-src
+          format: spdx-json
+          output-file: out/sensitive-data-scanner-${{ needs.verify.outputs.version }}-lambda.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: Container image to GHCR
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          provenance: false
+          sbom: false
+          tags: ghcr.io/txp-labs/sensitive-data-scanner:${{ needs.verify.outputs.version }}
+      - name: SBOM of the image (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ghcr.io/txp-labs/sensitive-data-scanner@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sensitive-data-scanner-${{ needs.verify.outputs.version }}-image.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-sbom
+          path: sensitive-data-scanner-${{ needs.verify.outputs.version }}-image.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub Release
+    needs: [verify, artifacts, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          echo "ghcr.io/txp-labs/sensitive-data-scanner@${DIGEST}" > IMAGE_DIGEST
+          cd ..
+          python3 scripts/release-notes.py "${VERSION}" "${DIGEST}" > notes.md
+          cat notes.md
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --notes-file notes.md --verify-tag

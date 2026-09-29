@@ -89,3 +89,47 @@ jobs:
       - name: No runtime dependencies
         run: |
           node -e 'const p=require("./package.json"); const d=Object.keys(p.dependencies||{}); if(d.length){console.error("runtime dependencies:",d); process.exit(1)}'
+
+  package:
+    name: Package (Lambda image and zip)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: Build the Lambda zip
+        run: scripts/build-lambda-zip.sh ci out
+
+      - name: The zip fits Lambda's 250 MB unzipped limit
+        run: |
+          set -euo pipefail
+          size=$(unzip -l out/*.zip | tail -1 | awk '{print $1}')
+          echo "unzipped bytes: ${size}"
+          test "${size}" -lt 262144000
+
+      - name: Build the container image
+        run: docker build -t sensitive-data-scanner:ci .
+
+      - name: Smoke test the image (detection with no NLP model, no network)
+        run: |
+          set -euo pipefail
+          docker image ls sensitive-data-scanner:ci --format 'image size: {{.Size}}'
+          docker run --rm --network none --entrypoint python sensitive-data-scanner:ci -c '
+          import datetime as dt
+          from sensitive_data_scanner.detect.analyzer import Detector
+          from sensitive_data_scanner.engine.conversation import Turn
+          d = Detector(now=dt.date(2026, 9, 29))
+          a = d.analyze_conversation([
+              Turn("bot", "Please enter or say your nine digit Social Security number."),
+              Turn("customer", "123456789#", "dtmf"),
+          ])
+          assert [(x.cls, x.via, x.confidence) for x in a.detections] == [("us_ssn", "prompt", "high")]
+          import sensitive_data_scanner.handler, awslambdaric
+          print("ok")
+          '
