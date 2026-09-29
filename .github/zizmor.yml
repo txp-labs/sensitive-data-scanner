@@ -1,0 +1,13 @@
+# Accepted zizmor findings, each with its reason. Keep this list short.
+rules:
+  # cla.yml runs CLA Assistant Lite on pull_request_target so it can comment
+  # on and set a status for pull requests from forks. It never checks out or
+  # runs the pull request's code, which is what makes that trigger dangerous.
+  dangerous-triggers:
+    ignore:
+      - cla.yml
+  # contributor-assistant/github-action is archived upstream. It is pinned by
+  # SHA and still works; replacing it is an open decision (see the CLA review).
+  archived-uses:
+    ignore:
+      - cla.yml

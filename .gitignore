@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+scanner/dist/
+scanner/build/
+*.egg-info/
+
+# Node
+node_modules/
+packages/spec-ts/dist/
+*.tsbuildinfo
+
+# Build output
+/dist/
+/out/
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
