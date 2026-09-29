@@ -45,6 +45,7 @@ from .sources.s3 import S3Source
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_events import EventBridgeClient
+    from mypy_boto3_glue import GlueClient
     from mypy_boto3_logs import CloudWatchLogsClient
     from mypy_boto3_s3 import S3Client
 
@@ -73,6 +74,7 @@ class Clients:
     logs: CloudWatchLogsClient
     events: EventBridgeClient | None = None
     dynamodb: DynamoDBClient | None = None
+    glue: GlueClient | None = None
 
 
 class Keys:
@@ -129,12 +131,19 @@ def _take_lock(s3: S3Client, bucket: str, key: str, run_id: str) -> bool:
 
 
 def _s3_source(
-    config: Config, clients: Clients, region: str, store: Store, prefix: str
+    config: Config,
+    clients: Clients,
+    store: Store,
+    *,
+    region: str,
+    prefix: str = "",
+    exclude: tuple[str, ...] = (),
 ) -> S3Source:
+    t = store.table
     return S3Source(
         clients.s3,
-        bucket=store.name,
-        prefix=prefix,
+        bucket=t.bucket if t else store.name,
+        prefix=t.prefix if t else prefix,
         region=region,
         sample_percent=store.sample_percent or config.sample_percent,
         max_object_bytes=config.max_object_bytes,
@@ -145,6 +154,13 @@ def _s3_source(
             if store.max_per_prefix is not None
             else config.s3_max_objects_per_prefix
         ),
+        max_rows=config.columnar_max_rows,
+        exclude_prefixes=exclude,
+        catalog=(t.database, t.name) if t else None,
+        columns=t.columns if t else (),
+        serde=t.serde if t else None,
+        delimiter=t.delimiter if t else ",",
+        skip_header=t.skip_header if t else 0,
     )
 
 
@@ -193,7 +209,7 @@ def plan(
 
     for bucket, prefix in config.s3_targets:
         store = named("s3", bucket)
-        add(store, _s3_source(config, clients, region, store, prefix))
+        add(store, _s3_source(config, clients, store, region=region, prefix=prefix))
     for group in config.log_groups:
         store = named("cloudwatch_logs", group)
         add(
@@ -212,6 +228,11 @@ def plan(
         add(store, _dynamodb_source(config, clients, region, store, t))
     if discovery is None:
         return sources, stores
+    # A catalog table's prefix is read by the table's source, not again by its bucket's.
+    tables: dict[str, list[str]] = {}
+    for st in discovery.stores:
+        if st.table is not None and st.status == "pending":
+            tables.setdefault(st.table.bucket, []).append(st.table.prefix)
     for store in sorted(discovery.stores, key=lambda s: (s.kind, s.name)):
         known = by_key.get((store.kind, store.name))
         if known is not None:
@@ -221,7 +242,10 @@ def plan(
         if store.status != "pending":
             continue
         if store.kind == "s3":
-            add(store, _s3_source(config, clients, region, store, ""))
+            exclude = tuple(sorted(tables.get(store.name, [])))
+            add(store, _s3_source(config, clients, store, region=region, exclude=exclude))
+        elif store.kind == "glue_table":
+            add(store, _s3_source(config, clients, store, region=region))
         elif store.kind == "cloudwatch_logs":
             add(
                 store,
@@ -282,7 +306,7 @@ def run_scan(
         return None
     try:
         detector = detector or Detector(load_spec(), started.date())
-        found = discover(config, clients, region) if config.discover else None
+        found = discover(config, clients, region, account) if config.discover else None
         sources, stores = plan(config, clients, region, found)
         log_event("run.start", sources=len(sources))
         state = _read_json(clients.s3, bucket, keys.state) or {}
@@ -302,6 +326,7 @@ def run_scan(
         budget = Budget(config.max_items_per_run, config.max_bytes_per_run, deadline, clock)
         caps = {
             "s3": config.max_objects_per_run,
+            "glue_table": config.max_objects_per_run,
             "cloudwatch_logs": config.max_log_events_per_run,
             "dynamodb": config.max_table_items_per_run,
         }

@@ -42,6 +42,9 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
                 if config.dynamodb_targets or "dynamodb" in config.discover
                 else None
             ),
+            glue=boto3.client("glue", region_name=region)
+            if "glue_table" in config.discover
+            else None,
         )
         doc = run_scan(
             config,

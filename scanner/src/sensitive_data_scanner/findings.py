@@ -104,12 +104,27 @@ def logs_link(region: str, group: str, stream: str, timestamp_ms: int) -> str:
     return f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}#{frag}"
 
 
-def s3_resource(bucket: str, key: str, version_id: str | None) -> dict[str, Any]:
+def s3_resource(
+    bucket: str,
+    key: str,
+    version_id: str | None,
+    *,
+    column: str | None = None,
+    catalog: tuple[str, str] | None = None,
+) -> dict[str, Any]:
+    """An S3 object version; for a table object, the column; for a catalog table, its name."""
     masked = redact_digits(key)
     masked_bucket = redact_digits(bucket)
     out: dict[str, Any] = {"type": "s3_object", "bucket": masked_bucket, "key": masked}
     out["versionId"] = version_id or "null"
-    if masked != key or masked_bucket != bucket:
+    changed = masked != key or masked_bucket != bucket
+    if column is not None:
+        out["column"] = redact_digits(column)
+        changed = changed or out["column"] != column
+    if catalog is not None:
+        out["catalog"] = {"database": redact_digits(catalog[0]), "table": redact_digits(catalog[1])}
+        changed = changed or (out["catalog"]["database"], out["catalog"]["table"]) != catalog
+    if changed:
         out["keyMasked"] = True
     return out
 

@@ -60,6 +60,9 @@ One run:
      version, and the finding names that `VersionId`.
      - Sampling is stable (a hash of the key) and reported.
      - Large objects are read in part and counted as partial.
+     - Parquet, ORC and Avro files are read by column
+       ([Columnar and data-lake formats](#columnar-and-data-lake-formats)),
+       and gzip or zstd text is inflated first.
      - Audio, video, images, documents and archives are counted, not read.
      - Deleted objects drop out of the findings.
    - **CloudWatch Logs.** The source reads `FilterLogEvents` in windows of at
@@ -75,6 +78,8 @@ One run:
    - Other JSON is read field by field, with the key path as context.
    - A DynamoDB item is read attribute by attribute (below).
    - CSV is read with its header as context. Everything else is read as text.
+   - A table (Parquet, ORC, Avro, or a Glue table's CSV or JSON) is read
+     column by column, with the column's name as context.
 5. **Findings.**
    - The run writes the document to `findings/runs/<runId>.json` and
      `findings/latest.json`, then state for the next run.
@@ -116,6 +121,8 @@ One run:
 | `DYNAMODB_MAX_TABLE_BYTES` | A discovered table larger than this, after sampling, is skipped as `too_large` (0: no cap) | 10 GiB |
 | `MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN` | Per-kind caps inside `MAX_ITEMS_PER_RUN` (0: no separate cap) | 0 |
 | `MAX_RUN_SECONDS` | Wall-time cap on a run, below the Lambda deadline (0: the deadline only) | 0 |
+| `COLUMNAR_MAX_ROWS` | Rows read per Parquet, ORC or Avro file (or catalog CSV/JSON object); the rest is `partial` | 10,000 |
+| `GLUE_LAKE_FORMATION` | For Glue tables registered with Lake Formation: `read` (with the scanner's own IAM; a denial is a gap) or `skip` (report them, read nothing) | `read` |
 
 ### Discovery
 
@@ -129,6 +136,7 @@ region, and a bucket in another region is left to that region's scanner.
 | `s3` | `ListBuckets` with `BucketRegion` set to the run's region | the whole bucket, by the S3 source |
 | `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
 | `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT` |
+| `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -208,6 +216,66 @@ Each store's `gaps` counts what was listed but not read: `kmsDenied`
 `unsupportedFormat`. A listing that fails (`ListBuckets` denied) is named in
 `listErrors`, and the other kinds are still listed. Store names are masked
 like object keys.
+
+### Columnar and data-lake formats
+
+The S3 source reads data-lake files by column, whether it reached them by a
+bucket, a prefix or a Glue table:
+
+| Format | Recognized by | Read with |
+|---|---|---|
+| Parquet | `.parquet` (`x.snappy.parquet`, `x.gz.parquet`), or the `PAR1` magic bytes | pyarrow, one row group at a time, through ranged GETs |
+| ORC | `.orc`, or `ORC` magic bytes | pyarrow, one stripe at a time, through ranged GETs |
+| Avro | `.avro`, or `Obj\x01` magic bytes | the scanner's own reader (`scan/avro.py`); snappy and zstandard codecs through pyarrow |
+| gzip or zstd CSV and JSON lines | `.csv.gz`, `.jsonl.zst` and the like | inflated (`MAX_INFLATED_BYTES`), then read as CSV or JSON lines |
+
+- **Ranged reads.** Parquet and ORC keep their footer at the end: the
+  scanner seeks there, reads the footer, then the first row groups, up to
+  `COLUMNAR_MAX_ROWS` rows and `MAX_OBJECT_BYTES` bytes. A 1 GB file costs
+  its footer and one row group, not 1 GB. A file with more rows is counted
+  as `partial`.
+- **By column.** Each column's cells are read with the column's name as
+  context: `card_number`, `ssn`, `date_of_birth`. Integers and decimals are
+  read as their digits, dates as ISO dates, and text stored as bytes as
+  text. Nested columns (structs, lists, maps) are read leaf by leaf, like
+  JSON. Floats and booleans are not read.
+- **Findings name the column.** A finding is one class in one column of one
+  object version (`resource.column`). Its offsets carry the cell as
+  `/<row>/<column>` (and deeper for nested cells).
+- **Which build.** pyarrow is in the container image, not the Lambda zip:
+  with it, the zip passes Lambda's 250 MB unzipped limit. The zip reads
+  Avro with the standard library's codecs (null, deflate, bzip2, xz), and
+  counts Parquet, ORC, zstd and snappy or zstandard Avro as skipped
+  `columnar`. **Use the image to scan a data lake.**
+
+### Glue Data Catalog and Lake Formation
+
+With `DISCOVER` including `glue`, the run lists the Data Catalog's
+databases and tables and reads each table at its S3 location:
+
+- Findings name the **database, table and column** (`resource.catalog`,
+  `resource.column`), as well as the object.
+- A **CSV table** is read with the catalog's columns, so a headerless file
+  still gets column-level findings. The delimiter comes from the SerDe
+  (`field.delim`, `separatorChar`; Hive's default is Ctrl-A), and
+  `skip.header.line.count` is honored. A **JSON table** is read by its
+  top-level keys. Parquet, ORC and Avro tables are read by their own schema.
+- **Each object is read once.** A discovered bucket leaves the prefixes of
+  its catalog tables to the tables' own sources.
+- **Not read, and reported:** views (`catalogObject: view`), tables whose
+  location is not S3 (`not_s3`, such as JDBC), and resource links to another
+  account's catalog (`resource_link`; that account's scanner reads them).
+- **Lake Formation is respected.** The scanner reads with its own IAM
+  permissions only. It never asks Lake Formation for credentials
+  (`GetTemporaryGlueTableCredentials`, `GetDataAccess`) or grants itself
+  anything, and a test checks that the code has no way to. When Lake
+  Formation denies it (a database's tables cannot be listed, or a governed
+  table's data cannot be read), the store is reported with reason
+  `lake_formation`: a coverage gap, never escalated. Tables registered with
+  Lake Formation carry `lakeFormation: true`. `GLUE_LAKE_FORMATION=skip`
+  leaves every registered table unread and reported.
+- Partitions whose location lies outside the table's location are not yet
+  read (`GetPartitions` is a later change).
 
 ### The DynamoDB source
 
@@ -368,6 +436,8 @@ named resources because the stores are not known in advance. They are read-only:
 | `s3` | `s3:ListAllMyBuckets`; `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`; `s3:GetBucketTagging` only with tag rules | `*` (buckets `arn:aws:s3:::*`, objects `arn:aws:s3:::*/*`) |
 | `logs` | `logs:DescribeLogGroups`, `logs:FilterLogEvents`; `logs:ListTagsForResource` only with tag rules | `*` |
 | `dynamodb` | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`; `dynamodb:ListTagsOfResource` only with tag rules | `*` |
+| `glue` | `glue:GetDatabases`, `glue:GetTables`; `glue:GetTags` only with tag rules; plus the S3 read actions on each table's location | `*` (catalog, databases and tables) |
+| Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
 
 A deny list in configuration is not an IAM boundary. To keep the scanner

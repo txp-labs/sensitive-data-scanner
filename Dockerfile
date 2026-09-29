@@ -22,10 +22,12 @@ COPY schema/ schema/
 COPY third_party/ third_party/
 COPY scanner/ scanner/
 COPY scripts/slim-site-packages.sh scripts/
-# Locked, hash-checked dependencies (runtime + the Lambda runtime interface
-# client), then the scanner itself, into one directory.
+# Locked, hash-checked dependencies (runtime, the Lambda runtime interface
+# client, and pyarrow for the columnar formats), then the scanner itself, into
+# one directory. The Lambda zip has no pyarrow: it would not fit (see
+# scripts/build-lambda-zip.sh).
 RUN cd scanner \
- && uv export --frozen --no-dev --group lambda --no-emit-project -o /tmp/requirements.txt \
+ && uv export --frozen --no-default-groups --group lambda --group columnar --no-emit-project -o /tmp/requirements.txt \
  && uv pip install --python /usr/local/bin/python --target /opt/app --require-hashes -r /tmp/requirements.txt \
  && uv build --wheel --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \

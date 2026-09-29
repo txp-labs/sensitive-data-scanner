@@ -18,6 +18,19 @@ partition files are represented by the first few of each. An object larger than
 `max_object_bytes` is read up to that size and counted as partial. Audio,
 video, images, office documents and archives are not read; they are counted
 by kind.
+
+Columnar and data-lake files (Parquet, ORC, Avro, by extension or by magic
+bytes) are read by column (scan/columnar.py): Parquet and ORC through
+ranged GETs, so a large file's footer and first row groups are read without
+the rest, up to `max_rows` rows and `max_object_bytes` bytes. A finding
+names the column. Text compressed with gzip or zstd (`.gz`, `.zst`) is
+inflated first. Parquet, ORC, zstd, and Avro's snappy and zstandard codecs
+need pyarrow (the container image); the Lambda zip counts them as skipped
+`columnar`.
+
+A **catalog table** (a Glue table, `catalog` set) is this source over the
+table's S3 location: its findings also name the database and table, and a
+CSV or JSON table is read by the catalog's columns.
 """
 
 from __future__ import annotations
@@ -31,6 +44,19 @@ from typing import TYPE_CHECKING, Any
 from ..detect.analyzer import Detector
 from ..findings import Coverage, finding_json, s3_link, s3_resource
 from ..safety import error_name, is_kms_denial, log_event
+from ..scan.avro import UnsupportedCodec
+from ..scan.columnar import (
+    TableResult,
+    columnar_kind,
+    csv_rows,
+    json_rows,
+    needs_pyarrow,
+    pyarrow_available,
+    scan_rows,
+    scan_table,
+    sniff,
+    zstd_text,
+)
 from ..scan.item import classify_key, looks_binary, scan_item_text
 from .base import Budget, FindingStore, SourceRun
 
@@ -46,6 +72,101 @@ def sample_point(key: str) -> int:
         h ^= data[i] | (data[i + 1] << 8)
         h = (h * 0x01000193) & 0xFFFFFFFF
     return h % 100
+
+
+class RangeCut(Exception):
+    """A columnar read reached its byte cap: what was read so far stands, as partial."""
+
+
+class S3RangeFile(io.RawIOBase):
+    """A seekable read-only view of one object version, read with ranged GETs.
+
+    Parquet and ORC keep their footer at the end, so a reader seeks there
+    first; only the parts it asks for are fetched, up to `max_bytes`.
+    """
+
+    def __init__(
+        self,
+        client: S3Client,
+        bucket: str,
+        key: str,
+        *,
+        size: int,
+        max_bytes: int,
+        version_id: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.client = client
+        self.bucket = bucket
+        self.key = key
+        self.size = size
+        self.max_bytes = max_bytes
+        self.version_id = version_id
+        self.pos = 0
+        self.bytes_read = 0
+        self.cut = False
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self.pos
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_SET:
+            self.pos = offset
+        elif whence == io.SEEK_CUR:
+            self.pos += offset
+        else:
+            self.pos = self.size + offset
+        self.pos = max(0, self.pos)
+        return self.pos
+
+    def readinto(self, b: Any) -> int:
+        n = len(b)
+        if n == 0 or self.pos >= self.size:
+            return 0
+        end = min(self.size, self.pos + n) - 1
+        want = end - self.pos + 1
+        if self.bytes_read + want > self.max_bytes:
+            self.cut = True
+            raise RangeCut("byte cap")
+        args: dict[str, Any] = {
+            "Bucket": self.bucket,
+            "Key": self.key,
+            "Range": f"bytes={self.pos}-{end}",
+        }
+        if self.version_id and self.version_id != "null":
+            args["VersionId"] = self.version_id
+        r = self.client.get_object(**args)
+        if self.version_id is None:
+            self.version_id = r.get("VersionId") or "null"
+        data = r["Body"].read()
+        b[: len(data)] = data
+        self.pos += len(data)
+        self.bytes_read += len(data)
+        return len(data)
+
+
+def _compression(key: str) -> str | None:
+    lower = key.lower()
+    if lower.endswith(".gz"):
+        return "gzip"
+    if lower.endswith((".zst", ".zstd")):
+        return "zstd"
+    return None
+
+
+def _inner_name(key: str) -> str:
+    """The key without its compression suffix: `x.jsonl.zst` reads as `x.jsonl`."""
+    lower = key.lower()
+    for suffix in (".gz", ".zstd", ".zst"):
+        if lower.endswith(suffix):
+            return key[: -len(suffix)]
+    return key
 
 
 def _gunzip(data: bytes, limit: int) -> bytes:
@@ -71,6 +192,14 @@ class S3Source:
         max_inflated_bytes: int = 100 * 1024**2,
         skew_seconds: int = 300,
         max_per_prefix: int = 0,
+        max_rows: int = 10_000,
+        exclude_prefixes: tuple[str, ...] = (),
+        catalog: tuple[str, str] | None = None,
+        columns: tuple[str, ...] = (),
+        serde: str | None = None,
+        delimiter: str = ",",
+        skip_header: int = 0,
+        columnar: bool | None = None,
     ) -> None:
         self.client = client
         self.bucket = bucket
@@ -81,35 +210,97 @@ class S3Source:
         self.max_inflated_bytes = max_inflated_bytes
         self.skew = _dt.timedelta(seconds=skew_seconds)
         self.max_per_prefix = max_per_prefix
-        self.id = f"s3:{bucket}/{prefix}"
-        self.target = f"{bucket}/{prefix}"
+        self.max_rows = max_rows
+        self.exclude_prefixes = exclude_prefixes
+        self.catalog = catalog
+        self.columns = list(columns)
+        self.serde = serde
+        self.delimiter = delimiter
+        self.skip_header = skip_header
+        self.columnar = pyarrow_available() if columnar is None else columnar
+        if catalog is not None:
+            self.kind = "glue_table"
+            self.id = f"glue:{catalog[0]}.{catalog[1]}"
+            self.target = f"{catalog[0]}.{catalog[1]}"
+        else:
+            self.id = f"s3:{bucket}/{prefix}"
+            self.target = f"{bucket}/{prefix}"
 
-    def _read(self, key: str, size: int, cov: Coverage) -> tuple[str, int, str | None] | None:
+    def _skip(self, cov: Coverage, kind: str) -> None:
+        cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
+
+    def _read(self, key: str, size: int, cov: Coverage) -> tuple[bytes, int, str | None, bool]:
+        """The object's first `max_object_bytes`, its bytes read, version, and whether cut."""
         partial = size > self.max_object_bytes
         args: dict[str, Any] = {"Bucket": self.bucket, "Key": key}
         if partial:
             args["Range"] = f"bytes=0-{self.max_object_bytes - 1}"
         r = self.client.get_object(**args)
         data = r["Body"].read()
-        version = r.get("VersionId")
-        if partial:
-            cov.partial += 1
-        read = len(data)
-        _, gz, _ = classify_key(key)
-        if gz:
+        return data, len(data), r.get("VersionId"), partial
+
+    def _text(self, key: str, data: bytes, cov: Coverage) -> str | None:
+        compression = _compression(key)
+        if compression == "gzip":
             try:
                 data = _gunzip(data, self.max_inflated_bytes)
             except (zlib.error, OSError, EOFError, gzip.BadGzipFile):
-                cov.skipped["archive"] = cov.skipped.get("archive", 0) + 1
+                self._skip(cov, "archive")
+                return None
+        elif compression == "zstd":
+            if not self.columnar:
+                self._skip(cov, "columnar")
+                return None
+            try:
+                data = zstd_text(data, self.max_inflated_bytes)
+            except Exception:  # a bad frame: not text we can read
+                self._skip(cov, "archive")
                 return None
         if looks_binary(data):
-            cov.skipped["binary"] = cov.skipped.get("binary", 0) + 1
+            self._skip(cov, "binary")
             return None
-        return (
-            io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read(),
-            read,
-            version,
-        )
+        return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
+
+    def _table(
+        self,
+        kind: str,
+        key: str,
+        *,
+        size: int,
+        cov: Coverage,
+        detector: Detector,
+        head: bytes | None,
+    ) -> tuple[TableResult, int, str | None] | None:
+        """Read one columnar object by column. None when this build cannot read it."""
+        if needs_pyarrow(kind) and not self.columnar:
+            self._skip(cov, "columnar")
+            return None
+        if head is not None and len(head) >= size:
+            f: Any = io.BytesIO(head)
+            raw = None
+        else:
+            raw = S3RangeFile(
+                self.client, self.bucket, key, size=size, max_bytes=self.max_object_bytes
+            )
+            f = io.BufferedReader(raw, buffer_size=256 * 1024)
+        try:
+            result = scan_table(kind, f, detector, self.max_rows, self.columnar)
+        except UnsupportedCodec:
+            self._skip(cov, "columnar")
+            return None
+        except Exception:
+            if raw is not None and raw.cut:
+                cov.partial += 1
+                self._skip(cov, "columnar")  # the cap fell before a single batch
+                return None
+            raise
+        if raw is not None and raw.cut:
+            result.partial = True
+        if result.partial:
+            cov.partial += 1
+        read = raw.bytes_read if raw is not None else len(head or b"")
+        version = raw.version_id if raw is not None else None
+        return result, read, version
 
     def run(
         self,
@@ -119,7 +310,7 @@ class S3Source:
         store: FindingStore,
         now: _dt.datetime,
     ) -> SourceRun:
-        cov = Coverage("s3", self.target, sample_percent=self.sample_percent)
+        cov = Coverage(self.kind, self.target, sample_percent=self.sample_percent)
         watermark = cursor.get("watermark")
         pass_started = cursor.get("passStartedAt") or now.isoformat()
         start_after = cursor.get("startAfter")
@@ -148,12 +339,17 @@ class S3Source:
                     if key.endswith("/") or obj.get("Size", 0) == 0:
                         start_after = key
                         continue
+                    if self.exclude_prefixes and key.startswith(self.exclude_prefixes):
+                        start_after = key  # a catalog table's own source reads it
+                        continue
                     cov.eligible += 1
                     if sample_point(key) >= self.sample_percent:
                         cov.sampled_out += 1
                         start_after = key
                         continue
-                    read_it, _, kind = classify_key(key)
+                    read_it, _, kind = classify_key(_inner_name(key))
+                    if columnar_kind(key) is not None:
+                        read_it = True
                     if not read_it:
                         cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
                         start_after = key
@@ -174,31 +370,14 @@ class S3Source:
                     budget.take(size)
                     cur_n += 1
                     try:
-                        got = self._read(key, obj.get("Size", 0), cov)
-                        if got is not None:
-                            text, read, version = got
-                            item = scan_item_text(key, text, detector)
-                            cov.scanned += 1
-                            cov.bytes_scanned += read
-                            cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
-                            cov.redaction_markers += item.redaction_markers
-                            cov.test_values += item.test_values
-                            cov.suppressed += item.suppressed
-                            resource = s3_resource(self.bucket, key, version)
-                            link = s3_link(self.region, self.bucket, key, version)
-                            connect = (
-                                {"contactId": item.contact_id, "instanceId": item.instance_id or ""}
-                                if item.contact_id
-                                else None
-                            )
-                            findings = [
-                                finding_json(
-                                    resource, link, item.format, cf, seen_at, connect=connect
-                                )
-                                for cf in item.findings.values()
-                                if cf.count or cf.occurrences
-                            ]
-                            store.replace_location(f"{self.id}\n{key}", findings)
+                        self._scan_object(
+                            key,
+                            size=obj.get("Size", 0),
+                            cov=cov,
+                            detector=detector,
+                            store=store,
+                            seen_at=seen_at,
+                        )
                     except Exception as err:  # one bad object must not stop the pass
                         cov.unreadable += 1
                         if is_kms_denial(err):
@@ -236,6 +415,129 @@ class S3Source:
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_read_error
         return SourceRun(cov, new_cursor)
+
+    def _scan_object(
+        self,
+        key: str,
+        *,
+        size: int,
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+    ) -> None:
+        kind = columnar_kind(key)
+        head: bytes | None = None
+        version: str | None = None
+        if kind is None:
+            head, read, version, partial = self._read(key, size, cov)
+            kind = sniff(head) if _compression(key) is None else None
+            if kind is None:
+                if partial:
+                    cov.partial += 1
+                text = self._text(key, head, cov)
+                if text is None:
+                    return
+                self._record_text(
+                    key,
+                    text,
+                    read=read,
+                    version=version,
+                    cov=cov,
+                    detector=detector,
+                    store=store,
+                    seen_at=seen_at,
+                )
+                return
+        got = self._table(kind, key, size=size, cov=cov, detector=detector, head=head)
+        if got is None:
+            return
+        table, read, range_version = got
+        self._record_table(
+            key,
+            table,
+            read=read,
+            version=version or range_version,
+            cov=cov,
+            store=store,
+            seen_at=seen_at,
+        )
+
+    def _record_text(
+        self,
+        key: str,
+        text: str,
+        *,
+        read: int,
+        version: str | None,
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+    ) -> None:
+        name = _inner_name(key)
+        if self.serde == "csv" and self.columns:
+            rows = csv_rows(text, self.columns, self.delimiter, self.skip_header)
+            table = scan_rows("csv", self.columns, rows, detector, self.max_rows)
+            self._record_table(
+                key, table, read=read, version=version, cov=cov, store=store, seen_at=seen_at
+            )
+            return
+        if self.serde == "json":
+            columns, records = json_rows(text)
+            table = scan_rows("json", columns, records, detector, self.max_rows)
+            self._record_table(
+                key, table, read=read, version=version, cov=cov, store=store, seen_at=seen_at
+            )
+            return
+        item = scan_item_text(name, text, detector)
+        cov.scanned += 1
+        cov.bytes_scanned += read
+        cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
+        cov.redaction_markers += item.redaction_markers
+        cov.test_values += item.test_values
+        cov.suppressed += item.suppressed
+        resource = s3_resource(self.bucket, key, version, catalog=self.catalog)
+        link = s3_link(self.region, self.bucket, key, version)
+        connect = (
+            {"contactId": item.contact_id, "instanceId": item.instance_id or ""}
+            if item.contact_id
+            else None
+        )
+        findings = [
+            finding_json(resource, link, item.format, cf, seen_at, connect=connect)
+            for cf in item.findings.values()
+            if cf.count or cf.occurrences
+        ]
+        store.replace_location(f"{self.id}\n{key}", findings)
+
+    def _record_table(
+        self,
+        key: str,
+        table: TableResult,
+        *,
+        read: int,
+        version: str | None,
+        cov: Coverage,
+        store: FindingStore,
+        seen_at: str,
+    ) -> None:
+        cov.scanned += 1
+        cov.bytes_scanned += read
+        cov.formats[table.format] = cov.formats.get(table.format, 0) + 1
+        cov.redaction_markers += table.redaction_markers
+        cov.test_values += table.test_values
+        cov.suppressed += table.suppressed
+        link = s3_link(self.region, self.bucket, key, version)
+        findings: list[dict[str, Any]] = []
+        for column, item in sorted(table.by_column.items()):
+            resource = s3_resource(self.bucket, key, version, column=column, catalog=self.catalog)
+            findings.extend(
+                finding_json(resource, link, table.format, cf, seen_at)
+                for cf in item.findings.values()
+                if cf.count or cf.occurrences
+            )
+        store.replace_location(f"{self.id}\n{key}", findings)
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:
         """Drop stored findings whose object is gone."""

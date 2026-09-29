@@ -14,9 +14,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "boto3-stubs[dynamodb,events,logs,s3]>=1.43.103",
+  "boto3-stubs[dynamodb,events,glue,logs,s3]>=1.43.103",
+  "fastavro>=1.12",
   "jsonschema>=4.26.0",
-  "moto[events,logs,s3]>=5.2.3",
+  "moto[events,glue,logs,s3]>=5.2.3",
   "mypy>=1.18",
   "pytest>=8.4",
   "ruff>=0.13",
@@ -26,6 +27,15 @@ dev = [
 lambda = [
     "awslambdaric>=4.1.0",
 ]
+# Columnar and data-lake formats (Parquet, ORC, Avro codecs, zstd). In the
+# container image, not the Lambda zip: with pyarrow the zip would pass
+# Lambda's 250 MB unzipped limit (docs/ARCHITECTURE.md).
+columnar = [
+    "pyarrow>=21",
+]
+
+[tool.uv]
+default-groups = ["dev", "columnar"]
 
 [build-system]
 requires = ["hatchling>=1.32.4"]
@@ -64,6 +74,11 @@ known-first-party = ["sensitive_data_scanner", "conftest", "synthetic", "aws_fix
 python_version = "3.12"
 strict = true
 files = ["src", "tests"]
+
+# pyarrow ships no type information.
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*", "fastavro", "fastavro.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -56,7 +56,21 @@
             },
             "key": { "$ref": "#/$defs/maskedName" },
             "versionId": { "type": "string", "maxLength": 1024 },
-            "keyMasked": { "const": true }
+            "keyMasked": { "const": true },
+            "column": {
+              "description": "For a table object (Parquet, ORC, Avro, or a catalog table's CSV or JSON): the column the values are in (1.2).",
+              "$ref": "#/$defs/maskedName"
+            },
+            "catalog": {
+              "description": "For an object read as part of a Glue Data Catalog table: its database and table (1.2).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["database", "table"],
+              "properties": {
+                "database": { "$ref": "#/$defs/maskedName" },
+                "table": { "$ref": "#/$defs/maskedName" }
+              }
+            }
           }
         },
         {
@@ -132,7 +146,7 @@
         "format": {
           "enum": [
             "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
-            "connect_flow_log", "dynamodb_item"
+            "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro"
           ]
         },
         "class": { "$ref": "#/$defs/class" },
@@ -179,7 +193,7 @@
         "suppressed", "redactionMarkers", "passComplete", "backlog", "error"
       ],
       "properties": {
-        "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb"] },
+        "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table"] },
         "target": { "$ref": "#/$defs/maskedName" },
         "listed": { "type": "integer", "minimum": 0 },
         "eligible": { "type": "integer", "minimum": 0 },
@@ -191,7 +205,9 @@
         "bytesScanned": { "type": "integer", "minimum": 0 },
         "skipped": {
           "type": "object",
-          "propertyNames": { "enum": ["audio", "video", "image", "document", "archive", "binary"] },
+          "propertyNames": {
+            "enum": ["audio", "video", "image", "document", "archive", "binary", "columnar"]
+          },
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
         "formats": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
@@ -211,7 +227,7 @@
     "storeReason": {
       "enum": [
         "denied", "not_allowed", "self", "too_large", "unsupported", "unsupported_format",
-        "kms_access", "access_denied", "tags_unreadable", "budget", "error"
+        "kms_access", "access_denied", "lake_formation", "tags_unreadable", "budget", "error"
       ]
     },
     "discovery": {
@@ -227,7 +243,7 @@
             "additionalProperties": false,
             "required": ["kind", "name", "origin", "status"],
             "properties": {
-              "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb"] },
+              "kind": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table"] },
               "name": { "$ref": "#/$defs/maskedName" },
               "nameMasked": { "const": true },
               "origin": { "enum": ["discovery", "config"] },
@@ -244,7 +260,10 @@
               },
               "backlog": { "const": true },
               "logGroupClass": { "type": "string", "pattern": "^[A-Z_]{1,40}$" },
-              "tableStatus": { "type": "string", "pattern": "^[A-Z_]{1,60}$" }
+              "tableStatus": { "type": "string", "pattern": "^[A-Z_]{1,60}$" },
+              "location": { "$ref": "#/$defs/maskedName" },
+              "lakeFormation": { "const": true },
+              "catalogObject": { "enum": ["resource_link", "view", "not_s3"] }
             }
           }
         },
@@ -261,7 +280,7 @@
         },
         "listErrors": {
           "type": "object",
-          "propertyNames": { "enum": ["s3", "cloudwatch_logs", "dynamodb"] },
+          "propertyNames": { "enum": ["s3", "cloudwatch_logs", "dynamodb", "glue_table"] },
           "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,80}$" }
         }
       }
