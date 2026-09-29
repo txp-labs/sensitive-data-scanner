@@ -6,6 +6,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Internal
+- Release: build the wheel only (the sdist could not carry the spec and
+  licenses), and allow re-running the release of an existing tag by hand.
+
 ## 0.1.0 — 2026-09-29
 
 ### Spec
