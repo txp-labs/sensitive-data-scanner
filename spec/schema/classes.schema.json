@@ -6,14 +6,17 @@
   "additionalProperties": false,
   "required": ["specVersion", "classes", "retryPrefixes", "promptCarryover", "contextWindow", "cardBrands"],
   "properties": {
-    "specVersion": { "const": "0.2" },
+    "specVersion": { "const": "0.3" },
     "classes": {
       "type": "object",
       "minProperties": 1,
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
       "additionalProperties": { "$ref": "#/$defs/class" }
     },
-    "retryPrefixes": { "type": "array", "items": { "type": "string", "pattern": "^[^A-Z]+$" } },
+    "retryPrefixes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[^A-Z.,!?;:]*[a-z0-9'][^A-Z.,!?;:]*$" }
+    },
     "promptCarryover": {
       "type": "object",
       "additionalProperties": false,
@@ -98,7 +101,6 @@
         "severity": { "enum": ["high", "medium", "low"] },
         "promptPhrases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "shape": { "$ref": "#/$defs/shape" },
-        "promptedWithoutShape": { "enum": ["flag_low_confidence"] },
         "standalone": { "enum": ["any", "formatted", "never"] },
         "contextWords": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "contextExclusions": { "type": "array", "items": { "type": "string", "minLength": 1 } },

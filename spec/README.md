@@ -1,4 +1,4 @@
-# The sensitive-data spec, version 0.2
+# The sensitive-data spec, version 0.3
 
 This directory is a **contract**. Three implementations follow it:
 
@@ -39,6 +39,12 @@ Regular expressions in the spec (prompt phrases, context exclusions) are
 matched **case-insensitively with ASCII semantics**: `\b`, `\d` and `\w` are
 ASCII only. Write them in the subset that Python `re` and JavaScript
 `RegExp` agree on: no lookbehind, no named groups, no inline flags.
+
+A **prompt phrase** matches only with neither a letter nor a digit (or with
+the start or end of the text) on each side. The implementations apply that
+boundary, so a phrase does not carry its own `\b`: each phrase `P` is matched
+as `(?<![A-Za-z0-9])(?:P)(?![A-Za-z0-9])`. `born` does not match inside
+"stubborn", and `4 digit code` does not match inside "14 digit code".
 
 ## Normalization
 
@@ -133,7 +139,17 @@ For each `bot` or `agent` turn:
 1. Lower-case the text, replace `’` with `'`, and remove leading whitespace.
    If it starts with a `retryPrefixes` entry, remove the prefix and then any
    whitespace and `. , ! ? ; :`. The turn is then a **retry**.
-2. Find every match of every class's `promptPhrases`. When two matches of
+   - A retry prefix is a run of words (split on whitespace and
+     `. , ! ? ; :`). It matches when the text starts with any run of those
+     separator characters, then its words in order, each apart from the next
+     by one or more of them, and then neither a letter nor a digit (or the
+     end of the text). So "Sorry, I didn't get that!" and "Sorry... I didn't
+     catch that." are retries of `sorry i didn't get that` and
+     `sorry i didn't catch that`.
+   - A prefix matches only at the **start** of the turn: "Okay. Sorry, I
+     didn't get that." is not a retry.
+2. Find every match of every class's `promptPhrases`, with the boundary
+   above. When two matches of
    **different** classes overlap, drop the shorter one. Example: "last four
    of your social security number" arms `us_ssn_last4`, not `us_ssn`.
 3. The classes left, in order of their first match, are the turn's
@@ -230,7 +246,8 @@ A value that starts in the prompted customer turn:
   - else the first it passes **soft**: `medium`;
   - else, if the unprompted rules below give it another class, that match
     (a valid card after an SSN prompt is a card);
-  - else the first prompted class: `low` (`promptedWithoutShape`).
+  - else the first prompted class: `low`. This holds for **every** class;
+    there is no per-class setting for it.
 - The span is the **whole value**.
 - Test numbers and dummy values are **not** excluded from prompted values.
   A known test card keyed after a card prompt is still a card.
@@ -302,8 +319,8 @@ classed.
 
 ## Stability
 
-- `specVersion` is `"0.2"`.
-- Before 1.0, a **breaking change bumps the minor version** (0.1 to 0.2).
+- `specVersion` is `"0.3"`.
+- Before 1.0, a **breaking change bumps the minor version** (0.2 to 0.3).
   A change is breaking if it can change the matches for any input, or if it
   changes a file's shape. Every change is listed in the repository
   CHANGELOG.
@@ -311,6 +328,64 @@ classed.
   change to the contract.
 - An implementation declares the `specVersion` it implements and refuses to
   load a spec file with any other version.
+
+## Changes from 0.2
+
+Version 0.3 settles txp-labs/sensitive-data-scanner#11, raised by Stugum in
+its review of 0.1. Stugum mirrors this contract, so every change is listed
+here. Each change can alter matches, so 0.3 is breaking. Every rule has
+vectors, near-misses included, in `vectors/prompt-phrases.jsonl`.
+
+1. **Prompt phrases match on boundaries.** A phrase matches only with
+   neither a letter nor a digit, or the start or end of the text, on each
+   side. The implementations apply the boundary as
+   `(?<![A-Za-z0-9])(?:P)(?![A-Za-z0-9])`, so the phrases dropped their own
+   `\b` (`ssn`, `itin`, `dob`, `cvv` and `pin` are now bare). "stubborn" no
+   longer arms `dob`, and "14 digit code" does not arm `cvv`. The issue asked
+   for a non-letter boundary; digits count too, so a phrase that starts or
+   ends with a digit cannot match inside a longer number.
+2. **Tolerant variants for dropped words**, each with a near-miss vector:
+   - `us_ssn` and `us_itin`: `social(?: security)? number` replaces
+     `social security number`, so "nine digit Social number" arms them.
+     "social media account number" still arms only `account_number`.
+   - `us_itin`: `taxpayer id(?:entification)? number` replaces `taxpayer
+     identification number` ("taxpayer ID number"). "taxpayer identity"
+     arms nothing.
+   - `dob`: `birth ?date` is added ("birth date", "birthdate"). "birthdates"
+     arms nothing.
+   - `card`: `(?:credit |debit )?card number` and `(?:credit|debit) card`
+     replace the three 0.2 phrases, and `number on (?:the front of )?your
+     (?:credit |debit )?card` is added ("the long number on the front of
+     your card"). "debit cards" arms nothing.
+   - `cvv`: `cvc`, `(?:three|four|3|4)[- ]digit (?:security )?code` (it
+     replaces `three digit code`) and `(?:number|code) on the back of
+     (?:your|the) card` are added. "The number on the back of your card"
+     arms `cvv`, not `card`; "six digit code" arms nothing.
+   - `us_ssn_last4`: one phrase, `last (?:four|4)(?: digits)?(?: of)?(?:
+     (?:your|the))? (?:social(?: security)?(?: number)?|ssn)`, replaces
+     `last four of your social` and `last 4 of your ssn` (it is the
+     `us_ssn` context exclusion). "Last four digits of your Social Security
+     number" now arms `us_ssn_last4`; in 0.2 it armed `us_ssn` and
+     `us_itin`. "Last four digits of your phone number" arms nothing.
+3. **Retry prefixes ignore punctuation.** A prefix is a run of words; in the
+   turn they may be apart by any run of whitespace and `. , ! ? ; :`, and
+   leading separators are skipped. "Sorry, I didn't get that!" is a retry.
+   A prefix still matches only at the **start** of the turn (Stugum's
+   "anywhere in the turn" is not adopted), and must end at a non-letter,
+   non-digit. The entries are now written without punctuation, and two are
+   added: `sorry i didn't get that`, `sorry i didn't catch that`, `i'm sorry
+   i didn't get that`, `i'm sorry i didn't catch that`. The schema refuses
+   `. , ! ? ; :` in an entry.
+4. **`promptedWithoutShape` is removed** from `card` and from the schema. It
+   was vestigial: a prompted value that passes no shape is the first
+   prompted class at `low` for **every** class, as 0.2 already did. A 0.3
+   file that sets it fails the schema.
+5. **`specVersion` is `"0.3"`** in both spec files and schemas. An
+   implementation of 0.2 refuses them.
+
+Declined, as in #11: the engine-facing class ids and labels (`us_ssn`,
+`card`, `account_number`) stay canonical, and there is no `address` class.
+Stugum keeps its own mappings for those.
 
 ## Changes from 0.1
 

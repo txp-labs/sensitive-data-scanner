@@ -8,17 +8,21 @@
 #
 # Synthetic and public values only. Never put a real card number, SSN or any
 # other personal value in this file.
-specVersion: "0.2"
+specVersion: "0.3"
 
 classes:
   us_ssn:
     severity: high
     # Regular expressions, matched case-insensitively against a bot or agent
     # turn (retry prefixes stripped). A match marks the NEXT customer turn as
-    # this class.
+    # this class. Implementations apply a letter boundary at both ends: a
+    # phrase matches only with a non-letter, or the start or end of the text,
+    # on each side, so no phrase carries its own \b.
     promptPhrases:
-      - "social security number"
-      - "\\bssn\\b"
+      # "social security number", and "social number" with the word dropped.
+      # Never "social media account number".
+      - "social(?: security)? number"
+      - "ssn"
     shape:
       digits: 9
       rules: [area_not_000_666_9xx, group_not_00, serial_not_0000]
@@ -41,10 +45,11 @@ classes:
   us_itin:
     severity: high
     promptPhrases:
-      - "social security number"
-      - "\\bssn\\b"
-      - "\\bitin\\b"
-      - "taxpayer identification number"
+      - "social(?: security)? number"
+      - "ssn"
+      - "itin"
+      # "taxpayer identification number" and "taxpayer id number".
+      - "taxpayer id(?:entification)? number"
     shape:
       digits: 9
       rules: [area_9xx, group_50_65_70_88_90_92_94_99]
@@ -77,14 +82,18 @@ classes:
 
   card:
     severity: high
-    promptPhrases: ["credit card number", "card number", "debit card"]
+    promptPhrases:
+      - "(?:credit |debit )?card number"
+      - "(?:credit|debit) card"
+      # "the number on your card", "the long number on the front of your card".
+      # Never the back of the card: that is the security code.
+      - "number on (?:the front of )?your (?:credit |debit )?card"
     shape:
       digits: [13, 19]
       rules: [luhn, iin_known]
       # A prompted answer that fails only these rules is medium confidence,
       # not low: a Luhn-valid number the IIN table does not know.
       softRules: [iin_known]
-    promptedWithoutShape: flag_low_confidence
     standalone: any
     contextWords:
       - "card"
@@ -170,7 +179,8 @@ classes:
 
   dob:
     severity: medium
-    promptPhrases: ["date of birth", "\\bdob\\b", "birthday", "born"]
+    # "born" never arms inside "stubborn": the letter boundary.
+    promptPhrases: ["date of birth", "dob", "birth ?date", "birthday", "born"]
     shape:
       kinds: [date_mmddyy, date_mmddyyyy, date_slashed, date_iso, spoken_date]
     standalone: never
@@ -178,12 +188,18 @@ classes:
 
   cvv:
     severity: high
-    promptPhrases: ["security code", "\\bcvv\\b", "three digit code"]
+    promptPhrases:
+      - "security code"
+      - "cvv"
+      - "cvc"
+      # "three digit code", "3-digit security code"; never "six digit code".
+      - "(?:three|four|3|4)[- ]digit (?:security )?code"
+      - "(?:number|code) on the back of (?:your|the) card"
     shape: { digits: [3, 4] }
 
   pin:
     severity: high
-    promptPhrases: ["\\bpin\\b"]
+    promptPhrases: ["pin"]
     shape: { digits: [4, 6] }
 
   account_number:
@@ -193,11 +209,22 @@ classes:
 
   us_ssn_last4:
     severity: low
-    promptPhrases: ["last four of your social", "last 4 of your ssn"]
+    # "last four of your social", "last 4 digits of your social security
+    # number", "last four of the ssn". Longer than any us_ssn phrase it
+    # overlaps, so it wins.
+    promptPhrases:
+      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the))? (?:social(?: security)?(?: number)?|ssn)"
     shape: { digits: 4 }
 
-# Stripped from the start of a bot or agent turn before prompt matching.
-retryPrefixes: ["sorry. i didn't get that", "i'm sorry, i didn't catch that"]
+# Stripped from the start of a bot or agent turn before prompt matching. Each
+# is a run of words; in the turn, the words may be separated by any run of
+# whitespace and . , ! ? ; : ("Sorry, I didn't get that!" is a retry). They
+# match only at the start of the turn.
+retryPrefixes:
+  - "sorry i didn't get that"
+  - "sorry i didn't catch that"
+  - "i'm sorry i didn't get that"
+  - "i'm sorry i didn't catch that"
 
 promptCarryover:
   turns: 1            # the class applies to the next customer turn only (keypad or speech)

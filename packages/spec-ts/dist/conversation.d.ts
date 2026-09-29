@@ -52,7 +52,11 @@ export interface ClassifyOptions {
     /** The date plausibility is judged against (birth years may not be later). Default: today. */
     now?: Date;
 }
-/** The turn text without a leading retry prefix, and whether it had one. */
+/**
+ * The turn text without a leading retry prefix, and whether it had one. A
+ * prefix's words may be apart by any run of whitespace and . , ! ? ; : in the
+ * turn, and it matches only at the start ("Sorry, I didn't get that!").
+ */
 export declare function stripRetry(spec: Spec, text: string): [string, boolean];
 /**
  * Classes a bot or agent turn asks for, in the order it names them, and

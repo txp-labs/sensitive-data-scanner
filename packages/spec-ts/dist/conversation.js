@@ -47,12 +47,17 @@ function lstrip(s, chars) {
         i++;
     return s.slice(i);
 }
-/** The turn text without a leading retry prefix, and whether it had one. */
+/**
+ * The turn text without a leading retry prefix, and whether it had one. A
+ * prefix's words may be apart by any run of whitespace and . , ! ? ; : in the
+ * turn, and it matches only at the start ("Sorry, I didn't get that!").
+ */
 export function stripRetry(spec, text) {
     const low = lstrip(text.replaceAll('’', "'"), ' \t\r\n').toLowerCase();
-    for (const prefix of spec.retryPrefixes) {
-        if (low.startsWith(prefix))
-            return [lstrip(low.slice(prefix.length), ' \t\r\n.,!?;:'), true];
+    for (const rx of spec.retryRes) {
+        const m = rx.exec(low);
+        if (m)
+            return [lstrip(low.slice(m[0].length), ' \t\r\n.,!?;:'), true];
     }
     return [low, false];
 }

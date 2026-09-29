@@ -66,7 +66,7 @@ the scanned account onto that bus:
   "schema": "sensitive-data-scanner.findings",
   "schemaVersion": "1.2",
   "scannerVersion": "0.2.0",
-  "specVersion": "0.2",
+  "specVersion": "0.3",
   "runId": "20260929T060000Z-1a2b3c4d",
   "account": "123456789012",
   "region": "us-west-2",

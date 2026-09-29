@@ -13,6 +13,7 @@ import {
   loadSpec,
   normalize,
   parseSpec,
+  promptClasses,
   redactTurns,
   toOriginal,
   type Turn,
@@ -26,10 +27,10 @@ test('the compiled spec matches spec/*.yaml', () => {
   assert.equal(file, generated());
 });
 
-test('spec version 0.2, and any other version is refused', () => {
-  assert.equal(SPEC_VERSION, '0.2');
-  assert.equal(spec.specVersion, '0.2');
-  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.1' };
+test('spec version 0.3, and any other version is refused', () => {
+  assert.equal(SPEC_VERSION, '0.3');
+  assert.equal(spec.specVersion, '0.3');
+  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.2' };
   assert.throws(() => parseSpec(wrong, NORMALIZE_RAW), /unsupported specVersion/);
 });
 
@@ -120,5 +121,22 @@ test('menu and question turns, and backchannels', () => {
   }
   for (const t of ['Mm-hmm.', 'Okay.', 'Thank you.', 'Got it, go on.']) {
     assert.equal(isMenuOrQuestion(spec, t), false, t);
+  }
+});
+
+test('prompt phrases match only with no letter or digit on either side (spec 0.3)', () => {
+  assert.deepEqual(promptClasses(spec, "I'm being stubborn about it.")[0], []);
+  assert.deepEqual(promptClasses(spec, 'When were you born?')[0], ['dob']);
+  assert.deepEqual(promptClasses(spec, 'Enter the 14 digit code.')[0], []);
+  assert.deepEqual(promptClasses(spec, 'Enter the 4 digit code.')[0], ['cvv']);
+  assert.deepEqual(promptClasses(spec, 'SSN:')[0], ['us_ssn', 'us_itin']);
+});
+
+test('retry prefixes ignore . , ! ? ; : and match only at the start (spec 0.3)', () => {
+  for (const t of ["Sorry, I didn't get that!", 'Sorry. I didn’t get that.', "  sorry; i didn't   catch that?", "I'm sorry I didn't catch that."]) {
+    assert.equal(promptClasses(spec, t)[1], true, t);
+  }
+  for (const t of ["Okay. Sorry, I didn't get that.", "Sorry I didn't get thatcher's file.", 'Sorry, I missed that.']) {
+    assert.equal(promptClasses(spec, t)[1], false, t);
   }
 });

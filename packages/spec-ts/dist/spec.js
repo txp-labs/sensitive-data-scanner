@@ -6,8 +6,13 @@
  * a caller that loads a newer spec itself.
  */
 import { CLASSES_RAW, NORMALIZE_RAW } from './spec.generated.js';
-export const SPEC_VERSION = '0.2';
+export const SPEC_VERSION = '0.3';
 const WS = '[ \\t\\r\\n]+';
+/** What may separate the words of a retry prefix in a turn: whitespace and . , ! ? ; : */
+const RETRY_SEP = '[ \\t\\r\\n.,!?;:]';
+/** Every prompt phrase matches only with neither a letter nor a digit on each side. */
+const BOUNDARY_BEFORE = '(?<![A-Za-z0-9])';
+const BOUNDARY_AFTER = '(?![A-Za-z0-9])';
 /** Escape a literal for a RegExp (the same characters Python's re.escape needs here). */
 export function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
@@ -15,6 +20,16 @@ export function escapeRegExp(s) {
 /** Longest first, then alphabetical: the order every alternation is built in. */
 export function byLengthThenName(a, b) {
     return b.length - a.length || (a < b ? -1 : a > b ? 1 : 0);
+}
+/** A prompt phrase with the spec's boundary: no letter or digit on either side. */
+export function promptRegex(phrase) {
+    return new RegExp(`${BOUNDARY_BEFORE}(?:${phrase})${BOUNDARY_AFTER}`, 'gi');
+}
+/** A retry prefix at the start of a turn: its words, apart by whitespace or . , ! ? ; : */
+export function retryRegex(prefix) {
+    const words = prefix.toLowerCase().split(new RegExp(`${RETRY_SEP}+`)).filter(Boolean);
+    const body = words.map(escapeRegExp).join(`${RETRY_SEP}+`);
+    return new RegExp(`^${RETRY_SEP}*${body}${BOUNDARY_AFTER}`, 'i');
 }
 /** Context or suppress words as one regex: whole words, any whitespace between. */
 export function phraseRegex(words) {
@@ -72,7 +87,7 @@ function parseClass(name, raw) {
         dummyValues: new Set(strings(raw.dummyValues)),
         testNumbers: new Set(strings(raw.testNumbers)),
         testNumbersMaxDistinctDigits: Number(raw.testNumbersMaxDistinctDigits ?? 0),
-        promptRes: promptPhrases.map((p) => new RegExp(p, 'gi')),
+        promptRes: promptPhrases.map(promptRegex),
         contextRe: phraseRegex(contextWords),
         exclusionRes: contextExclusions.map((p) => new RegExp(p, 'gi')),
         suppressRe: phraseRegex(suppressWords),
@@ -139,11 +154,13 @@ export function parseSpec(classesRaw, normalizeRaw) {
         classes[name] = parseClass(name, c);
     const carry = isRecord(classesRaw.promptCarryover) ? classesRaw.promptCarryover : {};
     const window = isRecord(classesRaw.contextWindow) ? classesRaw.contextWindow : {};
+    const retryPrefixes = strings(classesRaw.retryPrefixes).map((p) => p.toLowerCase());
     return {
         specVersion: SPEC_VERSION,
         classes,
         classOrder: Object.keys(classes),
-        retryPrefixes: strings(classesRaw.retryPrefixes).map((p) => p.toLowerCase()),
+        retryPrefixes,
+        retryRes: retryPrefixes.map(retryRegex),
         carryoverTurns: Number(carry.turns ?? 1),
         surviveRetry: carry.surviveRetry !== false,
         contextTurnsBefore: Number(window.turnsBefore ?? 2),
