@@ -25,3 +25,21 @@ def all_conversation_vectors() -> list[dict[str, Any]]:
     for path in conversation_vector_files():
         out.extend(load_jsonl(path))
     return out
+
+
+VECTOR_DATE = __import__("datetime").date(2026, 9, 29)
+
+
+def vector_now(case: dict[str, Any]) -> Any:
+    import datetime as dt
+
+    return dt.date.fromisoformat(case["now"]) if case.get("now") else VECTOR_DATE
+
+
+def turns_of(case: dict[str, Any]) -> list[Any]:
+    from sensitive_data_scanner.engine.conversation import Turn
+
+    return [
+        Turn(t["speaker"], t["text"], t.get("channel"), t.get("beginMs"), t.get("endMs"))
+        for t in case["turns"]
+    ]
