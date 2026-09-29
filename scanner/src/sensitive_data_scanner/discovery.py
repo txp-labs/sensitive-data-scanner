@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from .config import Config, StoreRule
 from .safety import error_name, is_kms_denial, log_event, redact_digits
+from .sources.rds import EXPORTABLE_ENGINES
 
 if TYPE_CHECKING:
     from .runner import Clients
@@ -48,6 +49,9 @@ READABLE_TABLE_STATES = frozenset({"ACTIVE", "UPDATING"})
 # Log classes FilterLogEvents can read. DELIVERY groups only forward to S3 or
 # Firehose and cannot be queried.
 READABLE_LOG_CLASSES = frozenset({"STANDARD", "INFREQUENT_ACCESS"})
+
+
+_INTERNAL = frozenset({"tableArn"})
 
 
 @dataclass(frozen=True)
@@ -68,7 +72,7 @@ class GlueTable:
 class Store:
     """One data store, listed by discovery or named in the configuration."""
 
-    kind: str  # s3 | cloudwatch_logs | dynamodb | glue_table
+    kind: str  # s3 | cloudwatch_logs | dynamodb | glue_table | rds
     name: str
     origin: str = "discovery"  # discovery | config
     tags: dict[str, str] | None = None
@@ -114,6 +118,8 @@ class Store:
         if self.backlog:
             out["backlog"] = True
         for k, v in self.extra.items():
+            if k in _INTERNAL:
+                continue
             out[k] = redact_digits(v) if isinstance(v, str) else v
         return out
 
@@ -266,7 +272,30 @@ def _discover_dynamodb(config: Config, clients: Clients, out: Discovery) -> None
         pct = store.sample_percent or 100
         cap = config.dynamodb_max_table_bytes
         if cap and store.size_bytes * pct // 100 > cap:
-            store.skip("too_large")
+            _too_large_table(config, ddb, store, name, str(desc.get("TableArn", "")))
+
+
+def _too_large_table(config: Config, ddb: Any, store: Store, name: str, arn: str) -> None:
+    """Too large to Scan: read it from an export when that is on and PITR allows it."""
+    if not config.dynamodb_export:
+        store.skip("too_large")
+        return
+    try:
+        pitr = ddb.describe_continuous_backups(TableName=name)
+        status = (
+            (pitr.get("ContinuousBackupsDescription") or {})
+            .get("PointInTimeRecoveryDescription", {})
+            .get("PointInTimeRecoveryStatus")
+        )
+    except Exception as err:
+        store.skip("too_large", error_name(err))
+        return
+    if status != "ENABLED":
+        store.skip("pitr_off")  # an export needs point-in-time recovery
+        store.extra["pitr"] = False
+        return
+    store.extra["readBy"] = "export"
+    store.extra["tableArn"] = arn
 
 
 def _glue_tags(clients: Clients, arn: str) -> dict[str, str]:
@@ -410,6 +439,50 @@ def _glue_table(
     _with_tags(store, config, _glue_tags, clients, arn)
 
 
+def _rds_store(config: Config, identifier: str, db_type: str, engine: str, tags: Any) -> Store:
+    store = Store("rds", identifier)
+    store.extra.update(engine=engine, dbType=db_type)
+    store.tags = _tag_list(tags)
+    if engine not in EXPORTABLE_ENGINES:
+        store.skip("unsupported")  # Oracle, SQL Server, Db2, Neptune, DocumentDB
+        return store
+    decide(store, config)
+    if store.status == "pending" and not (
+        config.rds_export_role_arn and config.rds_export_kms_key_arn
+    ):
+        store.skip("export_not_configured")
+    return store
+
+
+def _discover_rds(config: Config, clients: Clients, out: Discovery) -> None:
+    if clients.rds is None:
+        raise ValueError("no RDS client")
+    for page in clients.rds.get_paginator("describe_db_clusters").paginate():
+        for c in page.get("DBClusters", []):
+            out.stores.append(
+                _rds_store(
+                    config,
+                    str(c["DBClusterIdentifier"]),
+                    "cluster",
+                    str(c.get("Engine", "")),
+                    c.get("TagList"),
+                )
+            )
+    for ipage in clients.rds.get_paginator("describe_db_instances").paginate():
+        for i in ipage.get("DBInstances", []):
+            if i.get("DBClusterIdentifier"):
+                continue  # a cluster member: its cluster's snapshot covers it
+            out.stores.append(
+                _rds_store(
+                    config,
+                    str(i["DBInstanceIdentifier"]),
+                    "instance",
+                    str(i.get("Engine", "")),
+                    i.get("TagList"),
+                )
+            )
+
+
 def _reason(error: str | None) -> str:
     return "access_denied" if error in ACCESS_DENIED else "error"
 
@@ -424,6 +497,8 @@ def discover(config: Config, clients: Clients, region: str, account: str = "") -
         steps.append(("cloudwatch_logs", lambda: _discover_logs(config, clients, out)))
     if "dynamodb" in config.discover:
         steps.append(("dynamodb", lambda: _discover_dynamodb(config, clients, out)))
+    if "rds" in config.discover:
+        steps.append(("rds", lambda: _discover_rds(config, clients, out)))
     if "glue_table" in config.discover:
         steps.append(("glue_table", lambda: _discover_glue(config, clients, region, account, out)))
     for kind, step in steps:
@@ -441,9 +516,32 @@ def discover(config: Config, clients: Clients, region: str, account: str = "") -
     return out
 
 
-def settle(store: Store, coverages: list[Any]) -> None:
+NOTES = {
+    "export_pending": ("deferred", "export_pending"),
+    "budget": ("deferred", "budget"),
+    "no_snapshot": ("skipped", "no_snapshot"),
+    "export_failed": ("error", "export_failed"),
+}
+
+
+def settle(
+    store: Store,
+    coverages: list[Any],
+    notes: list[str | None] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
     """A store's status and gaps from the coverage of its sources this run."""
     if not coverages:
+        return
+    for k, v in (extra or {}).items():
+        if v is not None:
+            store.extra[k] = v
+    note = next((n for n in notes or [] if n), None)
+    if note in NOTES:
+        store.status, store.reason = NOTES[note]
+        store.backlog = any(c.backlog for c in coverages)
+        if store.status == "error":
+            store.error = next((c.error for c in coverages if c.error), None)
         return
     errors = [c for c in coverages if c.error]
     kms = sum(c.kms_denied for c in coverages)

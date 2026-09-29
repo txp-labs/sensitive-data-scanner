@@ -14,7 +14,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "boto3-stubs[dynamodb,events,glue,logs,s3]>=1.43.103",
+  "boto3-stubs[dynamodb,events,glue,logs,rds,rds-data,s3]>=1.43.103",
   "fastavro>=1.12",
   "jsonschema>=4.26.0",
   "moto[events,glue,logs,s3]>=5.2.3",

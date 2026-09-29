@@ -45,6 +45,10 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
             glue=boto3.client("glue", region_name=region)
             if "glue_table" in config.discover
             else None,
+            rds=boto3.client("rds", region_name=region) if "rds" in config.discover else None,
+            rds_data=(
+                boto3.client("rds-data", region_name=region) if config.data_api_targets else None
+            ),
         )
         doc = run_scan(
             config,
