@@ -4,6 +4,15 @@ Copyright 2026 txp-labs, LLC
 This product includes software developed by txp-labs, LLC.
 
 This product depends on Microsoft Presidio (https://github.com/microsoft/presidio),
-Copyright (c) Microsoft Corporation, licensed under the MIT License. The MIT
-License text is included with each distributed release under
-third_party/presidio/LICENSE.
+Copyright (c) Presidio Contributors, licensed under the MIT License. The MIT
+License text is included in this repository and with each distributed release
+under third_party/presidio/LICENSE.
+
+The Lambda zip and container image releases also bundle the Python packages
+Presidio and the scanner depend on, including spaCy (MIT), NumPy (BSD-3-Clause),
+phonenumbers (Apache-2.0), pydantic (MIT), PyYAML (MIT), regex (Apache-2.0),
+tldextract (BSD-3-Clause), boto3 and botocore (Apache-2.0) and, in the image
+only, the AWS Lambda Python Runtime Interface Client (Apache-2.0). Each
+package's own license and notice files ship inside the release, in that
+package's *.dist-info directory. The SPDX SBOM attached to every release lists
+every bundled package, its version and its license.

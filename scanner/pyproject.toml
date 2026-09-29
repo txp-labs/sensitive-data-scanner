@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner"
-version = "0.0.0"
+version = "0.1.0"
 description = "Find card numbers, US SSNs and other sensitive data in your own cloud storage and logs, reporting findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,6 +22,9 @@ dev = [
   "ruff>=0.13",
   "types-jsonschema>=4.26.0.20260518",
   "types-pyyaml>=6.0.12.20260906",
+]
+lambda = [
+    "awslambdaric>=4.1.0",
 ]
 
 [build-system]
