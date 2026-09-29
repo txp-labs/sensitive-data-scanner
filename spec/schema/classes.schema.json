@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["specVersion", "classes", "retryPrefixes", "promptCarryover", "contextWindow", "cardBrands"],
   "properties": {
-    "specVersion": { "const": "0.3" },
+    "specVersion": { "const": "0.4" },
     "classes": {
       "type": "object",
       "minProperties": 1,

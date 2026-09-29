@@ -1,4 +1,4 @@
-# The sensitive-data spec, version 0.3
+# The sensitive-data spec, version 0.4
 
 This directory is a **contract**. Three implementations follow it:
 
@@ -319,15 +319,55 @@ classed.
 
 ## Stability
 
-- `specVersion` is `"0.3"`.
-- Before 1.0, a **breaking change bumps the minor version** (0.2 to 0.3).
+- `specVersion` is `"0.4"`.
+- A version has two parts, `major.minor`, and no patch. The findings schema
+  requires `specVersion` to match `^[0-9]+\.[0-9]+$`.
+- Before 1.0, a **breaking change bumps the minor version** (0.3 to 0.4).
   A change is breaking if it can change the matches for any input, or if it
   changes a file's shape. Every change is listed in the repository
   CHANGELOG.
+- A change that cannot alter any match or any file's shape does not change
+  the version. That covers a comment, a vector the implementations already
+  pass, or a new export from an implementation.
 - Adding a vector that the current implementations already pass is not a
   change to the contract.
 - An implementation declares the `specVersion` it implements and refuses to
   load a spec file with any other version.
+
+## Changes from 0.3
+
+Version 0.4 settles txp-labs/sensitive-data-scanner#26, raised by Stugum after
+it adopted 0.3. The issue asked for 0.3.1, but this spec has no patch
+version. The new phrase can change matches ("nine digit social" arms nothing
+in 0.3), so under [Stability](#stability) it is a minor bump. A 0.3
+implementation refuses 0.4 files, so a mirror cannot drift unnoticed. Every
+rule has vectors, near-misses included, in `vectors/prompt-phrases.jsonl`.
+
+1. **"nine digit social" arms `us_ssn` and `us_itin`.** Both classes gain
+   the phrase `(?:nine|9)[- ]digit social(?: security)?(?: number)?(?! media)`.
+   - It matches "Please say your nine digit social." and "Enter your 9-digit
+     Social Security." In 0.3 these armed nothing.
+   - "social" alone still arms nothing ("Say your social."), because it is
+     too common a word. The phrase needs "nine digit" or "9-digit" in front,
+     and the 0.3 phrase `social(?: security)? number` still needs "number".
+   - "nine digit social media account number" arms only `account_number`.
+     The `(?! media)` lookahead, which is inside the allowed subset, keeps
+     the SSN phrase out.
+   - "19 digit social code" arms nothing: the boundary keeps the phrase's
+     `9` from following a digit.
+2. **The boundary comment in `classes.yaml`** now describes the boundary the
+   implementations apply, and this README already described: neither a
+   letter **nor a digit** on each side. It used to say "letter boundary …
+   non-letter". This is a comment only; no match changes.
+3. **`specVersion` is `"0.4"`** in both spec files and schemas. An
+   implementation of 0.3 refuses them.
+
+Not a spec change, but for consumers of the TypeScript package:
+`promptRegex(phrase)`, the boundary wrapper
+(`(?<![A-Za-z0-9])(?:P)(?![A-Za-z0-9])`, case-insensitive), is now exported
+from the package index. Build your own phrase with it instead of copying
+it. The package's version and the spec's version are separate (see
+`packages/spec-ts/README.md`).
 
 ## Changes from 0.2
 

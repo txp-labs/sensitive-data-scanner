@@ -1,6 +1,6 @@
 # @txp-labs/sensitive-data-spec
 
-The [sensitive-data spec](../../spec/README.md) (version 0.3) and a classifier
+The [sensitive-data spec](../../spec/README.md) (version 0.4) and a classifier
 for conversation turns, for **in-memory redaction** in a call engine. It has
 no runtime dependencies. It never logs, stores or returns a detected value:
 results are classes and offsets.
@@ -53,8 +53,29 @@ armedClasses(spec, [turns[0]]); // ['us_ssn', 'us_itin']
   question, which ends a value the caller is still giving.
 - **`normalize(text, spec.normalize)`** and **`toOriginal`** expose the
   normalization and its offset map.
+- **`promptRegex(phrase)`** wraps a phrase in the spec's prompt boundary
+  (neither a letter nor a digit on either side; case-insensitive, global).
+  Use it for a phrase of your own instead of copying the boundary.
 
 Offsets are UTF-16 code units, the same as JavaScript string indexes.
+
+## Versions: the package and the spec
+
+These are two separate numbers:
+
+- **The package version** (`version` in `package.json`) follows the
+  repository's **releases**. It is the same as the scanner's version and
+  changes only when a release is cut (`docs/RELEASING.md`). Between
+  releases, a commit on `main` keeps the last release's version even when
+  the spec under it has moved on. So the package said 0.2.0 at the spec 0.3
+  commit, and it will say 0.3.0 from the next release.
+- **The spec version** (`SPEC_VERSION`, and `specVersion` in the spec files
+  and in `loadSpec().specVersion`) follows the **spec**
+  (`spec/README.md`, Stability). It changes whenever the contract does, in
+  whatever commit changes it.
+
+When you pin a commit, check `SPEC_VERSION` to know which contract you have.
+Do not rely on the package version for that.
 
 ## Tested against the contract
 

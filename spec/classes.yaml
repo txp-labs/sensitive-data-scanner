@@ -8,20 +8,24 @@
 #
 # Synthetic and public values only. Never put a real card number, SSN or any
 # other personal value in this file.
-specVersion: "0.3"
+specVersion: "0.4"
 
 classes:
   us_ssn:
     severity: high
     # Regular expressions, matched case-insensitively against a bot or agent
     # turn (retry prefixes stripped). A match marks the NEXT customer turn as
-    # this class. Implementations apply a letter boundary at both ends: a
-    # phrase matches only with a non-letter, or the start or end of the text,
-    # on each side, so no phrase carries its own \b.
+    # this class. Implementations apply a boundary at both ends: a phrase
+    # matches only with neither a letter nor a digit (or the start or end of
+    # the text) on each side, so no phrase carries its own \b.
     promptPhrases:
       # "social security number", and "social number" with the word dropped.
       # Never "social media account number".
       - "social(?: security)? number"
+      # "nine digit social" with "number" dropped (0.4). Only after "nine
+      # digit" or "9-digit": "social" alone is too common a word, and never
+      # "nine digit social media ...".
+      - "(?:nine|9)[- ]digit social(?: security)?(?: number)?(?! media)"
       - "ssn"
     shape:
       digits: 9
@@ -46,6 +50,7 @@ classes:
     severity: high
     promptPhrases:
       - "social(?: security)? number"
+      - "(?:nine|9)[- ]digit social(?: security)?(?: number)?(?! media)"
       - "ssn"
       - "itin"
       # "taxpayer identification number" and "taxpayer id number".
@@ -179,7 +184,7 @@ classes:
 
   dob:
     severity: medium
-    # "born" never arms inside "stubborn": the letter boundary.
+    # "born" never arms inside "stubborn": the letter-and-digit boundary.
     promptPhrases: ["date of birth", "dob", "birth ?date", "birthday", "born"]
     shape:
       kinds: [date_mmddyy, date_mmddyyyy, date_slashed, date_iso, spoken_date]

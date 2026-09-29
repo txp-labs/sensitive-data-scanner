@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-SPEC_VERSION = "0.3"
+SPEC_VERSION = "0.4"
 
 WS = "[ \\t\\r\\n]+"
 

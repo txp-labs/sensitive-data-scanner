@@ -14,6 +14,7 @@ import {
   normalize,
   parseSpec,
   promptClasses,
+  promptRegex,
   redactTurns,
   toOriginal,
   type Turn,
@@ -27,10 +28,10 @@ test('the compiled spec matches spec/*.yaml', () => {
   assert.equal(file, generated());
 });
 
-test('spec version 0.3, and any other version is refused', () => {
-  assert.equal(SPEC_VERSION, '0.3');
-  assert.equal(spec.specVersion, '0.3');
-  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.2' };
+test('spec version 0.4, and any other version is refused', () => {
+  assert.equal(SPEC_VERSION, '0.4');
+  assert.equal(spec.specVersion, '0.4');
+  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.3' };
   assert.throws(() => parseSpec(wrong, NORMALIZE_RAW), /unsupported specVersion/);
 });
 
@@ -130,6 +131,28 @@ test('prompt phrases match only with no letter or digit on either side (spec 0.3
   assert.deepEqual(promptClasses(spec, 'Enter the 14 digit code.')[0], []);
   assert.deepEqual(promptClasses(spec, 'Enter the 4 digit code.')[0], ['cvv']);
   assert.deepEqual(promptClasses(spec, 'SSN:')[0], ['us_ssn', 'us_itin']);
+});
+
+test('"nine digit social" arms us_ssn and us_itin; "social media" never does (spec 0.4)', () => {
+  assert.deepEqual(promptClasses(spec, 'Please say your nine digit social.')[0], ['us_ssn', 'us_itin']);
+  assert.deepEqual(promptClasses(spec, 'Enter your 9-digit Social Security.')[0], ['us_ssn', 'us_itin']);
+  assert.deepEqual(
+    promptClasses(spec, 'Please read me your nine digit social media account number.')[0],
+    ['account_number'],
+  );
+  assert.deepEqual(promptClasses(spec, 'Which social media do you use?')[0], []);
+  assert.deepEqual(promptClasses(spec, 'Say your social.')[0], []);
+  assert.deepEqual(promptClasses(spec, 'Enter the 19 digit social code.')[0], []);
+});
+
+test('promptRegex is exported: the spec boundary around a phrase', () => {
+  const re = promptRegex('born');
+  assert.equal(re.test('When were you born?'), true);
+  re.lastIndex = 0;
+  assert.equal(re.test("I'm being stubborn."), false);
+  re.lastIndex = 0;
+  assert.equal(promptRegex('4 digit code').test('Enter the 14 digit code.'), false);
+  assert.equal(re.flags.includes('i'), true);
 });
 
 test('retry prefixes ignore . , ! ? ; : and match only at the start (spec 0.3)', () => {

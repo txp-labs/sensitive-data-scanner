@@ -1,4 +1,4 @@
-export declare const SPEC_VERSION = "0.3";
+export declare const SPEC_VERSION = "0.4";
 export interface Shape {
     digitsMin: number | null;
     digitsMax: number | null;
