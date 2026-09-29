@@ -23,20 +23,24 @@ import pytest
 from aws_fixtures import DATA, RESULTS, Env, config, epoch_ms
 from conftest import all_conversation_vectors, turns_of
 from ddb_fixtures import FIXTURES, Ddb, load_item, page, target
-from sensitive_data_scanner import safety
-from sensitive_data_scanner.detect.analyzer import Detector
-from sensitive_data_scanner.engine.conversation import classify
-from sensitive_data_scanner.engine.normalize import normalize
-from sensitive_data_scanner.engine.spec import load_spec
-from sensitive_data_scanner.safety import ScanError, redact_digits
-from sensitive_data_scanner.scan.attributes import scan_attributes
-from sensitive_data_scanner.scan.item import scan_item_text
+from sensitive_data_core import safety
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.engine.conversation import classify
+from sensitive_data_core.engine.normalize import normalize
+from sensitive_data_core.engine.spec import load_spec
+from sensitive_data_core.safety import ScanError, redact_digits
+from sensitive_data_core.scan.attributes import scan_attributes
+from sensitive_data_core.scan.item import scan_item_text
 from sensitive_data_scanner.sources.dynamodb import DynamoDBSource
 from synthetic import CARDS, SSN_A, SSN_B, all_values, dashed, printed, spaced, spoken_groups
 
 SPEC = load_spec()
 VECTORS = all_conversation_vectors()
-PACKAGE = Path(__file__).resolve().parents[1] / "src" / "sensitive_data_scanner"
+SCANNER = Path(__file__).resolve().parents[1]
+# Every package the audit reads: the core, and each platform's package.
+PACKAGES = sorted(
+    pkg for src in (SCANNER / "src", *SCANNER.glob("*/src")) for pkg in src.glob("sensitive_data_*")
+)
 DIGIT_WORD = r"(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)"
 
 
@@ -352,7 +356,7 @@ def test_no_value_leaves_columnar_formats_or_the_catalog(
     }
     for name, blob in outputs.items():
         assert leaks(blob) == [], name
-    from sensitive_data_scanner.scan.columnar import scan_rows
+    from sensitive_data_core.scan.columnar import scan_rows
 
     result = scan_rows(
         "parquet", list(rows[0]), rows, __import__("aws_fixtures").shared_detector(), 10
@@ -778,11 +782,11 @@ def test_a_masked_key_keeps_a_link_that_holds_no_value(
 
 
 def test_a_link_built_from_a_masked_name_is_dropped() -> None:
-    from sensitive_data_scanner.findings import (
+    from sensitive_data_core.findings import link_for
+    from sensitive_data_scanner.resources import (
         console_link,
         dynamodb_link,
         dynamodb_resource,
-        link_for,
         s3_link,
         s3_resource,
     )
@@ -859,7 +863,7 @@ def test_no_value_leaves_time_series_keyspaces_or_caches(
     """Timestream and Keyspaces tables and columns named with values, holding values; a cache
     named with one; an exported RDB snapshot holding one."""
     import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
-    from sensitive_data_scanner.scan.sql import sample_sql
+    from sensitive_data_core.scan.sql import sample_sql
     from sensitive_data_scanner.sources.other_stores import CQL, KeyspacesSource
     from test_other_stores import KS, FakeSession, stubs
 
@@ -1010,7 +1014,7 @@ def test_log_event_masks_and_refuses_unknown_events(capsys: pytest.CaptureFixtur
 
 
 def _modules() -> list[tuple[Path, ast.Module]]:
-    return [(p, ast.parse(p.read_text())) for p in sorted(PACKAGE.rglob("*.py"))]
+    return [(p, ast.parse(p.read_text())) for pkg in PACKAGES for p in sorted(pkg.rglob("*.py"))]
 
 
 def test_only_safety_writes_output() -> None:

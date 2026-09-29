@@ -31,13 +31,17 @@ import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
-from ..detect.analyzer import Detector
-from ..discovery import Discovery, Store, decide, needs_tags
-from ..findings import Coverage, console_link, store_field_resource
-from ..safety import error_name, log_event
-from ..scan.columnar import scan_rows
-from ..scan.sql import Dialect, sample_sql
-from .base import Budget, Context, FindingStore, SourceRun, column_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, column_findings
+from sensitive_data_core.coverage import Discovery, Store
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.safety import error_name, log_event
+from sensitive_data_core.scan.columnar import scan_rows
+from sensitive_data_core.scan.sql import Dialect, sample_sql
+
+from ..discovery import decide, needs_tags
+from ..resources import console_link
+from .base import Context
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).

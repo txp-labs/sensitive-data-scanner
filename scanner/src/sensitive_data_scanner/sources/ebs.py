@@ -35,13 +35,17 @@ import secrets
 import urllib.parse
 from typing import Any
 
-from ..detect.analyzer import Detector
-from ..discovery import Discovery, Store, decide, needs_tags, reason_for
-from ..findings import Coverage, console_link, store_field_resource
-from ..safety import error_name, is_kms_denial, log_event
-from ..scan.item import scan_item_text
-from ..scan.raw import printable_text
-from .base import Budget, Context, FindingStore, SourceRun, class_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, class_findings
+from sensitive_data_core.coverage import Discovery, Store, reason_for
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+from sensitive_data_core.scan.item import scan_item_text
+from sensitive_data_core.scan.raw import printable_text
+
+from ..discovery import decide, needs_tags
+from ..resources import console_link
+from .base import Context
 from .exports import drop_other_passes, merge
 
 # The services this module calls (test_template.py checks every call against them).

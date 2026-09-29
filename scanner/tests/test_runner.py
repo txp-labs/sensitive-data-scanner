@@ -13,8 +13,9 @@ from jsonschema import Draft202012Validator
 
 from aws_fixtures import DATA, RESULTS, Env, config, epoch_ms
 from conftest import REPO, all_conversation_vectors
-from sensitive_data_scanner.events import event_details, put_findings_events
-from sensitive_data_scanner.findings import EVENT_DETAIL_TYPE, EVENT_SOURCE
+from sensitive_data_core.findings import EVENT_DETAIL_TYPE, EVENT_SOURCE
+from sensitive_data_core.push import event_details
+from sensitive_data_scanner.events import put_findings_events
 from synthetic import CARDS, SSN_A, dashed, printed, spoken_groups
 
 SCHEMA = Draft202012Validator(

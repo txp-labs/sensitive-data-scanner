@@ -11,7 +11,7 @@ pinned by digest.
 |---|---|
 | `ghcr.io/txp-labs/sensitive-data-scanner:X.Y.Z` | The Lambda container image. Python 3.12 slim, the Lambda runtime interface client, and pyarrow for the columnar formats; handler `sensitive_data_scanner.handler.handler`. The release notes and `IMAGE_DIGEST` give its digest. **The recommended package** |
 | `sensitive-data-scanner-X.Y.Z-lambda-python3.12-x86_64.zip` | The same scanner as a Lambda zip for the managed `python3.12` runtime (x86_64), with the same handler, **without pyarrow**: with it the zip would pass Lambda's 250 MB unzipped limit. It reads every text format, gzip, and Avro with the standard library's codecs, and counts Parquet, ORC, zstd and snappy or zstandard Avro as skipped `columnar` |
-| `sensitive_data_scanner-X.Y.Z-py3-none-any.whl` | The Python package, with the spec, the findings schema and the licenses inside. There is no sdist: the source release is the tag |
+| `sensitive_data_scanner-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_core-X.Y.Z-py3-none-any.whl` | The Python packages: the AWS scanner, and the cloud-neutral core it depends on, with the spec, the findings schema and the licenses inside. Install both. There is no sdist: the source release is the tag |
 | `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout) |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the image (syft) |
 | `owner.repo.<id>.dockerbuild` | buildx's record of the image build (its inputs and timings), attached as it comes |
@@ -21,8 +21,11 @@ pinned by digest.
 
 1. **Open a pull request that closes the round:**
    - set `version` in `scanner/pyproject.toml`,
-     `scanner/src/sensitive_data_scanner/__init__.py` and
-     `packages/spec-ts/package.json`;
+     `scanner/src/sensitive_data_scanner/__init__.py`, every other
+     `scanner/*/pyproject.toml` and its package's `__init__.py` (the core,
+     `scanner/core/src/sensitive_data_core/__init__.py`), `scanner/uv.lock`
+     (`uv lock`), `packages/spec-ts/package.json` and its
+     `package-lock.json`'s own version;
    - rename `## Unreleased` in `CHANGELOG.md` to `## X.Y.Z — YYYY-MM-DD` and
      leave a fresh `## Unreleased` above it;
    - optionally add `docs/release-notes/vX.Y.Z.md`, which the Release puts

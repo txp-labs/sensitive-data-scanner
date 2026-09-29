@@ -25,11 +25,13 @@ import secrets
 import zlib
 from typing import TYPE_CHECKING, Any
 
-from ..detect.analyzer import Detector
-from ..findings import Coverage, dynamodb_link, dynamodb_resource, finding_json
-from ..safety import error_name, is_kms_denial, log_event
-from ..scan.attributes import FORMAT, AttributeRules, key_value, scan_attributes
-from .base import Budget, FindingStore, SourceRun
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+from sensitive_data_core.scan.attributes import FORMAT, AttributeRules, key_value, scan_attributes
+
+from ..resources import dynamodb_link, dynamodb_resource
 from .exports import ExportQuota, delete_prefix, drop_other_passes, due, list_keys
 
 if TYPE_CHECKING:

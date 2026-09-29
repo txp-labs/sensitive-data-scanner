@@ -15,8 +15,8 @@ import datetime as _dt
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from ..findings import _CONF_RANK, MAX_OFFSETS_PER_FINDING
-from .base import FindingStore
+from sensitive_data_core.adapter import FindingStore
+from sensitive_data_core.findings import _CONF_RANK, MAX_OFFSETS_PER_FINDING
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client

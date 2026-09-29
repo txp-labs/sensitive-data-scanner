@@ -14,6 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from aws_fixtures import RESULTS, Env, config
+from sensitive_data_core.safety import ScanError
 from sensitive_data_scanner import handler
 from sensitive_data_scanner.config import (
     MAX_CONFIG_BYTES,
@@ -21,7 +22,6 @@ from sensitive_data_scanner.config import (
     load_config,
     read_config,
 )
-from sensitive_data_scanner.safety import ScanError
 
 ENV = {"RESULTS_BUCKET": RESULTS, "DISCOVER": "s3"}
 

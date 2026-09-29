@@ -39,7 +39,7 @@ def vector_now(case: dict[str, Any]) -> Any:
 
 
 def turns_of(case: dict[str, Any]) -> list[Any]:
-    from sensitive_data_scanner.engine.conversation import Turn
+    from sensitive_data_core.engine.conversation import Turn
 
     return [
         Turn(t["speaker"], t["text"], t.get("channel"), t.get("beginMs"), t.get("endMs"))

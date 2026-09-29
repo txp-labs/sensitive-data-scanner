@@ -17,10 +17,10 @@ from jsonschema import Draft202012Validator
 
 from aws_fixtures import DATA, RESULTS, Env, config, shared_detector
 from conftest import REPO
+from sensitive_data_core.scan.avro import AvroError, AvroReader
+from sensitive_data_core.scan.columnar import columnar_kind, scan_rows, sniff
 from sensitive_data_scanner.config import read_config, store_rules
 from sensitive_data_scanner.discovery import glue_location
-from sensitive_data_scanner.scan.avro import AvroError, AvroReader
-from sensitive_data_scanner.scan.columnar import columnar_kind, scan_rows, sniff
 from sensitive_data_scanner.sources import s3 as s3_module
 from synthetic import CARDS, SSN_A, dashed
 from table_fixtures import (

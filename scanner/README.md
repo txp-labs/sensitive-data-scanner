@@ -1,5 +1,13 @@
 # sensitive-data-scanner (Python runner)
 
+Two packages in one uv workspace: the cloud-neutral core in `core/`
+(`sensitive-data-scanner-core`, import `sensitive_data_core`: detection,
+findings, budgets and sampling, the coverage summary, the findings push
+interface, the sampled SQL pass and the adapter interface), and the AWS
+scanner in `src/` (`sensitive-data-scanner`, import `sensitive_data_scanner`:
+every boto3 adapter, discovery, the runner and the Lambda handler). The
+core imports no cloud SDK, and a test keeps it that way.
+
 Detection for the scanner: [Microsoft Presidio](https://github.com/microsoft/presidio)
 Analyzer, with **no NLP model**, and recognizers for the classes in the
 [spec](../spec/README.md).
@@ -16,8 +24,8 @@ Analyzer, with **no NLP model**, and recognizers for the classes in the
 
 ```python
 import datetime as dt
-from sensitive_data_scanner.detect.analyzer import Detector
-from sensitive_data_scanner.engine.conversation import Turn
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.engine.conversation import Turn
 
 detector = Detector()
 detector.analyze_text("SSN: 512-43-7788").detections

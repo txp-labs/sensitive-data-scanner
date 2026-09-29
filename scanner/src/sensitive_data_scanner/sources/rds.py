@@ -17,7 +17,7 @@ table and column (`schema.table.column`). Rows are not addressable once the
 export is deleted, so a finding carries counts, not offsets.
 
 **Data API (opt-in, `RDS_DATA_API`).** For a small Aurora database: the
-generic sampled SQL of scan/sql.py (list the tables from
+generic sampled SQL of the core's scan/sql.py (list the tables from
 `information_schema`, then `SELECT * ... LIMIT n` from each), inside a
 transaction that is always rolled back (and `SET TRANSACTION READ ONLY` on
 PostgreSQL). Identifiers are quoted; the only statements are the scanner's
@@ -33,14 +33,23 @@ import json
 import secrets
 from typing import TYPE_CHECKING, Any
 
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+from sensitive_data_core.scan.columnar import TableResult, scan_parquet
+from sensitive_data_core.scan.sql import (
+    MYSQL,
+    POSTGRESQL,
+    Dialect,
+    Params,
+    sample_sql,
+    sample_tables,
+)
+from sensitive_data_core.scan.sql import tables_sql as generic_tables_sql
+
 from ..config import DataApiTarget
-from ..detect.analyzer import Detector
-from ..findings import Coverage, finding_json, rds_link, rds_resource
-from ..safety import error_name, is_kms_denial, log_event
-from ..scan.columnar import TableResult, scan_parquet
-from ..scan.sql import MYSQL, POSTGRESQL, Dialect, Params, sample_sql, sample_tables
-from ..scan.sql import tables_sql as generic_tables_sql
-from .base import Budget, FindingStore, SourceRun
+from ..resources import rds_link, rds_resource
 from .exports import ExportQuota, delete_prefix, drop_other_passes, due, list_keys, merge
 from .s3 import S3RangeFile
 
@@ -333,7 +342,7 @@ def _dialect(engine: str) -> Dialect:
 
 
 def quote_identifier(name: str, engine: str) -> str:
-    """A SQL identifier, quoted so that nothing in it is SQL (scan/sql.py)."""
+    """A SQL identifier, quoted so that nothing in it is SQL (the core's scan/sql.py)."""
     return _dialect(engine).ident(name)
 
 

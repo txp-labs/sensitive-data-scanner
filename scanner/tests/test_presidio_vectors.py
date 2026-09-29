@@ -8,10 +8,10 @@ from typing import Any
 import pytest
 
 from conftest import all_conversation_vectors, turns_of, vector_now
-from sensitive_data_scanner.detect.analyzer import Detector
-from sensitive_data_scanner.engine.conversation import utf16_index
-from sensitive_data_scanner.engine.normalize import normalize
-from sensitive_data_scanner.engine.spec import load_spec
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.engine.conversation import utf16_index
+from sensitive_data_core.engine.normalize import normalize
+from sensitive_data_core.engine.spec import load_spec
 
 SPEC = load_spec()
 CONVERSATIONS = all_conversation_vectors()

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the Lambda zip deployment package (x86_64, Python 3.12, glibc 2.28+:
 # the python3.12 runtime is Amazon Linux 2023) from the lock
-# file: locked, hash-checked dependencies for manylinux, plus the scanner.
+# file: locked, hash-checked dependencies for manylinux, plus the scanner and
+# its cloud-neutral core (scanner/core).
 #
 #   scripts/build-lambda-zip.sh <version> <out-dir>
 #
@@ -20,7 +21,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 cd "$root/scanner"
-uv export --frozen --no-default-groups --no-emit-project -o "$work/requirements.txt"
+# Third-party dependencies only: the core (a workspace member) is built as a
+# wheel below with the scanner, not installed from the export as an editable path.
+uv export --frozen --no-default-groups --no-emit-workspace -o "$work/requirements.txt"
 uv pip install \
   --python 3.12 \
   --target "$work/package" \
@@ -29,7 +32,8 @@ uv pip install \
   --only-binary :all: \
   --require-hashes \
   -r "$work/requirements.txt"
-uv build --wheel --out-dir "$work/dist"
+uv build --wheel --package sensitive-data-scanner-core --out-dir "$work/dist"
+uv build --wheel --package sensitive-data-scanner --out-dir "$work/dist"
 uv pip install --python 3.12 --target "$work/package" --no-deps "$work"/dist/*.whl
 "$root/scripts/slim-site-packages.sh" "$work/package"
 mkdir -p "$work/package/licenses"

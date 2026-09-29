@@ -23,13 +23,14 @@ COPY third_party/ third_party/
 COPY scanner/ scanner/
 COPY scripts/slim-site-packages.sh scripts/
 # Locked, hash-checked dependencies (runtime, the Lambda runtime interface
-# client, and pyarrow for the columnar formats), then the scanner itself, into
-# one directory. The Lambda zip has no pyarrow: it would not fit (see
+# client, and pyarrow for the columnar formats), then the scanner and its
+# cloud-neutral core (scanner/core), into one directory. The Lambda zip has no pyarrow: it would not fit (see
 # scripts/build-lambda-zip.sh).
 RUN cd scanner \
- && uv export --frozen --no-default-groups --group lambda --group columnar --no-emit-project -o /tmp/requirements.txt \
+ && uv export --frozen --no-default-groups --group lambda --group columnar --no-emit-workspace -o /tmp/requirements.txt \
  && uv pip install --python /usr/local/bin/python --target /opt/app --require-hashes -r /tmp/requirements.txt \
- && uv build --wheel --out-dir /tmp/dist \
+ && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
+ && uv build --wheel --package sensitive-data-scanner --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
  && /src/scripts/slim-site-packages.sh /opt/app \
  && mkdir -p /opt/app/licenses \

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from conftest import all_conversation_vectors, turns_of
-from sensitive_data_scanner.sources.parsers import parse_document
+from sensitive_data_core.parsers import parse_document
 
 WITH_DOCUMENTS = [c for c in all_conversation_vectors() if c.get("document")]
 

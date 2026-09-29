@@ -26,7 +26,7 @@ from ..detect.analyzer import Analysis, Detector
 from ..detect.enhancer import humanize
 from ..engine.conversation import utf16_index
 from ..findings import ClassFinding, Offset
-from ..sources.parsers import (
+from ..parsers import (
     Conversation,
     is_flow_log,
     is_lex_record,

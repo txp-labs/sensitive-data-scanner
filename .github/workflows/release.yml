@@ -49,6 +49,12 @@ jobs:
           echo "tag ${version}, scanner ${py}, spec-ts ${ts}"
           test "${version}" = "${py}"
           test "${version}" = "${ts}"
+          # Every other Python package in the scanner workspace (the core, ...).
+          for f in scanner/*/pyproject.toml; do
+            v=$(python3 -c 'import sys,tomllib;print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' "$f")
+            echo "${f} ${v}"
+            test "${version}" = "${v}"
+          done
           grep -q "^## ${version} " CHANGELOG.md
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
@@ -73,7 +79,9 @@ jobs:
           scripts/build-lambda-zip.sh "${VERSION}" out
           # The wheel only: the sdist cannot carry the spec and licenses from
           # outside scanner/. The source release is the tag itself.
-          (cd scanner && uv build --wheel --out-dir ../out)
+          # The scanner's wheel and its core's (the scanner depends on the core).
+          (cd scanner && uv build --wheel --package sensitive-data-scanner-core --out-dir ../out \
+            && uv build --wheel --package sensitive-data-scanner --out-dir ../out)
           mkdir -p sbom-src && (cd sbom-src && unzip -q ../out/*-lambda-*.zip)
       - name: SBOM of the Lambda zip (SPDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2

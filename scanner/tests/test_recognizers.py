@@ -7,10 +7,10 @@ import datetime as dt
 
 import pytest
 
-from sensitive_data_scanner.detect.analyzer import Analysis, Detector
-from sensitive_data_scanner.detect.recognizers import card_grouping
-from sensitive_data_scanner.engine.spec import load_spec
-from sensitive_data_scanner.findings import SEVERITY
+from sensitive_data_core.detect.analyzer import Analysis, Detector
+from sensitive_data_core.detect.recognizers import card_grouping
+from sensitive_data_core.engine.spec import load_spec
+from sensitive_data_core.findings import SEVERITY
 from synthetic import (
     CARDS,
     SSN_A,

@@ -20,29 +20,34 @@ An allow list and a deny list (`DISCOVER_ALLOW`, `DISCOVER_DENY`) narrow what
 is read, by name glob or by tag. A deny rule wins over an allow rule. The
 scanner's own results bucket and log group are never read.
 
-Every store listed is reported in the run's summary, **including the ones not
-read and why** (`denied`, `not_allowed`, `self`, `too_large`, `unsupported`,
-`kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, or
-`deferred` to a later run by the budget), so a coverage gap is visible rather
-than silent. Names in the summary are masked like object keys.
+Every store listed is reported in the run's summary
+(`sensitive_data_core.coverage`), **including the ones not read and why**
+(`denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `kms_access`,
+`access_denied`, `lake_formation`, `tags_unreadable`, or `deferred` to a
+later run by the budget), so a coverage gap is visible rather than silent.
+Names in the summary are masked like object keys.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .config import Config, StoreRule
-from .safety import error_name, is_kms_denial, log_event, redact_digits
+from sensitive_data_core.coverage import (
+    Discovery,
+    Store,
+    apply_rules,
+    reason_for,
+)
+from sensitive_data_core.rules import StoreRule
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+
+from .config import Config
 from .sources.rds import EXPORTABLE_ENGINES
 
 if TYPE_CHECKING:
     from .runner import Clients
 
-ACCESS_DENIED = frozenset(
-    {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "AllAccessDisabled"}
-)
-MAX_STORES_IN_SUMMARY = 5000
 # DynamoDB table states that can be read. Anything else (CREATING, DELETING,
 # ARCHIVED, INACCESSIBLE_ENCRYPTION_CREDENTIALS) is reported, not read.
 READABLE_TABLE_STATES = frozenset({"ACTIVE", "UPDATING"})
@@ -51,18 +56,6 @@ READABLE_TABLE_STATES = frozenset({"ACTIVE", "UPDATING"})
 READABLE_LOG_CLASSES = frozenset({"STANDARD", "INFREQUENT_ACCESS"})
 
 
-_INTERNAL = frozenset(
-    {
-        "tableArn",
-        "endpoint",
-        "snapshotId",
-        "volumeGiB",
-        "queueUrl",
-        "s3Locations",
-        "names",
-        "tableName",
-    }
-)
 # Engines the RDS API lists that have their own kind (and adapter) when discovered.
 OWN_KIND = {"docdb": "documentdb", "neptune": "neptune"}
 
@@ -81,68 +74,6 @@ class GlueTable:
     skip_header: int = 0
 
 
-@dataclass
-class Store:
-    """One data store, listed by discovery or named in the configuration."""
-
-    kind: str  # s3 | cloudwatch_logs | dynamodb | glue_table | rds, or an adapter's kind
-    name: str
-    origin: str = "discovery"  # discovery | config
-    tags: dict[str, str] | None = None
-    size_bytes: int | None = None
-    status: str = "pending"  # pending, then scanned | deferred | skipped | error
-    reason: str | None = None
-    error: str | None = None
-    sample_percent: int | None = None
-    max_per_prefix: int | None = None
-    source_ids: list[str] = field(default_factory=list)
-    gaps: dict[str, int] = field(default_factory=dict)
-    backlog: bool = False
-    extra: dict[str, Any] = field(default_factory=dict)
-    table: GlueTable | None = None
-
-    def skip(self, reason: str, error: str | None = None) -> None:
-        self.status = "skipped"
-        self.reason = reason
-        self.error = error
-
-    def as_json(self) -> dict[str, Any]:
-        name = redact_digits(self.name)
-        out: dict[str, Any] = {
-            "kind": self.kind,
-            "name": name,
-            "origin": self.origin,
-            "status": self.status,
-        }
-        if name != self.name:
-            out["nameMasked"] = True
-        if self.reason:
-            out["reason"] = self.reason
-        if self.error:
-            out["error"] = self.error
-        if self.size_bytes is not None:
-            out["sizeBytes"] = self.size_bytes
-        if self.sample_percent is not None and self.sample_percent < 100:
-            out["samplePercent"] = self.sample_percent
-        if self.max_per_prefix:
-            out["maxObjectsPerPrefix"] = self.max_per_prefix
-        if self.gaps:
-            out["gaps"] = dict(sorted(self.gaps.items()))
-        if self.backlog:
-            out["backlog"] = True
-        for k, v in self.extra.items():
-            if k in _INTERNAL:
-                continue
-            out[k] = redact_digits(v) if isinstance(v, str) else v
-        return out
-
-
-@dataclass
-class Discovery:
-    stores: list[Store] = field(default_factory=list)
-    list_errors: dict[str, str] = field(default_factory=dict)
-
-
 def _needs_tags(config: Config, kind: str) -> bool:
     rules: list[StoreRule] = [*config.allow, *config.deny, *(r.match for r in config.sampling)]
     return any(r.needs_tags and r.kind in (None, kind) for r in rules)
@@ -151,11 +82,6 @@ def _needs_tags(config: Config, kind: str) -> bool:
 def needs_tags(config: Config, kind: str) -> bool:
     """Whether an allow, deny or sampling rule for `kind` looks at tags (fetch them only then)."""
     return _needs_tags(config, kind)
-
-
-def reason_for(error: str | None) -> str:
-    """`access_denied` for an AWS access error, else `error`."""
-    return _reason(error)
 
 
 def _tag_list(tags: list[dict[str, Any]] | None) -> dict[str, str]:
@@ -195,17 +121,9 @@ def _ddb_tags(clients: Clients, arn: str) -> dict[str, str]:
 
 def decide(store: Store, config: Config, tag_error: str | None = None) -> None:
     """Apply the allow and deny lists and the per-store sampling to one store."""
+    if not apply_rules(store, config.allow, config.deny, tag_error):
+        return
     kind, name, tags = store.kind, store.name, store.tags
-    if any(r.matches(kind, name, tags) for r in config.deny):
-        store.skip("denied")
-        return
-    if tag_error is not None and any(r.needs_tags and r.kind in (None, kind) for r in config.deny):
-        # A deny-by-tag rule cannot be checked: never read what may be denied.
-        store.skip("tags_unreadable", tag_error)
-        return
-    if config.allow and not any(r.matches(kind, name, tags) for r in config.allow):
-        store.skip("not_allowed", tag_error)
-        return
     pct, per = config.sampling_for(kind, name, tags)
     if kind in ("s3", "glue_table"):
         store.sample_percent = pct if pct is not None else config.sample_percent
@@ -277,7 +195,7 @@ def _discover_dynamodb(config: Config, clients: Clients, out: Discovery) -> None
         except Exception as err:
             name_ = error_name(err)
             store.status = "error"
-            store.reason = "kms_access" if is_kms_denial(err) else _reason(name_)
+            store.reason = "kms_access" if is_kms_denial(err) else reason_for(name_)
             store.error = name_
             continue
         store.size_bytes = int(desc.get("TableSizeBytes") or 0)
@@ -394,7 +312,7 @@ def _discover_glue(
             store.status = "error"
             store.error = error_name(err)
             store.reason = (
-                "lake_formation" if is_lake_formation_denial(err) else _reason(store.error)
+                "lake_formation" if is_lake_formation_denial(err) else reason_for(store.error)
             )
             out.stores.append(store)
             continue
@@ -508,10 +426,6 @@ def _discover_rds(config: Config, clients: Clients, out: Discovery) -> None:
             )
 
 
-def _reason(error: str | None) -> str:
-    return "access_denied" if error in ACCESS_DENIED else "error"
-
-
 def discover(config: Config, clients: Clients, region: str, account: str = "") -> Discovery:
     """List the stores of each kind in `config.discover`. A listing that fails is named."""
     out = Discovery()
@@ -546,75 +460,3 @@ def discover(config: Config, clients: Clients, region: str, account: str = "") -
         skipped=sum(1 for s in out.stores if s.status == "skipped"),
     )
     return out
-
-
-NOTES = {
-    "export_pending": ("deferred", "export_pending"),
-    "no_grant": ("skipped", "no_grant"),
-    "budget": ("deferred", "budget"),
-    "no_snapshot": ("skipped", "no_snapshot"),
-    "export_failed": ("error", "export_failed"),
-}
-
-
-def settle(
-    store: Store,
-    coverages: list[Any],
-    notes: list[str | None] | None = None,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    """A store's status and gaps from the coverage of its sources this run."""
-    if not coverages:
-        return
-    for k, v in (extra or {}).items():
-        if v is not None:
-            store.extra[k] = v
-    note = next((n for n in notes or [] if n), None)
-    if note in NOTES:
-        store.status, store.reason = NOTES[note]
-        store.backlog = any(c.backlog for c in coverages)
-        if store.status == "error":
-            store.error = next((c.error for c in coverages if c.error), None)
-        return
-    errors = [c for c in coverages if c.error]
-    kms = sum(c.kms_denied for c in coverages)
-    unreadable = sum(c.unreadable for c in coverages)
-    unsupported = sum(sum(c.skipped.values()) for c in coverages)
-    if kms:
-        store.gaps["kmsDenied"] = kms
-    if unreadable:
-        store.gaps["unreadable"] = unreadable
-    if unsupported:
-        store.gaps["unsupportedFormat"] = unsupported
-    store.backlog = any(c.backlog for c in coverages)
-    if errors and len(errors) == len(coverages):
-        store.status = "error"
-        store.error = errors[0].error
-        store.reason = "kms_access" if errors[0].kms_denied else _reason(store.error)
-        if store.reason == "access_denied" and store.extra.get("lakeFormation"):
-            store.reason = "lake_formation"
-        return
-    store.status = "scanned"
-    if sum(c.scanned for c in coverages) == 0 and unsupported and not unreadable:
-        store.reason = "unsupported_format"
-
-
-def summary(stores: list[Store], list_errors: dict[str, str]) -> dict[str, Any]:
-    """The run summary: every store, what happened to it, and the totals."""
-    by_status: dict[str, int] = {}
-    by_reason: dict[str, int] = {}
-    for s in stores:
-        by_status[s.status] = by_status.get(s.status, 0) + 1
-        if s.reason:
-            by_reason[s.reason] = by_reason.get(s.reason, 0) + 1
-    order = {"error": 0, "skipped": 1, "deferred": 2, "scanned": 3, "pending": 4}
-    ranked = sorted(stores, key=lambda s: (order.get(s.status, 9), s.kind, s.name))
-    kept = ranked[:MAX_STORES_IN_SUMMARY]
-    return {
-        "stores": [s.as_json() for s in kept],
-        "storesTotal": len(stores),
-        "storesTruncated": len(stores) > len(kept),
-        "byStatus": dict(sorted(by_status.items())),
-        "byReason": dict(sorted(by_reason.items())),
-        "listErrors": dict(sorted(list_errors.items())),
-    }

@@ -17,7 +17,7 @@ API with no stored password:
 
 For each database (`ListDatabases`), the pass lists local base tables from
 `svv_tables` and runs `SELECT * FROM "schema"."table" LIMIT n` on each: the
-generic sampled SQL of scan/sql.py. Those are the only statements. A finding
+generic sampled SQL of the core's scan/sql.py. Those are the only statements. A finding
 names the column: `store_field` with the database, `schema.table` and column.
 A store whose user can see no table is reported as `no_grant`.
 
@@ -37,13 +37,17 @@ import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
-from ..detect.analyzer import Detector
-from ..discovery import Discovery, Store, decide, needs_tags
-from ..findings import Coverage, console_link, store_field_resource
-from ..safety import error_name, log_event
-from ..scan.columnar import TableResult
-from ..scan.sql import REDSHIFT, Params, sample_tables
-from .base import Budget, Context, FindingStore, SourceRun, column_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, column_findings
+from sensitive_data_core.coverage import Discovery, Store
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.safety import error_name, log_event
+from sensitive_data_core.scan.columnar import TableResult
+from sensitive_data_core.scan.sql import REDSHIFT, Params, sample_tables
+
+from ..discovery import decide, needs_tags
+from ..resources import console_link
+from .base import Context
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).

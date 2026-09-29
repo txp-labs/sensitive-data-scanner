@@ -40,13 +40,15 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+from sensitive_data_core.scan.attributes import FORMAT, AttributeRules, key_value, scan_attributes
+from sensitive_data_core.scan.paths import parse_path
+
 from ..config import DynamoTarget
-from ..detect.analyzer import Detector
-from ..findings import Coverage, dynamodb_link, dynamodb_resource, finding_json
-from ..safety import error_name, is_kms_denial, log_event
-from ..scan.attributes import FORMAT, AttributeRules, key_value, scan_attributes
-from ..scan.paths import parse_path
-from .base import Budget, FindingStore, SourceRun
+from ..resources import dynamodb_link, dynamodb_resource
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb import DynamoDBClient

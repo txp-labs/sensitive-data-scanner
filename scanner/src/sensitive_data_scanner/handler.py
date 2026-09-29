@@ -17,9 +17,10 @@ from typing import Any
 
 import boto3
 
+from sensitive_data_core.safety import ScanError, error_name, log_event
+
 from .config import load_config
 from .runner import Clients, run_scan
-from .safety import ScanError, error_name, log_event
 
 # Time kept back from the Lambda timeout to write results and release the lock.
 RESERVE_SECONDS = 90

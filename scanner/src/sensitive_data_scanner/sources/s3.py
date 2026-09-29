@@ -41,11 +41,12 @@ import io
 import zlib
 from typing import TYPE_CHECKING, Any
 
-from ..detect.analyzer import Detector
-from ..findings import Coverage, finding_json, s3_link, s3_resource
-from ..safety import error_name, is_kms_denial, log_event
-from ..scan.avro import UnsupportedCodec
-from ..scan.columnar import (
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+from sensitive_data_core.scan.avro import UnsupportedCodec
+from sensitive_data_core.scan.columnar import (
     TableResult,
     columnar_kind,
     csv_rows,
@@ -57,9 +58,10 @@ from ..scan.columnar import (
     sniff,
     zstd_text,
 )
-from ..scan.item import classify_key, looks_binary, scan_item_text
-from ..scan.raw import printable_text
-from .base import Budget, FindingStore, SourceRun
+from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_text
+from sensitive_data_core.scan.raw import printable_text
+
+from ..resources import s3_link, s3_resource
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client

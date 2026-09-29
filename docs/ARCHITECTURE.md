@@ -16,7 +16,8 @@ This document covers:
 |---|---|---|
 | The spec | `spec/`, `vectors/` | Classes, prompt phrases, normalization rules, and the shared synthetic test cases: the contract |
 | TypeScript package | `packages/spec-ts` | The spec as a zero-dependency classifier, for in-memory redaction in a live call (Stugum's call engine) |
-| Python runner | `scanner/` | Presidio recognizers, source adapters, the batch runner, the findings contract |
+| Python core | `scanner/core/` | `sensitive_data_core`, which names no cloud: the spec engine and Presidio recognizers, the findings contract, budgets and sampling, the allow, deny and sampling rules, the coverage summary, the findings push interface, the sampled SQL pass (`scan/sql.py`) and the `Adapter` interface |
+| AWS scanner | `scanner/` | `sensitive_data_scanner`, built on the core: every boto3 adapter, discovery, the batch runner, the Lambda handler, EventBridge as the findings sink; and `deploy/` |
 
 The TypeScript package and the Python runner implement the same algorithm.
 Both pass every vector, and a parity test fails if they disagree on any of
@@ -405,16 +406,18 @@ databases and tables and reads each table at its S3 location:
 
 ### Adapters: one interface for every other kind of store
 
-Every kind of store after RDS is an **adapter** (`sources/base.py`,
-`Adapter`), registered by its kind in `sources/aws.py`. An adapter lists its
-stores into the run summary, decides each with the shared allow, deny and
-sampling rules (`discovery.decide`), and gives the runner a source per store
-it can read. The budget, the findings store, the coverage and the run
+Every kind of store after RDS is an **adapter** (the core's
+`sensitive_data_core.adapter.Adapter`), registered by its kind in
+`sources/aws.py` and given an AWS `Context` (`sources/base.py`). An adapter
+lists its stores into the run summary (`sensitive_data_core.coverage`),
+decides each with the shared allow, deny and sampling rules
+(`discovery.decide`, on the core's `rules` and `coverage.apply_rules`), and
+gives the runner a source per store it can read. The budget, the findings store, the coverage and the run
 summary stay the core's, and none of them names a cloud: an adapter gets its
 clients by service name (`clients.client("redshift-data")`), made on first
 use, so a kind that is not discovered makes no client.
 
-Reading SQL is generic too (`scan/sql.py`): a dialect (quoting, the table
+Reading SQL is generic too (the core's `scan/sql.py`): a dialect (quoting, the table
 listing) and a pass that lists the base tables with bound parameters, then
 runs `SELECT * FROM "schema"."table" LIMIT n` on each with quoted
 identifiers, resumable by `[schema, table]`, within the budget. The caller
