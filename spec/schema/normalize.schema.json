@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["specVersion", "steps"],
   "properties": {
-    "specVersion": { "const": "0.2" },
+    "specVersion": { "const": "0.3" },
     "steps": {
       "type": "array",
       "prefixItems": [

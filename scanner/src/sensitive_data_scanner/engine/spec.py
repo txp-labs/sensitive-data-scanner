@@ -16,9 +16,16 @@ from typing import Any
 
 import yaml
 
-SPEC_VERSION = "0.2"
+SPEC_VERSION = "0.3"
 
 WS = "[ \\t\\r\\n]+"
+
+# What may separate the words of a retry prefix in a turn: whitespace and . , ! ? ; :
+RETRY_SEP = "[ \\t\\r\\n.,!?;:]"
+
+# Every prompt phrase matches only with neither a letter nor a digit on each side.
+BOUNDARY_BEFORE = "(?<![A-Za-z0-9])"
+BOUNDARY_AFTER = "(?![A-Za-z0-9])"
 
 
 @dataclass(frozen=True)
@@ -92,11 +99,24 @@ class Spec:
     classes: dict[str, ClassSpec]
     class_order: tuple[str, ...]
     retry_prefixes: tuple[str, ...]
+    retry_res: tuple[re.Pattern[str], ...] = field(repr=False)
     carryover_turns: int
     survive_retry: bool
     context_turns_before: int
     brands: tuple[BrandRule, ...]
     normalize: NormalizeSpec
+
+
+def prompt_regex(phrase: str) -> re.Pattern[str]:
+    """A prompt phrase with the spec's boundary: no letter or digit on either side."""
+    return re.compile(BOUNDARY_BEFORE + "(?:" + phrase + ")" + BOUNDARY_AFTER, re.I | re.A)
+
+
+def retry_regex(prefix: str) -> re.Pattern[str]:
+    """A retry prefix at the start of a turn: its words, apart by whitespace or . , ! ? ; :"""
+    words = [w for w in re.split(RETRY_SEP + "+", prefix.lower()) if w]
+    body = (RETRY_SEP + "+").join(re.escape(w) for w in words)
+    return re.compile("^" + RETRY_SEP + "*" + body + BOUNDARY_AFTER, re.I | re.A)
 
 
 def phrase_regex(words: list[str] | tuple[str, ...]) -> re.Pattern[str] | None:
@@ -143,7 +163,7 @@ def _class(name: str, raw: dict[str, Any]) -> ClassSpec:
         dummy_values=frozenset(raw.get("dummyValues") or ()),
         test_numbers=frozenset(raw.get("testNumbers") or ()),
         test_numbers_max_distinct_digits=int(raw.get("testNumbersMaxDistinctDigits") or 0),
-        prompt_res=tuple(re.compile(p, re.I | re.A) for p in phrases),
+        prompt_res=tuple(prompt_regex(p) for p in phrases),
         context_re=phrase_regex(raw.get("contextWords") or []),
         exclusion_res=tuple(re.compile(p, re.I | re.A) for p in exclusions),
         suppress_re=phrase_regex(raw.get("suppressWords") or []),
@@ -219,11 +239,13 @@ def parse_spec(classes_raw: dict[str, Any], normalize_raw: dict[str, Any]) -> Sp
             raise ValueError("unsupported specVersion")
     classes = {name: _class(name, c) for name, c in classes_raw["classes"].items()}
     carry = classes_raw.get("promptCarryover") or {}
+    retry_prefixes = tuple(p.lower() for p in classes_raw.get("retryPrefixes") or ())
     return Spec(
         spec_version=SPEC_VERSION,
         classes=classes,
         class_order=tuple(classes),
-        retry_prefixes=tuple(p.lower() for p in classes_raw.get("retryPrefixes") or ()),
+        retry_prefixes=retry_prefixes,
+        retry_res=tuple(retry_regex(p) for p in retry_prefixes),
         carryover_turns=int(carry.get("turns", 1)),
         survive_retry=bool(carry.get("surviveRetry", True)),
         context_turns_before=int((classes_raw.get("contextWindow") or {}).get("turnsBefore", 2)),

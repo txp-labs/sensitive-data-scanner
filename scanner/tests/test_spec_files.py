@@ -17,6 +17,8 @@ from conftest import (
     conversation_vector_files,
     load_jsonl,
 )
+from sensitive_data_scanner.engine.conversation import prompt_classes
+from sensitive_data_scanner.engine.spec import load_spec
 
 
 def schema(name: str) -> Draft202012Validator:
@@ -41,9 +43,27 @@ def test_spec_file_follows_schema(yaml_name: str, schema_name: str) -> None:
     assert errors == []
 
 
-def test_spec_version_is_0_2() -> None:
-    assert load_yaml("classes.yaml")["specVersion"] == "0.2"
-    assert load_yaml("normalize.yaml")["specVersion"] == "0.2"
+def test_spec_version_is_0_3() -> None:
+    assert load_yaml("classes.yaml")["specVersion"] == "0.3"
+    assert load_yaml("normalize.yaml")["specVersion"] == "0.3"
+
+
+def test_prompt_phrases_leave_boundaries_to_the_implementation() -> None:
+    # Spec 0.3: implementations apply the boundary, so no phrase carries \b.
+    for cls in load_yaml("classes.yaml")["classes"].values():
+        for phrase in cls["promptPhrases"]:
+            assert "\\b" not in phrase, phrase
+
+
+def test_prompted_without_shape_is_gone() -> None:
+    # Spec 0.3: every class is low when a prompted value passes no shape.
+    for cls in load_yaml("classes.yaml")["classes"].values():
+        assert "promptedWithoutShape" not in cls
+
+
+def test_retry_prefixes_are_words_without_punctuation() -> None:
+    for prefix in load_yaml("classes.yaml")["retryPrefixes"]:
+        assert not re.search(r"[.,!?;:A-Z]", prefix), prefix
 
 
 def test_prompt_phrases_and_exclusions_compile() -> None:
@@ -67,8 +87,9 @@ def test_v0_stugum_prompts_and_classes_are_present() -> None:
         "account_number",
         "us_ssn_last4",
     }
-    assert "last four of your social" not in classes["us_ssn"]["promptPhrases"]
-    assert "last four of your social" in classes["us_ssn_last4"]["promptPhrases"]
+    spec = load_spec()
+    assert prompt_classes(spec, "What's the last four of your social?")[0] == ("us_ssn_last4",)
+    assert prompt_classes(spec, "last 4 of your ssn")[0] == ("us_ssn_last4",)
 
 
 @pytest.mark.parametrize("path", conversation_vector_files(), ids=lambda p: p.name)
@@ -128,3 +149,35 @@ def test_every_stugum_live_case_is_present() -> None:
     prompts = " ".join(texts).lower()
     for prompt in ["date of birth", "nine digit social security number", "credit card number"]:
         assert prompt in prompts
+
+
+@pytest.mark.parametrize(
+    ("text", "classes"),
+    [
+        ("I'm being stubborn about it.", ()),
+        ("When were you born?", ("dob",)),
+        ("Enter the 14 digit code.", ()),
+        ("Enter the 4 digit code.", ("cvv",)),
+        ("SSN:", ("us_ssn", "us_itin")),
+    ],
+)
+def test_prompt_phrases_match_on_boundaries(text: str, classes: tuple[str, ...]) -> None:
+    # Spec 0.3: no letter or digit on either side of a prompt phrase.
+    assert prompt_classes(load_spec(), text)[0] == classes
+
+
+@pytest.mark.parametrize(
+    ("text", "retry"),
+    [
+        ("Sorry, I didn't get that!", True),
+        ("Sorry. I didn\u2019t get that.", True),
+        ("  sorry; i didn't   catch that?", True),
+        ("I'm sorry I didn't catch that.", True),
+        ("Okay. Sorry, I didn't get that.", False),
+        ("Sorry I didn't get thatcher's file.", False),
+        ("Sorry, I missed that.", False),
+    ],
+)
+def test_retry_prefixes_ignore_punctuation(text: str, retry: bool) -> None:
+    # Spec 0.3: . , ! ? ; : and whitespace runs between the words; only at the start.
+    assert prompt_classes(load_spec(), text)[1] is retry

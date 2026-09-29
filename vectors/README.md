@@ -9,6 +9,7 @@ The format, and what each field means, is in [spec/README.md](../spec/README.md#
 | `transcripts.jsonl` | txp-labs/mermera-attestation-app#1067's fixtures as conversations: Connect chat and Contact Lens transcripts, spoken and split-turn forms, near-misses, redacted `[PII]` turns |
 | `answer-windows.jsonl` | Spec 0.2 ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15)): keypad answers keyed in parts within one answer window, never across a bot turn; menu and question turns ending a pending value; backchannels that do not |
 | `itin.jsonl` | Spec 0.2 ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15)): `us_itin` after SSN and ITIN prompts, by context and formatted alone; group boundaries and near-misses; the IRS advertising range as test data |
+| `prompt-phrases.jsonl` | Spec 0.3 ([#11](https://github.com/txp-labs/sensitive-data-scanner/issues/11)): prompt phrases on letter and digit boundaries, tolerant variants for dropped words with a near-miss for each, retry prefixes that ignore punctuation and match only at the start, low confidence for every class when no shape passes |
 | `logs.jsonl` | Lex V2 conversation logs and Connect flow logs |
 | `normalize.jsonl` | Normalization input/output pairs, with each digit run's original range |
 

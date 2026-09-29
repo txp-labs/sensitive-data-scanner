@@ -2,13 +2,13 @@
 // Do not edit by hand: change the YAML and run `npm run gen:spec`.
 
 export const CLASSES_RAW: unknown = {
-  "specVersion": "0.2",
+  "specVersion": "0.3",
   "classes": {
     "us_ssn": {
       "severity": "high",
       "promptPhrases": [
-        "social security number",
-        "\\bssn\\b"
+        "social(?: security)? number",
+        "ssn"
       ],
       "shape": {
         "digits": 9,
@@ -37,10 +37,10 @@ export const CLASSES_RAW: unknown = {
     "us_itin": {
       "severity": "high",
       "promptPhrases": [
-        "social security number",
-        "\\bssn\\b",
-        "\\bitin\\b",
-        "taxpayer identification number"
+        "social(?: security)? number",
+        "ssn",
+        "itin",
+        "taxpayer id(?:entification)? number"
       ],
       "shape": {
         "digits": 9,
@@ -77,9 +77,9 @@ export const CLASSES_RAW: unknown = {
     "card": {
       "severity": "high",
       "promptPhrases": [
-        "credit card number",
-        "card number",
-        "debit card"
+        "(?:credit |debit )?card number",
+        "(?:credit|debit) card",
+        "number on (?:the front of )?your (?:credit |debit )?card"
       ],
       "shape": {
         "digits": [
@@ -94,7 +94,6 @@ export const CLASSES_RAW: unknown = {
           "iin_known"
         ]
       },
-      "promptedWithoutShape": "flag_low_confidence",
       "standalone": "any",
       "contextWords": [
         "card",
@@ -182,7 +181,8 @@ export const CLASSES_RAW: unknown = {
       "severity": "medium",
       "promptPhrases": [
         "date of birth",
-        "\\bdob\\b",
+        "dob",
+        "birth ?date",
         "birthday",
         "born"
       ],
@@ -210,8 +210,10 @@ export const CLASSES_RAW: unknown = {
       "severity": "high",
       "promptPhrases": [
         "security code",
-        "\\bcvv\\b",
-        "three digit code"
+        "cvv",
+        "cvc",
+        "(?:three|four|3|4)[- ]digit (?:security )?code",
+        "(?:number|code) on the back of (?:your|the) card"
       ],
       "shape": {
         "digits": [
@@ -223,7 +225,7 @@ export const CLASSES_RAW: unknown = {
     "pin": {
       "severity": "high",
       "promptPhrases": [
-        "\\bpin\\b"
+        "pin"
       ],
       "shape": {
         "digits": [
@@ -247,8 +249,7 @@ export const CLASSES_RAW: unknown = {
     "us_ssn_last4": {
       "severity": "low",
       "promptPhrases": [
-        "last four of your social",
-        "last 4 of your ssn"
+        "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the))? (?:social(?: security)?(?: number)?|ssn)"
       ],
       "shape": {
         "digits": 4
@@ -256,8 +257,10 @@ export const CLASSES_RAW: unknown = {
     }
   },
   "retryPrefixes": [
-    "sorry. i didn't get that",
-    "i'm sorry, i didn't catch that"
+    "sorry i didn't get that",
+    "sorry i didn't catch that",
+    "i'm sorry i didn't get that",
+    "i'm sorry i didn't catch that"
   ],
   "promptCarryover": {
     "turns": 1,
@@ -401,7 +404,7 @@ export const CLASSES_RAW: unknown = {
 };
 
 export const NORMALIZE_RAW: unknown = {
-  "specVersion": "0.2",
+  "specVersion": "0.3",
   "steps": [
     {
       "strip_keypad_terminator": [

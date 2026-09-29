@@ -1,4 +1,4 @@
-export declare const SPEC_VERSION = "0.2";
+export declare const SPEC_VERSION = "0.3";
 export interface Shape {
     digitsMin: number | null;
     digitsMax: number | null;
@@ -59,6 +59,8 @@ export interface Spec {
     classes: Readonly<Record<string, ClassSpec>>;
     classOrder: readonly string[];
     retryPrefixes: readonly string[];
+    /** One per retry prefix: its words at the start of a turn, apart by whitespace or . , ! ? ; : */
+    retryRes: readonly RegExp[];
     carryoverTurns: number;
     surviveRetry: boolean;
     contextTurnsBefore: number;
@@ -69,6 +71,10 @@ export interface Spec {
 export declare function escapeRegExp(s: string): string;
 /** Longest first, then alphabetical: the order every alternation is built in. */
 export declare function byLengthThenName(a: string, b: string): number;
+/** A prompt phrase with the spec's boundary: no letter or digit on either side. */
+export declare function promptRegex(phrase: string): RegExp;
+/** A retry prefix at the start of a turn: its words, apart by whitespace or . , ! ? ; : */
+export declare function retryRegex(prefix: string): RegExp;
 /** Context or suppress words as one regex: whole words, any whitespace between. */
 export declare function phraseRegex(words: readonly string[]): RegExp | null;
 /** Parse the raw spec objects (as YAML-loaded). Refuses any other specVersion. */

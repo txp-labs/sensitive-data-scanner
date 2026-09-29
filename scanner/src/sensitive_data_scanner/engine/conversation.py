@@ -157,12 +157,16 @@ def _at_end(norm: str, tok: _Token) -> bool:
 
 
 def strip_retry(spec: Spec, text: str) -> tuple[str, bool]:
-    """The turn text without a leading retry prefix, and whether it had one."""
+    """The turn text without a leading retry prefix, and whether it had one.
+
+    A prefix's words may be apart by any run of whitespace and . , ! ? ; : in
+    the turn, and it matches only at the start ("Sorry, I didn't get that!").
+    """
     low = text.replace("\u2019", "'").lstrip(" \t\r\n").lower()
-    for prefix in spec.retry_prefixes:
-        if low.startswith(prefix):
-            rest = low[len(prefix) :]
-            return rest.lstrip(" \t\r\n.,!?;:"), True
+    for rx in spec.retry_res:
+        m = rx.match(low)
+        if m:
+            return low[m.end() :].lstrip(" \t\r\n.,!?;:"), True
     return low, False
 
 

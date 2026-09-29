@@ -7,6 +7,25 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Spec
+- **Spec 0.3** ([#11](https://github.com/txp-labs/sensitive-data-scanner/issues/11); every change is listed for consumers in
+  `spec/README.md`, "Changes from 0.2", which Stugum mirrors):
+  - Prompt phrases match only with neither a letter nor a digit on each
+    side; the implementations apply the boundary, so phrases no longer carry
+    `\b`. "stubborn" no longer arms `dob`.
+  - Tolerant variants for dropped words: `social(?: security)? number`,
+    `taxpayer id(?:entification)? number`, `birth ?date`, `cvc`,
+    `(?:three|four|3|4)[- ]digit (?:security )?code`, the number on the
+    front (card) or back (cvv) of your card, and one `us_ssn_last4` phrase
+    that takes "last four digits of your Social Security number".
+  - Retry prefixes are runs of words that may be apart by whitespace and
+    `. , ! ? ; :` ("Sorry, I didn't get that!"), still only at the start of a
+    turn; two "catch"/"get" variants are added.
+  - `card.promptedWithoutShape` is removed: every class is `low` when a
+    prompted value passes no shape.
+  - `specVersion` is `"0.3"`; the JSON Schemas follow.
+- Vectors: `vectors/prompt-phrases.jsonl`, a case for each rule with its
+  near-misses, passed by the Python engine, the Presidio path and the
+  TypeScript package alike.
 - **Spec 0.2** ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15); every change is listed for consumers in
   `spec/README.md`, "Changes from 0.1", which Stugum mirrors):
   - Keypad (`dtmf`) answers may be keyed in parts: `answerWindowChannels:
