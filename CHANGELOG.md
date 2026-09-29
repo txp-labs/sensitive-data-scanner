@@ -7,6 +7,23 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Spec
+- **Spec 0.4** ([#26](https://github.com/txp-labs/sensitive-data-scanner/issues/26), asked for as 0.3.1; the spec has
+  no patch version, and a phrase that changes matches is a minor bump. Every
+  change is listed for consumers in `spec/README.md`, "Changes from 0.3"):
+  - `us_ssn` and `us_itin` gain `(?:nine|9)[- ]digit social(?: security)?(?:
+    number)?(?! media)`, so "Please say your nine digit social." arms them.
+    "social" alone still arms nothing, "nine digit social media account
+    number" arms only `account_number`, and "19 digit social code" arms
+    nothing.
+  - The `us_ssn` comment in `classes.yaml` now describes the letter-and-digit
+    boundary the implementations apply.
+  - `specVersion` is `"0.4"`; the JSON Schemas follow.
+- Vectors: five cases in `vectors/prompt-phrases.jsonl`, near-misses
+  included, passed by the Python engine, the Presidio path and the
+  TypeScript package alike.
+- `@txp-labs/sensitive-data-spec` exports `promptRegex`, the spec's prompt
+  boundary around a phrase, and its README explains why the package version
+  follows releases while `SPEC_VERSION` follows the spec. `dist/` is rebuilt.
 - **Spec 0.3** ([#11](https://github.com/txp-labs/sensitive-data-scanner/issues/11); every change is listed for consumers in
   `spec/README.md`, "Changes from 0.2", which Stugum mirrors):
   - Prompt phrases match only with neither a letter nor a digit on each

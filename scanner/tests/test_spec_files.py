@@ -43,9 +43,9 @@ def test_spec_file_follows_schema(yaml_name: str, schema_name: str) -> None:
     assert errors == []
 
 
-def test_spec_version_is_0_3() -> None:
-    assert load_yaml("classes.yaml")["specVersion"] == "0.3"
-    assert load_yaml("normalize.yaml")["specVersion"] == "0.3"
+def test_spec_version_is_0_4() -> None:
+    assert load_yaml("classes.yaml")["specVersion"] == "0.4"
+    assert load_yaml("normalize.yaml")["specVersion"] == "0.4"
 
 
 def test_prompt_phrases_leave_boundaries_to_the_implementation() -> None:
@@ -159,6 +159,13 @@ def test_every_stugum_live_case_is_present() -> None:
         ("Enter the 14 digit code.", ()),
         ("Enter the 4 digit code.", ("cvv",)),
         ("SSN:", ("us_ssn", "us_itin")),
+        # Spec 0.4: "nine digit social" with "number" dropped; never "social media".
+        ("Please say your nine digit social.", ("us_ssn", "us_itin")),
+        ("Enter your 9-digit Social Security.", ("us_ssn", "us_itin")),
+        ("Please read me your nine digit social media account number.", ("account_number",)),
+        ("Which social media do you use?", ()),
+        ("Say your social.", ()),
+        ("Enter the 19 digit social code.", ()),
     ],
 )
 def test_prompt_phrases_match_on_boundaries(text: str, classes: tuple[str, ...]) -> None:

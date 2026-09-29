@@ -4,7 +4,7 @@
  * redaction. No runtime dependencies. Nothing here logs, stores or returns
  * a detected value: results are classes and offsets.
  */
-export { SPEC_VERSION, loadSpec, parseSpec, type BrandRule, type ClassSpec, type NormalizeSpec, type Spec, } from './spec.ts';
+export { SPEC_VERSION, loadSpec, parseSpec, promptRegex, type BrandRule, type ClassSpec, type NormalizeSpec, type Spec, } from './spec.ts';
 export { normalize, toOriginal, type Normalized } from './normalize.ts';
 export { cardBrand, itinStructureValid, luhnValid, ssnStructureValid } from './rules.ts';
 export { classify, isMenuOrQuestion, promptClasses, type Channel, type ClassifyOptions, type Confidence, type Excluded, type Match, type MatchPart, type Result, type Speaker, type Turn, type Via, } from './conversation.ts';

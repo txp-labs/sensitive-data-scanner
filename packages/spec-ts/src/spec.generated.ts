@@ -2,12 +2,13 @@
 // Do not edit by hand: change the YAML and run `npm run gen:spec`.
 
 export const CLASSES_RAW: unknown = {
-  "specVersion": "0.3",
+  "specVersion": "0.4",
   "classes": {
     "us_ssn": {
       "severity": "high",
       "promptPhrases": [
         "social(?: security)? number",
+        "(?:nine|9)[- ]digit social(?: security)?(?: number)?(?! media)",
         "ssn"
       ],
       "shape": {
@@ -38,6 +39,7 @@ export const CLASSES_RAW: unknown = {
       "severity": "high",
       "promptPhrases": [
         "social(?: security)? number",
+        "(?:nine|9)[- ]digit social(?: security)?(?: number)?(?! media)",
         "ssn",
         "itin",
         "taxpayer id(?:entification)? number"
@@ -404,7 +406,7 @@ export const CLASSES_RAW: unknown = {
 };
 
 export const NORMALIZE_RAW: unknown = {
-  "specVersion": "0.3",
+  "specVersion": "0.4",
   "steps": [
     {
       "strip_keypad_terminator": [

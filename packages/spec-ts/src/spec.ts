@@ -7,7 +7,7 @@
  */
 import { CLASSES_RAW, NORMALIZE_RAW } from './spec.generated.ts';
 
-export const SPEC_VERSION = '0.3';
+export const SPEC_VERSION = '0.4';
 
 const WS = '[ \\t\\r\\n]+';
 

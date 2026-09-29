@@ -8,6 +8,7 @@ export {
   SPEC_VERSION,
   loadSpec,
   parseSpec,
+  promptRegex,
   type BrandRule,
   type ClassSpec,
   type NormalizeSpec,

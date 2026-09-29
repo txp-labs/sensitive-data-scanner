@@ -4,7 +4,7 @@
  * redaction. No runtime dependencies. Nothing here logs, stores or returns
  * a detected value: results are classes and offsets.
  */
-export { SPEC_VERSION, loadSpec, parseSpec, } from './spec.js';
+export { SPEC_VERSION, loadSpec, parseSpec, promptRegex, } from './spec.js';
 export { normalize, toOriginal } from './normalize.js';
 export { cardBrand, itinStructureValid, luhnValid, ssnStructureValid } from './rules.js';
 export { classify, isMenuOrQuestion, promptClasses, } from './conversation.js';
