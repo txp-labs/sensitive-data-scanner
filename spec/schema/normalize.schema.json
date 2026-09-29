@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["specVersion", "steps"],
   "properties": {
-    "specVersion": { "const": "0.1" },
+    "specVersion": { "const": "0.2" },
     "steps": {
       "type": "array",
       "prefixItems": [
@@ -112,7 +112,8 @@
             "withinSeconds": { "type": "number", "minimum": 0 },
             "stopWhenClassComplete": { "type": "boolean" },
             "maxInterveningTurns": { "type": "integer", "minimum": 0 },
-            "neverJoinChannels": { "type": "array", "items": { "enum": ["speech", "dtmf", "chat"] } }
+            "answerWindowChannels": { "type": "array", "items": { "enum": ["speech", "dtmf", "chat"] } },
+            "menuOrQuestionTurns": { "type": "array", "items": { "type": "string", "minLength": 1 } }
           }
         }
       }

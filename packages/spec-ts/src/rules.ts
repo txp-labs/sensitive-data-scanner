@@ -1,5 +1,5 @@
 /**
- * Shape rules named in spec/classes.yaml: Luhn, IIN, SSN structure, dates.
+ * Shape rules named in spec/classes.yaml: Luhn, IIN, SSN and ITIN structure, dates.
  * Pure functions; they return booleans or a brand name, never the digits.
  */
 import type { BrandRule, ClassSpec, Spec } from './spec.ts';
@@ -47,6 +47,24 @@ export function ssnStructureValid(digits: string): boolean {
   if (area === 0 || area === 666 || area >= 900) return false;
   return digits.slice(3, 5) !== '00' && digits.slice(5) !== '0000';
 }
+
+/** ITIN groups: 50-65, 70-88, 90-92 and 94-99. */
+const ITIN_GROUPS: readonly (readonly [number, number])[] = [
+  [50, 65],
+  [70, 88],
+  [90, 92],
+  [94, 99],
+];
+
+/** 9GG-GG-SSSS: area 900-999; group 50-65, 70-88, 90-92 or 94-99. */
+export function itinStructureValid(digits: string): boolean {
+  if (digits.length !== 9 || !DIGITS.test(digits) || digits[0] !== '9') return false;
+  const group = Number(digits.slice(3, 5));
+  return ITIN_GROUPS.some(([lo, hi]) => group >= lo && group <= hi);
+}
+
+const SSN_RULES: readonly string[] = ['area_not_000_666_9xx', 'group_not_00', 'serial_not_0000'];
+const ITIN_RULES: readonly string[] = ['area_9xx', 'group_50_65_70_88_90_92_94_99'];
 
 function leap(year: number): boolean {
   return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
@@ -129,8 +147,7 @@ export function shapePass(cls: ClassSpec, digits: string, spec: Spec, nowYear: n
     return best;
   }
   if (!digitsInRange(cls, digits.length)) return 'none';
-  if (rules.some((r) => r.startsWith('area_') || r.startsWith('group_') || r.startsWith('serial_'))) {
-    return ssnStructureValid(digits) ? 'full' : 'none';
-  }
+  if (rules.some((r) => ITIN_RULES.includes(r))) return itinStructureValid(digits) ? 'full' : 'none';
+  if (rules.some((r) => SSN_RULES.includes(r))) return ssnStructureValid(digits) ? 'full' : 'none';
   return 'full';
 }

@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["specVersion", "classes", "retryPrefixes", "promptCarryover", "contextWindow", "cardBrands"],
   "properties": {
-    "specVersion": { "const": "0.1" },
+    "specVersion": { "const": "0.2" },
     "classes": {
       "type": "object",
       "minProperties": 1,
@@ -71,7 +71,15 @@
         "rules": {
           "type": "array",
           "items": {
-            "enum": ["luhn", "iin_known", "area_not_000_666_9xx", "group_not_00", "serial_not_0000"]
+            "enum": [
+              "luhn",
+              "iin_known",
+              "area_not_000_666_9xx",
+              "group_not_00",
+              "serial_not_0000",
+              "area_9xx",
+              "group_50_65_70_88_90_92_94_99"
+            ]
           }
         },
         "softRules": { "type": "array", "items": { "enum": ["iin_known"] } },
@@ -97,7 +105,7 @@
         "suppressWords": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "dummyValues": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" } },
         "excludeKnownTestNumbers": { "type": "boolean" },
-        "testNumbers": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]{13,19}$" } },
+        "testNumbers": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" } },
         "testNumbersMaxDistinctDigits": { "type": "integer", "minimum": 0 }
       }
     }

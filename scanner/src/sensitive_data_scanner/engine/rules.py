@@ -1,4 +1,4 @@
-"""Shape rules named in spec/classes.yaml: Luhn, IIN, SSN structure, dates.
+"""Shape rules named in spec/classes.yaml: Luhn, IIN, SSN and ITIN structure, dates.
 
 Pure functions over digit strings. They return booleans or a brand name,
 never the digits they were given.
@@ -56,6 +56,20 @@ def ssn_structure_valid(digits: str) -> bool:
     if area in {0, 666} or area >= 900:
         return False
     return digits[3:5] != "00" and digits[5:] != "0000"
+
+
+# ITIN groups: 50-65, 70-88, 90-92 and 94-99.
+_ITIN_GROUPS = ((50, 65), (70, 88), (90, 92), (94, 99))
+_SSN_RULES = frozenset({"area_not_000_666_9xx", "group_not_00", "serial_not_0000"})
+_ITIN_RULES = frozenset({"area_9xx", "group_50_65_70_88_90_92_94_99"})
+
+
+def itin_structure_valid(digits: str) -> bool:
+    """9AA-GG-SSSS: area 900-999; group 50-65, 70-88, 90-92 or 94-99."""
+    if len(digits) != 9 or not _DIGITS.fullmatch(digits) or digits[0] != "9":
+        return False
+    group = int(digits[3:5])
+    return any(lo <= group <= hi for lo, hi in _ITIN_GROUPS)
 
 
 def _leap(year: int) -> bool:
@@ -142,6 +156,8 @@ def shape_pass(cls: ClassSpec, digits: str, spec: Spec, now_year: int) -> str:
         return best
     if not digits_in_range(cls, len(digits)):
         return "none"
-    if any(r.startswith(("area_", "group_", "serial_")) for r in rules):
+    if _ITIN_RULES.intersection(rules):
+        return "full" if itin_structure_valid(digits) else "none"
+    if _SSN_RULES.intersection(rules):
         return "full" if ssn_structure_valid(digits) else "none"
     return "full"

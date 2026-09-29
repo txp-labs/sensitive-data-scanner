@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-# Spec class -> Presidio entity type. CREDIT_CARD and US_SSN are Presidio's own.
+# Spec class -> Presidio entity type. CREDIT_CARD, US_SSN and US_ITIN are Presidio's own.
 CLASS_TO_ENTITY: dict[str, str] = {
     "card": "CREDIT_CARD",
     "us_ssn": "US_SSN",
+    "us_itin": "US_ITIN",
     "dob": "DATE_OF_BIRTH",
     "cvv": "CARD_SECURITY_CODE",
     "pin": "PIN",

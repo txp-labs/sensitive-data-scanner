@@ -6,6 +6,24 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Spec
+- **Spec 0.2** ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15); every change is listed for consumers in
+  `spec/README.md`, "Changes from 0.1", which Stugum mirrors):
+  - Keypad (`dtmf`) answers may be keyed in parts: `answerWindowChannels:
+    [dtmf]` replaces `neverJoinChannels`. The parts join within one answer
+    window and never across a turn of another speaker.
+  - A menu or question turn (`menuOrQuestionTurns`: `?`, `press`, `reply`,
+    `say`, `enter`, ...) ends a pending value, like a prompt; a backchannel
+    still does not.
+  - A new class, `us_itin` (severity `high`, the same as `us_ssn`): 9xx area,
+    groups 50-65, 70-88, 90-92 and 94-99; armed by SSN and ITIN prompts;
+    context words include the SSN words; standalone when formatted; the IRS
+    advertising range 987-65-4320 to 4329 in `testNumbers`. `987654320`
+    moves there from `us_ssn.dummyValues`.
+  - `specVersion` is `"0.2"`; the JSON Schemas follow.
+- Vectors: `vectors/answer-windows.jsonl` and `vectors/itin.jsonl`, passed by
+  the Python engine, the Presidio path and the TypeScript package alike.
+
 ### Feature
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
@@ -30,6 +48,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `unsupported`, `unsupported_format`, `kms_access`, `access_denied`,
   `tags_unreadable`, deferred for `budget`), with counts of objects not read
   for KMS, unreadable or unsupported formats. A failed listing is named.
+- `SpecUsItinRecognizer` in the Presidio pipeline, and `us_itin` findings
+  (severity `high`).
+- `@txp-labs/sensitive-data-spec` exports `isMenuOrQuestion` and
+  `itinStructureValid`.
 
 ### Findings schema
 - `schemaVersion` is now **1.2**, additive: the `discovery` summary,
@@ -47,6 +69,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,
   the run summary, and the read-only IAM each kind of discovery needs.
   `docs/FINDINGS.md`: schema 1.2 and the run summary.
+
+### Internal
+- `packages/spec-ts/dist/` is committed, so the package can be consumed by
+  git commit (package managers do not build git dependencies). A CI job
+  rebuilds it and fails if it differs. `exports` still points at `dist/`.
 
 ## 0.2.0 — 2026-09-29
 

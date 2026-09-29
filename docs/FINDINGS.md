@@ -63,13 +63,13 @@ the scanned account onto that bus:
   "schema": "sensitive-data-scanner.findings",
   "schemaVersion": "1.2",
   "scannerVersion": "0.2.0",
-  "specVersion": "0.1",
+  "specVersion": "0.2",
   "runId": "20260929T060000Z-1a2b3c4d",
   "account": "123456789012",
   "region": "us-west-2",
   "startedAt": "2026-09-29T06:00:00+00:00",
   "finishedAt": "2026-09-29T06:04:10+00:00",
-  "classes": ["us_ssn", "card", "dob", "cvv", "pin", "account_number", "us_ssn_last4"],
+  "classes": ["us_ssn", "us_itin", "card", "dob", "cvv", "pin", "account_number", "us_ssn_last4"],
   "coverage": [ "… one per source …" ],
   "findings": [ "…" ],
   "findingsTotal": 3,
@@ -123,7 +123,7 @@ One class of data at one location.
 | `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). `dynamodb_item`: `table`, `keyHash`, `key` and `attributePath` (below). |
 | `connect` | The Amazon Connect contact and instance, when the item names one: a chat or Contact Lens transcript, or a flow log event. |
 | `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text` or `dynamodb_item`. |
-| `class`, `severity` | The spec class (`card`, `us_ssn`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
+| `class`, `severity` | The spec class (`card`, `us_ssn`, `us_itin`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
 | `count` | Distinct values of the class in the item. The same card read out by a caller and read back by the agent counts once. |
 | `occurrences` | Every place a value appears in the item. |
 | `confidence` | The highest confidence among the occurrences; `confidenceCounts` gives them all. |

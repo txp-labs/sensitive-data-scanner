@@ -13,7 +13,8 @@ scanner/build/
 
 # Node
 node_modules/
-packages/spec-ts/dist/
+# packages/spec-ts/dist/ is committed, so the package can be consumed by git
+# commit (CI fails if it differs from a fresh build).
 *.tsbuildinfo
 
 # Build output

@@ -7,9 +7,12 @@ The format, and what each field means, is in [spec/README.md](../spec/README.md#
 |---|---|
 | `stugum-live.jsonl` | Every case from Stugum's live IVR run of 29 Sep 2026: keypad and spoken SSN, DOB and card entries, the retry prefix |
 | `transcripts.jsonl` | txp-labs/mermera-attestation-app#1067's fixtures as conversations: Connect chat and Contact Lens transcripts, spoken and split-turn forms, near-misses, redacted `[PII]` turns |
+| `answer-windows.jsonl` | Spec 0.2 ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15)): keypad answers keyed in parts within one answer window, never across a bot turn; menu and question turns ending a pending value; backchannels that do not |
+| `itin.jsonl` | Spec 0.2 ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15)): `us_itin` after SSN and ITIN prompts, by context and formatted alone; group boundaries and near-misses; the IRS advertising range as test data |
 | `logs.jsonl` | Lex V2 conversation logs and Connect flow logs |
 | `normalize.jsonl` | Normalization input/output pairs, with each digit run's original range |
 
 Never add a real card number, SSN or other personal value. Card numbers here
 are made-up bodies with a computed Luhn check digit, or published test
-numbers; SSNs are arbitrary structurally valid numbers or published samples.
+numbers; SSNs and ITINs are arbitrary structurally valid numbers or published samples
+(the IRS advertising range 987-65-4320 to 4329 for ITINs).

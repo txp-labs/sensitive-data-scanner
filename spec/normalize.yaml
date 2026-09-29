@@ -7,7 +7,7 @@
 # spec/README.md ("Normalization"), and vectors/normalize.jsonl holds
 # input/output pairs every implementation must reproduce. The JSON Schema is
 # spec/schema/normalize.schema.json.
-specVersion: "0.1"
+specVersion: "0.2"
 
 steps:
   # "123456789#" -> "123456789": a terminator key right after a digit.
@@ -93,5 +93,28 @@ steps:
   - collapse_digit_separators: [" ", "-", ".", ","]
 
   # Not a text change: a value may continue in the same speaker's next turn.
-  # A keypad entry is whole: dtmf turns are never joined.
-  - join_same_speaker_turns: {withinSeconds: 15, stopWhenClassComplete: true, maxInterveningTurns: 3, neverJoinChannels: [dtmf]}
+  - join_same_speaker_turns:
+      withinSeconds: 15
+      stopWhenClassComplete: true
+      # Another speaker's backchannel ("mm-hmm") may come between the parts.
+      maxInterveningTurns: 3
+      # A keypad answer may be keyed in parts ("0101", then "80#"), but only
+      # within one answer window: a value with a part in one of these
+      # channels ends at the next turn of another speaker, and never joins
+      # across one.
+      answerWindowChannels: [dtmf]
+      # A bot or agent turn that matches one of these (case-insensitive, ASCII)
+      # is a menu or a question, not a backchannel: it ends any value another
+      # speaker is still giving. "Thanks. Reply 1 for more." ends a pending
+      # date of birth, so the "1" that answers the menu never joins it.
+      menuOrQuestionTurns:
+        - "\\?"
+        - "\\bpress(?:ing)?\\b"
+        - "\\breply\\b"
+        - "\\bsay\\b"
+        - "\\benter\\b"
+        - "\\btype\\b"
+        - "\\bselect\\b"
+        - "\\bchoose\\b"
+        - "\\bdial\\b"
+        - "\\bmenu\\b"

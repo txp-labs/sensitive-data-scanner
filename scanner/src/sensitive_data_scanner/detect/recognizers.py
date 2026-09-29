@@ -1,8 +1,9 @@
 """Presidio recognizers for the spec's classes.
 
-- `SpecCreditCardRecognizer` and `SpecUsSsnRecognizer` extend Presidio's own
-  card and SSN recognizers (pattern and checksum) with the spec's rules: the
-  IIN table, published test numbers, SSN structure and sample numbers.
+- `SpecCreditCardRecognizer`, `SpecUsSsnRecognizer` and
+  `SpecUsItinRecognizer` extend Presidio's own card, SSN and ITIN
+  recognizers (pattern and checksum) with the spec's rules: the IIN table,
+  published test numbers, SSN and ITIN structure and sample numbers.
 - `DateOfBirthRecognizer` finds dates; `SpecContextEnhancer` keeps one only
   next to a DOB word.
 - `SpokenDigitsRecognizer` finds card numbers and SSNs read aloud in one
@@ -28,13 +29,18 @@ from typing import Any, ClassVar
 
 from presidio_analyzer import EntityRecognizer, Pattern, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
-from presidio_analyzer.predefined_recognizers import CreditCardRecognizer, UsSsnRecognizer
+from presidio_analyzer.predefined_recognizers import (
+    CreditCardRecognizer,
+    UsItinRecognizer,
+    UsSsnRecognizer,
+)
 
 from ..engine.conversation import SPEAKERS, Turn, classify
 from ..engine.normalize import normalize
 from ..engine.rules import (
     card_brand,
     is_test_card,
+    itin_structure_valid,
     luhn_valid,
     plausible_birth_date,
     ssn_structure_valid,
@@ -226,6 +232,76 @@ class SpecUsSsnRecognizer(UsSsnRecognizer):
         return out
 
 
+# ------------------------------------------------------------ ITIN
+
+
+class SpecUsItinRecognizer(UsItinRecognizer):
+    """Presidio's ITIN recognizer with the spec's structure rules and advertising numbers.
+
+    Like an SSN: the dashed or spaced form counts alone (medium); nine bare
+    digits only with an ITIN or SSN word nearby, which the context enhancer
+    decides. The IRS advertising range is counted apart as test data.
+    """
+
+    ITIN_PATTERNS: ClassVar[list[Pattern]] = [
+        Pattern("ITIN formatted (medium)", r"\b(9[0-9]{2})([- ])([0-9]{2})\2([0-9]{4})\b", 0.5),
+        Pattern("ITIN nine digits (very weak)", r"\b9[0-9]{8}\b", 0.05),
+    ]
+
+    def __init__(self, spec: Spec | None = None, **kwargs: Any) -> None:
+        self.spec = spec or load_spec()
+        super().__init__(patterns=self.ITIN_PATTERNS, **kwargs)
+
+    def invalidate_result(self, pattern_text: str) -> bool:
+        return not itin_structure_valid(_digits(pattern_text))
+
+    def analyze(
+        self,
+        text: str,
+        entities: list[str],
+        nlp_artifacts: NlpArtifacts | None = None,
+        regex_flags: int | None = None,
+    ) -> list[RecognizerResult]:
+        itin = self.spec.classes["us_itin"]
+        out: list[RecognizerResult] = []
+        for r in super().analyze(text, entities, nlp_artifacts, regex_flags):
+            raw = text[r.start : r.end]
+            digits = _digits(raw)
+            if not itin_structure_valid(digits):
+                continue
+            key = value_key(digits)
+            if digits in itin.test_numbers:
+                out.append(
+                    _result(
+                        r.entity_type,
+                        r.start,
+                        r.end,
+                        COUNT_ONLY_SCORE,
+                        **{
+                            META_EXCLUDED: "test",
+                            META_VALUE_KEY: key,
+                        },
+                    )
+                )
+                continue
+            formatted = len(raw) == 11
+            out.append(
+                _result(
+                    r.entity_type,
+                    r.start,
+                    r.end,
+                    SCORE["medium"] if formatted else 0.05,
+                    **{
+                        META_VIA: "shape",
+                        META_CONFIDENCE: "medium",
+                        META_NEEDS_CONTEXT: not formatted,
+                        META_VALUE_KEY: key,
+                    },
+                )
+            )
+        return out
+
+
 # ------------------------------------------------------------ date of birth
 
 _MONTHS = (
@@ -370,7 +446,7 @@ def _digits_from_norm(spec: Spec, text: str, start: int, end: int) -> str:
 
 
 class SpokenDigitsRecognizer(EntityRecognizer):
-    """Card numbers and SSNs read aloud in one text, after the spec's normalization.
+    """Card numbers, SSNs and ITINs read aloud in one text, after the spec's normalization.
 
     Only values that were at least partly spoken as words are reported;
     values written as digits are the pattern recognizers' job.
@@ -380,7 +456,7 @@ class SpokenDigitsRecognizer(EntityRecognizer):
         self.spec = spec or load_spec()
         self.now = now
         super().__init__(
-            supported_entities=[CLASS_TO_ENTITY[c] for c in ("card", "us_ssn", "dob")],
+            supported_entities=[CLASS_TO_ENTITY[c] for c in ("card", "us_ssn", "us_itin", "dob")],
             name="SpokenDigitsRecognizer",
         )
 
