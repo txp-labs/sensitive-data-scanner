@@ -16,8 +16,8 @@ from jsonschema import Draft202012Validator
 
 from aws_fixtures import Env, config
 from conftest import REPO
+from sensitive_data_core.scan.sql import REDSHIFT, sample_sql, tables_sql
 from sensitive_data_scanner.config import read_config, store_rules
-from sensitive_data_scanner.scan.sql import REDSHIFT, sample_sql, tables_sql
 from sensitive_data_scanner.sources import redshift as rs_module
 from synthetic import CARDS, SSN_A, dashed
 
@@ -396,7 +396,7 @@ def test_a_statement_that_never_finishes_is_given_up_on(env: Env) -> None:
         region="us-west-2",
         statement_seconds=60,
     )
-    from sensitive_data_scanner.sources.base import Budget
+    from sensitive_data_core.adapter import Budget
 
     budget = Budget(10, 10**9, 10_000, clock=lambda: float(next(clock)))
     for _ in range(3):

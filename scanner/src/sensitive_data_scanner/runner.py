@@ -30,14 +30,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.coverage import Discovery, Store, settle, summary
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.engine.spec import load_spec
+from sensitive_data_core.findings import Coverage, findings_document
+from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
+
 from .config import Config, DynamoTarget
-from .detect.analyzer import Detector
-from .discovery import Discovery, Store, discover, settle, summary
-from .engine.spec import load_spec
+from .discovery import discover
 from .events import put_findings_events
-from .findings import Coverage, findings_document
-from .safety import ScanError, error_name, is_kms_denial, log_event
-from .sources.base import Budget, Context, FindingStore, SourceRun
+from .sources.base import Context
 from .sources.cloudwatch_logs import CloudWatchLogsSource
 from .sources.dynamodb import DynamoDBSource
 from .sources.dynamodb_export import DynamoDBExportSource

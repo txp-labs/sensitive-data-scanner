@@ -24,13 +24,15 @@ import datetime as _dt
 import json
 from typing import TYPE_CHECKING, Any
 
-from ..detect.analyzer import Analysis, Detection, Detector
-from ..engine.conversation import utf16_index
-from ..findings import Coverage, Offset, finding_json, log_resource, logs_link
-from ..safety import error_name, log_event
-from ..scan.item import ItemResult, _Collector, scan_log_event
-from .base import Budget, FindingStore, SourceRun
-from .parsers import Conversation, is_lex_record, parse_lex_records
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.detect.analyzer import Analysis, Detection, Detector
+from sensitive_data_core.engine.conversation import utf16_index
+from sensitive_data_core.findings import Coverage, Offset, finding_json
+from sensitive_data_core.parsers import Conversation, is_lex_record, parse_lex_records
+from sensitive_data_core.safety import error_name, log_event
+from sensitive_data_core.scan.item import ItemResult, _Collector, scan_log_event
+
+from ..resources import log_resource, logs_link
 
 if TYPE_CHECKING:
     from mypy_boto3_logs import CloudWatchLogsClient

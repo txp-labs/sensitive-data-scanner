@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[manifest]
+members = [
+    "sensitive-data-scanner",
+    "sensitive-data-scanner-core",
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.5"
@@ -1999,8 +2005,8 @@ dependencies = [
     { name = "boto3" },
     { name = "cassandra-driver" },
     { name = "cassandra-sigv4" },
-    { name = "presidio-analyzer" },
     { name = "pyyaml" },
+    { name = "sensitive-data-scanner-core" },
 ]
 
 [package.dev-dependencies]
@@ -2028,8 +2034,8 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.40" },
     { name = "cassandra-driver", specifier = ">=3.29" },
     { name = "cassandra-sigv4", specifier = ">=4.0.2" },
-    { name = "presidio-analyzer", specifier = ">=2.2.364,<2.3" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "sensitive-data-scanner-core", editable = "core" },
 ]
 
 [package.metadata.requires-dev]
@@ -2047,6 +2053,21 @@ dev = [
     { name = "types-pyyaml", specifier = ">=6.0.12.20260906" },
 ]
 lambda = [{ name = "awslambdaric", specifier = ">=4.1.0" }]
+
+[[package]]
+name = "sensitive-data-scanner-core"
+version = "0.3.0"
+source = { editable = "core" }
+dependencies = [
+    { name = "presidio-analyzer" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "presidio-analyzer", specifier = ">=2.2.364,<2.3" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+]
 
 [[package]]
 name = "setuptools"

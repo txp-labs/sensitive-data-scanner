@@ -20,17 +20,17 @@ from jsonschema import Draft202012Validator
 from aws_fixtures import DATA, REGION, RESULTS, Env, config, epoch_ms
 from conftest import REPO
 from ddb_fixtures import Ddb, describe
+from sensitive_data_core.coverage import Store
+from sensitive_data_core.push import event_details
+from sensitive_data_core.rules import SamplingRule, StoreRule
 from sensitive_data_scanner.config import (
-    SamplingRule,
-    StoreRule,
     discover_kinds,
     parse_rule,
     read_config,
     sampling_rules,
     store_rules,
 )
-from sensitive_data_scanner.discovery import Store, decide
-from sensitive_data_scanner.events import event_details
+from sensitive_data_scanner.discovery import decide
 from synthetic import CARDS, SSN_A, dashed, printed
 
 SCHEMA = Draft202012Validator(

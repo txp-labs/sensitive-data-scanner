@@ -18,8 +18,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
+from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_scanner.config import Config
-from sensitive_data_scanner.detect.analyzer import Detector
 from sensitive_data_scanner.runner import Clients, run_scan
 
 REGION = "us-west-2"

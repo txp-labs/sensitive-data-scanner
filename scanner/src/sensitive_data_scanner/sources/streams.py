@@ -38,12 +38,16 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
-from ..detect.analyzer import Detector
-from ..discovery import Discovery, Store, decide, needs_tags, reason_for
-from ..findings import Coverage, console_link, store_field_resource
-from ..safety import error_name, is_kms_denial, log_event
-from ..scan.item import looks_binary, scan_item_text
-from .base import Budget, Context, FindingStore, SourceRun, class_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, class_findings
+from sensitive_data_core.coverage import Discovery, Store, reason_for
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
+from sensitive_data_core.scan.item import looks_binary, scan_item_text
+
+from ..discovery import decide, needs_tags
+from ..resources import console_link
+from .base import Context
 from .exports import drop_other_passes, merge
 from .s3 import S3Source
 

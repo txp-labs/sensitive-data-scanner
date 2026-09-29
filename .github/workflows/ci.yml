@@ -165,8 +165,8 @@ jobs:
           docker image ls sensitive-data-scanner:ci --format 'image size: {{.Size}}'
           docker run --rm --network none --entrypoint python sensitive-data-scanner:ci -c '
           import datetime as dt
-          from sensitive_data_scanner.detect.analyzer import Detector
-          from sensitive_data_scanner.engine.conversation import Turn
+          from sensitive_data_core.detect.analyzer import Detector
+          from sensitive_data_core.engine.conversation import Turn
           d = Detector(now=dt.date(2026, 9, 29))
           a = d.analyze_conversation([
               Turn("bot", "Please enter or say your nine digit Social Security number."),
@@ -177,7 +177,7 @@ jobs:
           # The image reads the columnar formats: Parquet, ORC and zstd through pyarrow.
           import io
           import pyarrow as pa, pyarrow.parquet as pq, pyarrow.orc as orc
-          from sensitive_data_scanner.scan.columnar import pyarrow_available, scan_table
+          from sensitive_data_core.scan.columnar import pyarrow_available, scan_table
           assert pyarrow_available()
           t = pa.table({"card_number": ["4111111111111111"], "note": ["x"]})
           for kind, write in (("parquet", pq.write_table), ("orc", orc.write_table)):

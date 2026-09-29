@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 
 from conftest import VECTORS_DIR, all_conversation_vectors, load_jsonl, turns_of, vector_now
-from sensitive_data_scanner.engine.conversation import classify, utf16_index
-from sensitive_data_scanner.engine.normalize import normalize
-from sensitive_data_scanner.engine.spec import load_spec
+from sensitive_data_core.engine.conversation import classify, utf16_index
+from sensitive_data_core.engine.normalize import normalize
+from sensitive_data_core.engine.spec import load_spec
 
 SPEC = load_spec()
 NORMALIZE = load_jsonl(VECTORS_DIR / "normalize.jsonl")

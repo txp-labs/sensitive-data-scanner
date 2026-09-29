@@ -17,8 +17,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..discovery import Discovery, Store, decide, needs_tags
-from ..safety import error_name
+from sensitive_data_core.coverage import Discovery, Store
+from sensitive_data_core.safety import error_name
+
+from ..discovery import decide, needs_tags
 from .base import Context
 
 # The services this module calls (test_template.py checks every call against them).

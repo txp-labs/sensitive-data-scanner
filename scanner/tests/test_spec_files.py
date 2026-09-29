@@ -17,8 +17,8 @@ from conftest import (
     conversation_vector_files,
     load_jsonl,
 )
-from sensitive_data_scanner.engine.conversation import prompt_classes
-from sensitive_data_scanner.engine.spec import load_spec
+from sensitive_data_core.engine.conversation import prompt_classes
+from sensitive_data_core.engine.spec import load_spec
 
 
 def schema(name: str) -> Draft202012Validator:

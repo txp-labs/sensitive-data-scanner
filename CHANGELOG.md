@@ -6,6 +6,32 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Internal
+- The Python runner is two packages in one uv workspace
+  ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 2), with no change in
+  behavior:
+  - **the cloud-neutral core**, `sensitive-data-scanner-core` (`scanner/core/`,
+    import `sensitive_data_core`): the spec engine and Presidio detection,
+    the findings contract, budgets and sampling, the allow, deny and sampling
+    rules, the coverage summary, the findings push interface
+    (`push.FindingsSink`), the sampled SQL pass (`scan/sql.py`), the readers,
+    the no-values rule (`safety`) and the `Adapter` interface, now generic in
+    the context each platform gives its adapters. It depends on no cloud SDK,
+    and a test fails if it imports one;
+  - **the AWS scanner**, `sensitive-data-scanner` (`scanner/src/`, import
+    `sensitive_data_scanner`): every boto3 adapter, discovery, the runner, the
+    Lambda handler, EventBridge as the findings sink (`events.EventBridgeSink`),
+    and the AWS resources and console links (`resources.py`).
+  - The Lambda handler (`sensitive_data_scanner.handler.handler`), every
+    setting's name, the findings document and `deploy/` are unchanged. The
+    Lambda zip and the container image carry both packages.
+  - **For Python callers:** the detection modules moved with the core, so
+    `sensitive_data_scanner.detect`, `.engine`, `.scan`, `.safety` and
+    `.findings` are now `sensitive_data_core.detect`, and so on.
+  - Releases attach the core's wheel beside the scanner's; the release's
+    version check covers every package in the workspace. The no-leak suite's
+    source audit reads every package.
+
 ## 0.3.0 — 2026-09-29
 
 ### Spec

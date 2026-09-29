@@ -16,11 +16,11 @@ from jsonschema import Draft202012Validator
 from aws_fixtures import NOW, Env, config, shared_detector
 from conftest import REPO
 from ddb_fixtures import KEYPAD, PARTITION, PROMPT, TABLE, Ddb, key_of, load_item, page, target
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
+from sensitive_data_core.findings import findings_document
+from sensitive_data_core.scan.attributes import AttributeRules, iter_leaves, scan_attributes
+from sensitive_data_core.scan.paths import EVERY, Elements, parse_path, render_path
 from sensitive_data_scanner.config import DynamoTarget, dynamodb_targets, read_config
-from sensitive_data_scanner.findings import findings_document
-from sensitive_data_scanner.scan.attributes import AttributeRules, iter_leaves, scan_attributes
-from sensitive_data_scanner.scan.paths import EVERY, Elements, parse_path, render_path
-from sensitive_data_scanner.sources.base import Budget, FindingStore, SourceRun
 from sensitive_data_scanner.sources.dynamodb import DynamoDBSource
 from synthetic import CARDS, SSN_A
 
@@ -473,7 +473,7 @@ def test_runner_writes_dynamodb_findings(env: Env) -> None:
 
 
 def test_runner_refuses_dynamodb_targets_without_a_client(env: Env) -> None:
-    from sensitive_data_scanner.safety import ScanError
+    from sensitive_data_core.safety import ScanError
 
     with pytest.raises(ScanError):
         env.run(config(s3_targets=[], dynamodb_targets=[target()]))

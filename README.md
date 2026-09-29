@@ -131,8 +131,8 @@ FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
 ### Use the detection from Python
 
 ```python
-from sensitive_data_scanner.detect.analyzer import Detector
-from sensitive_data_scanner.engine.conversation import Turn
+from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.engine.conversation import Turn
 
 detector = Detector()
 detector.analyze_conversation([
@@ -172,7 +172,8 @@ not on npm yet.
 |---|---|
 | `spec/`, `vectors/` | The spec (classes, normalization) and the synthetic test vectors |
 | `packages/spec-ts/` | The TypeScript package |
-| `scanner/` | The Python runner: Presidio recognizers, AWS adapters (S3, CloudWatch Logs, DynamoDB), findings |
+| `scanner/core/` | The cloud-neutral core (`sensitive-data-scanner-core`): the spec engine, Presidio recognizers, findings, budgets and sampling, the coverage summary, the findings push interface, the sampled SQL pass and the adapter interface |
+| `scanner/` | The AWS scanner (`sensitive-data-scanner`): every AWS adapter, discovery, the batch runner and the Lambda handler, built on the core |
 | `schema/` | The findings JSON Schema |
 | `deploy/` | CloudFormation for the estate rollout: `scanner.yaml` (one account and region) and `estate-stackset.yaml` (a service-managed StackSet) |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [findings](docs/FINDINGS.md), [releasing](docs/RELEASING.md) |
