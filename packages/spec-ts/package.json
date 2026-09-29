@@ -1,6 +1,6 @@
 {
   "name": "@txp-labs/sensitive-data-spec",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The sensitive-data spec (classes, normalization, prompt carryover) and a zero-dependency classifier for in-memory redaction of conversation turns.",
   "license": "Apache-2.0",
   "private": true,
