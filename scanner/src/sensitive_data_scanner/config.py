@@ -138,6 +138,7 @@ DISCOVER_KINDS = {
     "dynamodb": "dynamodb",
     "glue": "glue_table",
     "rds": "rds",
+    "redshift": "redshift",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -147,12 +148,13 @@ _KIND_ALIASES = {
     "glue": "glue_table",
     "glue_table": "glue_table",
     "rds": "rds",
+    "redshift": "redshift",
 }
 
 
 def discover_kinds(raw: str | None) -> frozenset[str]:
-    """`DISCOVER`: `all`, or a comma-separated list of `s3`, `logs`, `dynamodb`, `glue`,
-    `rds`. Empty: off."""
+    """`DISCOVER`: `all`, or a comma-separated list of the kinds in DISCOVER_KINDS (`s3`,
+    `logs`, `dynamodb`, `glue`, `rds`, `redshift`, ...). Empty: off."""
     names = [n.lower() for n in _list(raw)]
     if not names or names == ["none"]:
         return frozenset()
@@ -328,6 +330,18 @@ def _arn(v: str | None) -> str | None:
     return t
 
 
+_DB_USER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,126}$")
+
+
+def _db_user(v: str | None) -> str | None:
+    t = (v or "").strip()
+    if not t:
+        return None
+    if not _DB_USER.match(t):
+        raise ValueError("REDSHIFT_DB_USER is not a database user name")
+    return t
+
+
 def _bool(v: str | None) -> bool:
     return (v or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -375,6 +389,13 @@ class Config:
     dynamodb_export: bool = False
     dynamodb_export_kms_key_arn: str | None = None
     data_api_targets: list[DataApiTarget] = field(default_factory=list)
+    # Redshift and Redshift Serverless: read through the Redshift Data API with
+    # sampled SELECTs. Off: discovered and reported, not read.
+    redshift_read: str = "off"  # off | iam | db_user
+    redshift_db_user: str | None = None
+    redshift_max_rows: int = 1000
+    redshift_max_tables: int = 500
+    redshift_statement_seconds: int = 60
 
     @property
     def exports_prefix(self) -> str:
@@ -396,7 +417,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
     if not bucket:
         raise ValueError("RESULTS_BUCKET is not set")
     prefix = e.get("RESULTS_PREFIX", "").strip("/")
-    return Config(
+    config = Config(
         results_bucket=bucket,
         results_prefix=f"{prefix}/" if prefix else "",
         s3_targets=s3_targets(_list(e.get("SCAN_BUCKETS")), _list(e.get("SCAN_PREFIXES"))),
@@ -433,4 +454,14 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         dynamodb_export=_bool(e.get("DYNAMODB_EXPORT")),
         dynamodb_export_kms_key_arn=_arn(e.get("DYNAMODB_EXPORT_KMS_KEY_ARN")),
         data_api_targets=data_api_targets(e.get("RDS_DATA_API")),
+        redshift_read=_choice(
+            (e.get("REDSHIFT_READ") or "").replace("-", "_"), ("off", "iam", "db_user"), "off"
+        ),
+        redshift_db_user=_db_user(e.get("REDSHIFT_DB_USER")),
+        redshift_max_rows=_int(e.get("REDSHIFT_MAX_ROWS_PER_TABLE"), 1000, 1, 100_000),
+        redshift_max_tables=_int(e.get("REDSHIFT_MAX_TABLES"), 500, 1, 10_000),
+        redshift_statement_seconds=_int(e.get("REDSHIFT_STATEMENT_TIMEOUT_SECONDS"), 60, 5, 600),
     )
+    if config.redshift_read == "db_user" and not config.redshift_db_user:
+        raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
+    return config

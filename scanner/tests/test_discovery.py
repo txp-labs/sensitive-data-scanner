@@ -38,6 +38,8 @@ SCHEMA = Draft202012Validator(
     format_checker=Draft202012Validator.FORMAT_CHECKER,
 )
 ALL = frozenset({"s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds"})
+# `all` is every kind, including the adapters' (sources/aws.py).
+EVERY = ALL | {"redshift"}
 THREE = frozenset({"s3", "cloudwatch_logs", "dynamodb"})
 SELF_GROUP = "/aws/lambda/sensitive-data-scanner"
 
@@ -88,10 +90,10 @@ def recent_ms() -> int:
 
 def test_discover_kinds() -> None:
     assert discover_kinds(None) == frozenset()
-    assert discover_kinds("all") == ALL
+    assert discover_kinds("all") == EVERY
     assert discover_kinds("s3, logs") == {"s3", "cloudwatch_logs"}
     with pytest.raises(ValueError, match="unknown kind"):
-        discover_kinds("s3,redshift")
+        discover_kinds("s3,mainframe")
 
 
 def test_rules_by_name_glob_and_tag() -> None:
@@ -153,7 +155,7 @@ def test_read_config_discovery_settings() -> None:
             "DYNAMODB_MAX_TABLE_BYTES": "1000",
         }
     )
-    assert c.discover == ALL
+    assert c.discover == EVERY
     assert c.self_log_group == SELF_GROUP
     assert (c.max_objects_per_run, c.max_log_events_per_run, c.max_table_items_per_run) == (
         500,

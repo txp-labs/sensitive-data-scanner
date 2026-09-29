@@ -65,7 +65,7 @@ def statements() -> list[dict[str, Any]]:
 
     for p in RES["ScannerRole"]["Properties"]["Policies"]:
         add(p["PolicyDocument"]["Statement"])
-    for name in ("RdsExportPolicy", "DynamoDBExportPolicy", "DataApiPolicy"):
+    for name in ("RdsExportPolicy", "DynamoDBExportPolicy", "DataApiPolicy", "RedshiftReadPolicy"):
         assert RES[name]["Properties"]["RoleName"] == {"Ref": "ScannerRole"}
         add(RES[name]["Properties"]["PolicyDocument"]["Statement"])
     return out
@@ -79,9 +79,55 @@ def actions(s: dict[str, Any]) -> list[str]:
 ALLOWED = [a for s in statements() if s["Effect"] == "Allow" for a in actions(s)]
 READ = re.compile(
     r"^(s3:(List|Get)|logs:(Describe|FilterLogEvents|ListTags)|dynamodb:(List|Describe|Scan|Query)"
-    r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$)"
+    r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$"
+    r"|redshift:DescribeClusters$|redshift-serverless:List"
+    r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$)"
 )
+IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
+
+
+def in_account(resource: Any, service: str, *kinds: str) -> bool:
+    """Every resource is in this account and region, and one of these resource types."""
+    items = resource if isinstance(resource, list) else [resource]
+    head = "arn:" + IN_ACCOUNT.replace("{service}", service)
+    return all(
+        isinstance(r, dict)
+        and str(r.get("Fn::Sub", "")).startswith(head)
+        and str(r["Fn::Sub"])[len(head) :].startswith(kinds)
+        for r in items
+    )
+
+
 OWN_BUCKET = [{"Fn::Sub": "${ResultsBucket.Arn}/*"}, {"Fn::GetAtt": ["ResultsBucket", "Arn"]}]
+
+
+def _redshift_sql(s: dict[str, Any], a: str) -> bool:
+    # The Data API runs SQL; the scanner's statements are sampled SELECTs, and the
+    # database user's grants make them read-only (docs/ARCHITECTURE.md).
+    return a == "redshift-data:ExecuteStatement" and all(
+        in_account(r, "redshift", "cluster:") or in_account(r, "redshift-serverless", "workgroup/")
+        for r in s["Resource"]
+    )
+
+
+def _db_user_credentials(s: dict[str, Any], a: str) -> bool:
+    user, dbname = s["Resource"]
+    return (
+        in_account(user, "redshift", "dbuser:")
+        and str(user["Fn::Sub"]).endswith(":dbuser:*/${RedshiftDbUser}")
+        and in_account(dbname, "redshift", "dbname:")
+    )
+
+
+# Writes, or credential vending, that are aimed: checked by Sid, lazily.
+AIMED: dict[str, Any] = {
+    "ReadOnlySqlOnRedshift": _redshift_sql,
+    "ServerlessIamCredentials": lambda s, a: in_account(
+        s["Resource"], "redshift-serverless", "workgroup/"
+    ),
+    "ClusterIamCredentials": lambda s, a: in_account(s["Resource"], "redshift", "dbname:"),
+    "ClusterDbUserCredentials": _db_user_credentials,
+}
 
 
 def test_every_allow_is_a_read_or_an_aimed_write() -> None:
@@ -107,7 +153,7 @@ def test_every_allow_is_a_read_or_an_aimed_write() -> None:
                 in ("dynamodb:ExportTableToPointInTime", "dynamodb:DescribeContinuousBackups"),
                 "EncryptExportsThroughS3": s["Resource"] == {"Ref": "DynamoDBExportKmsKeyArn"},
                 "ReadOnlySqlOnNamedClusters": "DataApiClusterArns" in str(s["Resource"]),
-            }.get(str(sid), False)
+            }.get(str(sid), False) or AIMED.get(str(sid), lambda s, a: False)(s, a)
             assert aimed, f"{sid}: {a} is a write not aimed at the scanner's own resources"
 
 
@@ -166,6 +212,9 @@ SERVICES = {
     "rds": "rds",
     "rds-data": "rds-data",
     "events": "events",
+    "redshift": "redshift",
+    "redshift-serverless": "redshift-serverless",
+    "redshift-data": "redshift-data",
 }
 
 
@@ -213,6 +262,56 @@ def test_every_aws_call_the_code_makes_is_allowed() -> None:
             missing.append(f"{call} -> {ops[call]}")
     assert missing == []
     assert {"s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "s3:PutObject"} <= granted
+
+
+def test_each_adapter_calls_only_its_own_services() -> None:
+    """An adapter module names the services it calls (AWS_SERVICES); each call it makes is an
+    operation of one of them, and allowed for that service's own IAM prefix."""
+    session = botocore.session.get_session()
+    granted = set(ALLOWED)
+    checked = 0
+    for path in sorted((PACKAGE / "sources").glob("*.py")):
+        tree = ast.parse(path.read_text())
+        names = [
+            n.value
+            for n in tree.body
+            if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "AWS_SERVICES" for t in n.targets)
+        ]
+        if not names:
+            continue
+        services = ast.literal_eval(names[0])
+        own: dict[str, list[str]] = {}
+        for service in services:
+            model = session.get_service_model(service)
+            for op in model.operation_names:
+                own.setdefault(botocore.xform_name(op), []).append(f"{SERVICES[service]}:{op}")
+        every = operations()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            f = node.func
+            op = f.attr
+            if op == "get_paginator" and node.args and isinstance(node.args[0], ast.Constant):
+                op = str(node.args[0].value)
+            if op not in every or op in ("client", "get"):
+                continue
+            assert op in own, f"{path.name}: {op} is not an operation of {services}"
+            assert any(a in granted for a in own[op]), f"{path.name}: {op} -> {own[op]}"
+            checked += 1
+    assert checked >= 8
+
+
+def test_redshift_reads_cannot_create_users_or_run_batches() -> None:
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    # GetClusterCredentials with AutoCreate needs CreateClusterUser; DbGroups needs JoinGroup.
+    assert {"redshift:CreateClusterUser", "redshift:JoinGroup"} <= denied
+    assert "redshift-data:BatchExecuteStatement" in denied
+    own = next(s for s in statements() if s.get("Sid") == "OwnStatementsOnly")
+    assert own["Condition"]["StringEquals"] == {
+        "redshift-data:statement-owner-iam-userid": "${aws:userid}"
+    }
+    assert RES["RedshiftReadPolicy"]["Condition"] == "RedshiftReads"
 
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:

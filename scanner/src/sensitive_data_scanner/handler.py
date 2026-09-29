@@ -49,6 +49,9 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
             rds_data=(
                 boto3.client("rds-data", region_name=region) if config.data_api_targets else None
             ),
+            # Every adapter's client is made on first use, so a kind not discovered
+            # makes no client.
+            factory=lambda service: boto3.client(service, region_name=region),  # type: ignore[call-overload]
         )
         doc = run_scan(
             config,

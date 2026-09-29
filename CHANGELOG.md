@@ -44,6 +44,27 @@ bumps the minor version. Spec changes are listed under **Spec**.
   the Python engine, the Presidio path and the TypeScript package alike.
 
 ### Feature
+- Redshift and Redshift Serverless ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  discovery (`DISCOVER` kind `redshift`: `DescribeClusters`, `ListWorkgroups`,
+  `ListNamespaces`) and, opt-in (`REDSHIFT_READ=iam` or `db_user`), sampled
+  read-only SQL through the Redshift Data API with no stored password: the
+  scanner's own IAM identity, or temporary credentials for an existing
+  read-only database user. Column-level findings (`store_field`). Paused
+  clusters, stores not configured for reading, and users that can see no
+  table are reported (`paused`, `read_not_configured`, `no_grant`). The
+  UNLOAD trade-off is documented in docs/ARCHITECTURE.md.
+- The adapter interface (`sources/base.py`, `Adapter`) and the generic
+  sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
+  discovery, the budget and the run summary through them, with no cloud in
+  the core. The RDS Data API mode now runs on the same SQL pass.
+- Findings schema **1.3** (additive): the `store_field` resource, the
+  `redshift` kind, the store reasons `read_not_configured`, `paused` and
+  `no_grant`, and the store fields `deployment`, `database` and `state`.
+- `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
+  describe permissions, and, only when reading, the Data API on this
+  account's clusters and workgroups, its own statements only, and the
+  credential call for the mode chosen. User creation, `JoinGroup` and
+  batch statements are denied.
 - Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
   lists the S3 buckets in its region, the CloudWatch log groups and the
   DynamoDB tables in its account, and reads each with the existing adapters.

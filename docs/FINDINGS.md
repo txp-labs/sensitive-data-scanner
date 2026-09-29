@@ -1,4 +1,4 @@
-# Findings, schema version 1.2
+# Findings, schema version 1.3
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.2"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.3"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -17,6 +17,13 @@ value shows up in findings, events, logs, exception messages or object reprs.
   in a masked bucket or table name, `column` and `catalog` on an S3 object,
   the `parquet`, `orc`, `avro` and `sql` formats, the `rds_column` resource,
   the `glue_table` and `rds` coverage kinds and the `columnar` skip kind. All
+  additive.
+- Version 1.3 adds the stores found by the adapters: the `store_field`
+  resource (one field of a store that is not S3, logs, DynamoDB or RDS, such
+  as a Redshift column), the `redshift` kind, the store reasons
+  `read_not_configured`, `paused` and `no_grant`, and the store fields
+  `deployment`, `database` and `state`. The kinds are one list
+  (`$defs/storeKind`) for coverage, the run summary and listing errors. All
   additive.
 
 ## Where findings go
@@ -64,7 +71,7 @@ the scanned account onto that bus:
 ```json
 {
   "schema": "sensitive-data-scanner.findings",
-  "schemaVersion": "1.2",
+  "schemaVersion": "1.3",
   "scannerVersion": "0.2.0",
   "specVersion": "0.3",
   "runId": "20260929T060000Z-1a2b3c4d",
@@ -196,6 +203,41 @@ per class per column:
 | `snapshotTime` | When the exported snapshot was taken. The id does not include it, so a finding keeps its id from one snapshot to the next |
 | `offsets` | Empty: the rows are not addressable once the export is deleted. `count` adds up across the table's files |
 
+### Any other store: a field (1.3)
+
+Stores other than S3, CloudWatch Logs, DynamoDB and RDS report one class in
+one field of one store as `store_field`. A Redshift column:
+
+```json
+{
+  "resource": {
+    "type": "store_field",
+    "service": "redshift",
+    "store": "warehouse",
+    "database": "dev",
+    "table": "public.customers",
+    "field": "card_number",
+    "readBy": "data_api"
+  },
+  "format": "sql",
+  "class": "card",
+  "count": 1,
+  "offsets": [],
+  "link": "https://us-west-2.console.aws.amazon.com/redshiftv2/home?region=us-west-2#cluster-details?cluster=warehouse"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `service` | The product: `redshift` (a provisioned cluster) or `redshift_serverless` (a workgroup) |
+| `store` | The cluster or workgroup (and, for later kinds, the domain, stream, queue, parameter or secret), masked like a key |
+| `database`, `table`, `field` | Where the values are, as far as the store has them: for Redshift the database, `schema.table` and the column |
+| `readBy` | How it was read: `data_api` for Redshift |
+| `offsets` | Empty: a sampled row is not addressable later. `count` is distinct values in the sample |
+
+The shape names no cloud, so a store elsewhere (a database hosted anywhere)
+reports the same way.
+
 ### A DynamoDB finding
 
 One class of data in one attribute path of one item:
@@ -250,7 +292,7 @@ One entry per source says what was, and was not, read:
 
 | Field | Meaning |
 |---|---|
-| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, or `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2) |
+| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query, `<table> (export)` for an Export to S3), `glue_table` with `database.table`, `rds` with `cluster:<id>`, `instance:<id>` or `data_api:<cluster>/<database>` (1.2), or `redshift` with `cluster:<id>` or `workgroup:<name>` (1.3) |
 | `listed`, `eligible`, `scanned` | Objects listed, events returned, or DynamoDB items evaluated (`ScannedCount`); the new or changed ones (for DynamoDB, the items returned); the ones read this run |
 | `sampledOut`, `samplePercent` | Left out by sampling. Sampling is stated, never silent |
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
@@ -291,10 +333,10 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb` or `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`; and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery) |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster) and `no_grant` (the database user can see no table) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -305,6 +347,7 @@ coverage gap is visible rather than silent.
 | `lakeFormation` | The Glue table is registered with Lake Formation |
 | `engine`, `dbType`, `snapshotTime`, `exportStatus` | For RDS: the engine, cluster or instance, the snapshot read, and the export's state |
 | `readBy`, `pitr` | For DynamoDB: `export` when the table is read from an Export to S3; `pitr: false` when it is too large and has no point-in-time recovery |
+| `deployment`, `database`, `state` | (1.3) For Redshift: `provisioned` or `serverless`, the database connected to by default, and the cluster's state when that is why it was not read |
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind

@@ -37,6 +37,7 @@ Lambda: sensitive_data_scanner.handler.handler   (container image or zip)
         │     named or discovered log groups          state/ (cursors, lock)
         ├── DynamoDB: DescribeTable, Query / Scan
         │     named or discovered tables
+        ├── RDS, Aurora, Glue tables, Redshift, ... (discovered; see Discovery)
         │
         └── optional: events:PutEvents ────────────► consumer-owned EventBridge bus
                                                        (another account)
@@ -129,6 +130,10 @@ One run:
 | `DYNAMODB_EXPORT_KMS_KEY_ARN` | Encrypt DynamoDB exports with this key (`SSE-KMS`) | SSE-S3 |
 | `RDS_DATA_API` | Opt-in: Aurora clusters to read with read-only SQL through the Data API, as a JSON list | none (off) |
 | `GLUE_LAKE_FORMATION` | For Glue tables registered with Lake Formation: `read` (with the scanner's own IAM; a denial is a gap) or `skip` (report them, read nothing) | `read` |
+| `REDSHIFT_READ` | Read Redshift clusters and Serverless workgroups through the Data API: `off`, `iam` or `db_user` ([below](#redshift-and-redshift-serverless)) | `off`: discovered and reported `read_not_configured` |
+| `REDSHIFT_DB_USER` | With `REDSHIFT_READ=db_user`: the existing read-only database user | none |
+| `REDSHIFT_MAX_ROWS_PER_TABLE`, `REDSHIFT_MAX_TABLES` | Rows sampled per table (`LIMIT`), and tables per database | 1,000 and 500 |
+| `REDSHIFT_STATEMENT_TIMEOUT_SECONDS` | How long the run waits for one Data API statement before counting the table unreadable | 60 |
 
 ### Discovery
 
@@ -144,6 +149,7 @@ region, and a bucket in another region is left to that region's scanner.
 | `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT` |
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
+| `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -217,6 +223,9 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `kms_access` | A table whose KMS key is out of reach |
 | `skipped` | `tags_unreadable` | Tags could not be read while a deny-by-tag rule exists |
 | `error` | `kms_access`, `access_denied`, `error` | The store could not be read; `error` names the AWS error |
+| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift) |
+| `skipped` | `paused` | A paused Redshift cluster: a query would not resume it |
+| `skipped` | `no_grant` | Signed in, but the database user can see no table: grant it `SELECT` |
 
 Each store's `gaps` counts what was listed but not read: `kmsDenied`
 (objects under a KMS key the scanner may not use), `unreadable` and
@@ -284,6 +293,28 @@ databases and tables and reads each table at its S3 location:
 - Partitions whose location lies outside the table's location are not yet
   read (`GetPartitions` is a later change).
 
+### Adapters: one interface for every other kind of store
+
+Every kind of store after RDS is an **adapter** (`sources/base.py`,
+`Adapter`), registered by its kind in `sources/aws.py`. An adapter lists its
+stores into the run summary, decides each with the shared allow, deny and
+sampling rules (`discovery.decide`), and gives the runner a source per store
+it can read. The budget, the findings store, the coverage and the run
+summary stay the core's, and none of them names a cloud: an adapter gets its
+clients by service name (`clients.client("redshift-data")`), made on first
+use, so a kind that is not discovered makes no client.
+
+Reading SQL is generic too (`scan/sql.py`): a dialect (quoting, the table
+listing) and a pass that lists the base tables with bound parameters, then
+runs `SELECT * FROM "schema"."table" LIMIT n` on each with quoted
+identifiers, resumable by `[schema, table]`, within the budget. The caller
+gives it `execute(sql, params)`. Redshift and the RDS Data API mode both use
+it, and a database hosted anywhere can.
+
+Their findings are the `store_field` resource ([FINDINGS.md](FINDINGS.md)):
+`service`, `store`, and where it applies `database`, `table` and `field`,
+with counts and no offsets (a sampled row is not addressable later).
+
 ### RDS and Aurora by snapshot export
 
 With `DISCOVER` including `rds`, the run lists the DB clusters and the DB
@@ -348,6 +379,54 @@ default.**
 - The secret should belong to a database user with `SELECT` only. The
   scanner cannot check that, so it is the deployer's part.
 - Findings are `rds_column` with `readBy: "data_api"` and format `sql`.
+
+### Redshift and Redshift Serverless
+
+With `DISCOVER` including `redshift`, the run lists provisioned clusters
+(`DescribeClusters`) and Serverless workgroups (`ListWorkgroups`, with each
+namespace's database from `ListNamespaces`). A paused cluster is reported as
+`paused` (a query would not resume it), and one in another state (resizing,
+modifying) as `unsupported` with its `state`.
+
+**Reading is off by default** (`REDSHIFT_READ=off`): every store is then
+reported as `read_not_configured`. To read, choose how the scanner signs in.
+Neither way stores a password:
+
+| `REDSHIFT_READ` | Provisioned cluster | Serverless workgroup | The database user |
+|---|---|---|---|
+| `iam` | `redshift:GetClusterCredentialsWithIAM` | `redshift-serverless:GetCredentials` | `IAMR:<the scanner's role name>`. Redshift creates it on first use with PUBLIC privileges only; grant it `SELECT` (or a role with `SELECT`) on what should be scanned |
+| `db_user` | `redshift:GetClusterCredentials` for `REDSHIFT_DB_USER` | as `iam` (Serverless has no db-user mode) | An existing user with `SELECT` only. Never created: `AutoCreate` needs `redshift:CreateClusterUser`, which is denied |
+
+Then, for each database (`ListDatabases`, less `padb_harvest`, `sys:internal`
+and `awsdatacatalog`), the run lists local base tables from `svv_tables`
+(external Spectrum tables are S3 data, read by the Glue and S3 sources) and
+runs `SELECT * FROM "schema"."table" LIMIT n` on each through the Data API
+(`ExecuteStatement`, `DescribeStatement` until it finishes, then
+`GetStatementResult` page by page). Those are the only statements. A pass
+resumes at `[database, schema, table]` across runs, within the budget.
+
+- Findings are `store_field` with `service` `redshift` or
+  `redshift_serverless`, the cluster or workgroup as `store`, the
+  `database`, `schema.table` as `table`, the column as `field`, and
+  `readBy: data_api`; format `sql`.
+- A user that can see no table at all is reported as `no_grant`: a coverage
+  gap, not a clean pass. A table the user may not read is counted
+  `unreadable`, and the pass goes on.
+- A statement that does not finish in `REDSHIFT_STATEMENT_TIMEOUT_SECONDS` is
+  left to run out on the cluster (the scanner has no `CancelStatement`), and
+  the table counts as unreadable.
+- **Cost.** A Serverless workgroup bills RPU-seconds for each statement (at
+  least 60 seconds of base capacity when it wakes). A provisioned cluster's
+  sampled `LIMIT` queries use its own capacity.
+
+**Why the Data API, and not UNLOAD.** `UNLOAD ('SELECT ... LIMIT n') TO
+'s3://…'` writes a sample to S3 in Parquet, and suits large samples. It
+needs the same database sign-in to run the UNLOAD, plus an IAM role attached
+to the cluster that can write to the scanner's bucket: a write path out of
+the cluster, and a change to the cluster's roles. At sample sizes the Data
+API reads the same rows with less: no cluster role, nothing written. The
+read-only guarantee is the database user's grants in both cases, because
+`redshift-data:ExecuteStatement` cannot be narrowed to `SELECT` in IAM.
 
 ### DynamoDB Export to S3 (large tables)
 
@@ -526,6 +605,8 @@ named resources because the stores are not known in advance. They are read-only:
 | RDS export role (assumed by `export.rds.amazonaws.com`) | `s3:PutObject*`, `s3:GetObject*`, `s3:ListBucket`, `s3:DeleteObject*`, `s3:GetBucketLocation` on the results bucket's `exports/rds/` prefix only | the results bucket |
 | `rds` (Data API, opt-in) | `rds-data:BeginTransaction`, `rds-data:ExecuteStatement`, `rds-data:RollbackTransaction` on the named clusters; `secretsmanager:GetSecretValue` on the named secrets | the named ARNs |
 | DynamoDB export | `dynamodb:DescribeContinuousBackups`, `dynamodb:ExportTableToPointInTime`, `dynamodb:DescribeExport`; `s3:PutObject` and `s3:AbortMultipartUpload` on `exports/dynamodb/`; with a key, `kms:GenerateDataKey` and `kms:Decrypt` via S3 | tables `*`; the results bucket |
+| `redshift` | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `redshift-serverless:ListNamespaces`; `redshift-serverless:ListTagsForResource` only with tag rules | `*` |
+| `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
 
@@ -662,6 +743,12 @@ several things:
 | | `kms:GenerateDataKey`, `kms:Decrypt` | the export key | `kms:ViaService` is `s3.<region>`; only with `DynamoDBExportKmsKeyArn` |
 | Data API (opt-in) | `rds-data:BeginTransaction`, `rds-data:ExecuteStatement`, `rds-data:RollbackTransaction` | the named clusters | only with `DataApiTargets` |
 | | `secretsmanager:GetSecretValue` | the named secrets | |
+| Redshift (discovery) | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `redshift-serverless:ListNamespaces`, `redshift-serverless:ListTagsForResource` | `*` | |
+| Redshift reads (opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` | this account's clusters (`cluster:*`) and workgroups (`workgroup/*`) in the region | only with `RedshiftRead` `iam` or `db-user` |
+| | `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` | `*` | `redshift-data:statement-owner-iam-userid` is the scanner's own (`${aws:userid}`) |
+| | `redshift-serverless:GetCredentials` | this account's workgroups | |
+| | `redshift:GetClusterCredentialsWithIAM` | this account's `dbname:*/*` | only with `RedshiftRead` `iam` |
+| | `redshift:GetClusterCredentials` | the one `dbuser:*/<RedshiftDbUser>`, and `dbname:*/*` | only with `RedshiftRead` `db-user` |
 
 And three explicit denies, as defense in depth against any other policy the
 role might gain:
@@ -669,7 +756,7 @@ role might gain:
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement` |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 
 The RDS **export role** (`RdsExportRole`, trusted by

@@ -27,7 +27,7 @@ import json
 import secrets
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .config import Config, DynamoTarget
@@ -37,7 +37,7 @@ from .engine.spec import load_spec
 from .events import put_findings_events
 from .findings import Coverage, findings_document
 from .safety import ScanError, error_name, log_event
-from .sources.base import Budget, FindingStore, SourceRun
+from .sources.base import Budget, Context, FindingStore, SourceRun
 from .sources.cloudwatch_logs import CloudWatchLogsSource
 from .sources.dynamodb import DynamoDBSource
 from .sources.dynamodb_export import DynamoDBExportSource
@@ -82,6 +82,20 @@ class Clients:
     glue: GlueClient | None = None
     rds: RDSClient | None = None
     rds_data: RDSDataServiceClient | None = None
+    # Any other service an adapter uses, by its botocore name ("redshift-data").
+    # Tests put stubbed clients here; the handler gives a factory that makes one
+    # the first time an adapter asks.
+    services: dict[str, Any] = field(default_factory=dict)
+    factory: Callable[[str], Any] | None = None
+
+    def client(self, service: str) -> Any:
+        """The client for `service`, made on first use."""
+        made = self.services.get(service)
+        if made is None:
+            if self.factory is None:
+                raise ValueError("no client for a service an adapter uses")
+            made = self.services[service] = self.factory(service)
+        return made
 
 
 class Keys:
@@ -187,7 +201,11 @@ def _dynamodb_source(
 
 
 def plan(
-    config: Config, clients: Clients, region: str, discovery: Discovery | None = None
+    config: Config,
+    clients: Clients,
+    region: str,
+    discovery: Discovery | None = None,
+    account: str = "",
 ) -> tuple[list[Any], list[Store]]:
     """The sources to run, and every store they come from (named or discovered).
 
@@ -243,6 +261,9 @@ def plan(
     quota = ExportQuota(config.max_exports_per_run)
     if discovery is None:
         return sources, stores
+    from .sources.aws import ADAPTERS  # noqa: PLC0415 - the adapters import discovery
+
+    ctx = Context(config, clients, region, account, quota)
     # A catalog table's prefix is read by the table's source, not again by its bucket's.
     tables: dict[str, list[str]] = {}
     for st in discovery.stores:
@@ -315,6 +336,10 @@ def plan(
             )
         elif store.kind == "dynamodb" and store.extra.get("readBy") != "export":
             add(store, _dynamodb_source(config, clients, region, store, DynamoTarget(store.name)))
+        elif store.kind in ADAPTERS:
+            found_source = ADAPTERS[store.kind].source(ctx, store)
+            if found_source is not None:
+                add(store, found_source)
     return sources, stores
 
 
@@ -364,7 +389,7 @@ def run_scan(
     try:
         detector = detector or Detector(load_spec(), started.date())
         found = discover(config, clients, region, account) if config.discover else None
-        sources, stores = plan(config, clients, region, found)
+        sources, stores = plan(config, clients, region, found, account)
         log_event("run.start", sources=len(sources))
         state = _read_json(clients.s3, bucket, keys.state) or {}
         if state and state.get("version") != STATE_VERSION:
