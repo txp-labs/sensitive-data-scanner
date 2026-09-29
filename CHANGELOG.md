@@ -15,6 +15,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   chat, Contact Lens, Lex V2 logs, Connect flow logs, spoken and split-turn
   forms, near-misses, redacted turns), plus normalization pairs.
 
+### Feature
+- `@txp-labs/sensitive-data-spec` (`packages/spec-ts`, not yet published):
+  loads the spec, normalizes turns with an offset map back to the original
+  text, classifies conversations (prompt carryover, split turns, shape and
+  context), and redacts matches in memory. No runtime dependencies. Tested
+  against every vector.
+
 ### Internal
 - CI: Python (ruff, mypy, pytest), Node (typecheck, tests), gitleaks and
   zizmor, all SHA-pinned.
