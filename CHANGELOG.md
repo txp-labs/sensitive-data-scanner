@@ -31,6 +31,23 @@ bumps the minor version. Spec changes are listed under **Spec**.
   vector through the spec engine and through Presidio, and a parity test
   fails if the Python and TypeScript implementations disagree on any vector.
 
+- AWS adapters and the batch runner: an S3 source (incremental by
+  LastModified, one version per item, budgets, stated sampling, partial reads)
+  and a CloudWatch Logs source (FilterLogEvents with budgets, Lex records
+  grouped by session). Parsers for Connect chat and Contact Lens transcripts,
+  Lex V2 conversation logs, Connect flow logs and Lambda JSON logs. The
+  runner holds a lock and carries state between runs.
+- The findings contract, schema version 1.0 (`schema/findings.schema.json`,
+  `docs/FINDINGS.md`). It covers account, region, resource (bucket/key and
+  versionId, or log group/stream and timestamp, and the Connect contact),
+  class, count, confidence, offsets, via, a console deep link and coverage.
+  Never a value.
+- Optional push of findings as EventBridge events (`sensitive-data-scanner`,
+  `Findings v1`) to a consumer-owned bus (`FINDINGS_EVENT_BUS_ARN`).
+- The no-leak suite scans every vector end to end and asserts that no value
+  appears in findings, events, logs, exception messages or reprs. It also
+  audits every logging call and every raised exception in the source.
+
 ### Internal
 - CI: Python (ruff, mypy, pytest), Node (typecheck, tests), gitleaks and
   zizmor, all SHA-pinned.

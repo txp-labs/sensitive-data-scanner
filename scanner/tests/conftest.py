@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from aws_fixtures import env  # noqa: F401 - the moto-backed AWS fixture, for every test module
+
 REPO = Path(__file__).resolve().parents[2]
 SPEC_DIR = REPO / "spec"
 VECTORS_DIR = REPO / "vectors"
