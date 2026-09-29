@@ -1,0 +1,129 @@
+{
+  "_comment": "Synthetic. Made-up values only, in the shape of a Stugum call-test run item (DynamoDB JSON) as Stugum described it on 2026-09-29.",
+  "Item": {
+    "pk": {
+      "S": "T#t_0000example"
+    },
+    "sk": {
+      "S": "RUN#2026-09-29T15:00:00Z#r_0000failed"
+    },
+    "runId": {
+      "S": "r_0000failed"
+    },
+    "parentRunId": {
+      "S": "r_0000suite"
+    },
+    "status": {
+      "S": "failed"
+    },
+    "steps": {
+      "L": [
+        {
+          "M": {
+            "kind": {
+              "S": "waitForPrompt"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
+            "text": {
+              "S": "(?i)date of birth"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
+            "digits": {
+              "S": "010180#"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "speakUtterance"
+            },
+            "text": {
+              "S": "I would like to talk to an agent"
+            }
+          }
+        }
+      ]
+    },
+    "stepResults": {
+      "L": [
+        {
+          "M": {
+            "kind": {
+              "S": "waitForPrompt"
+            },
+            "stepIndex": {
+              "N": "0"
+            },
+            "observedText": {
+              "S": "Please enter your date of birth as m m d d y y, then press pound."
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
+            "stepIndex": {
+              "N": "1"
+            },
+            "observedText": {
+              "S": "Please enter your date of birth as m m d d y y, then press pound."
+            },
+            "engineVerdict": {
+              "S": "pass"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
+            "stepIndex": {
+              "N": "2"
+            },
+            "observedDtmf": {
+              "S": "010180#"
+            },
+            "observedDtmfCount": {
+              "N": "6"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "speakUtterance"
+            },
+            "stepIndex": {
+              "N": "3"
+            },
+            "observedText": {
+              "S": "I would like to talk to an agent"
+            }
+          }
+        }
+      ]
+    },
+    "lastHeardText": {
+      "S": "Thanks. I have your card number as 4539 1488 0343 6467."
+    },
+    "errorMessage": {
+      "S": "Timed out waiting for the next prompt"
+    }
+  }
+}

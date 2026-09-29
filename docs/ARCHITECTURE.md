@@ -7,7 +7,7 @@ recognizers for the spec's classes ([spec/README.md](../spec/README.md)).
 
 This document covers:
 
-- **Batch mode**, which is built and is what release 0.1.0 ships;
+- **Batch mode**, which is built and is what releases 0.1.0 and 0.2.0 ship;
 - **Event-driven mode (phase 2)**, which is a **design only**.
 
 ## Parts
@@ -107,19 +107,26 @@ One run:
 
 ### The DynamoDB source
 
-`SCAN_DYNAMODB` is a JSON list with one entry per read:
+`SCAN_DYNAMODB` is a JSON list with one entry per read. This one reads
+Stugum's call-test runs for one test:
 
 ```json
 [
   {
     "table": "stugum",
     "partition": "T#t_0123abcd",
-    "sortPrefix": "R#",
-    "include": ["stepResults[].observedDtmf", "stepResults[].heard", "steps"],
-    "exclude": [],
-    "keypad": ["stepResults[].observedDtmf", "steps[].digits"],
-    "prompts": ["stepResults[].heard", "steps[].text"],
-    "planted": ["steps"]
+    "sortPrefix": "RUN#",
+    "include": [
+      "stepResults[kind=sendDtmf].observedDtmf",
+      "stepResults[kind=waitForPrompt].observedText",
+      "steps",
+      "lastHeardText",
+      "errorMessage"
+    ],
+    "keypad": ["stepResults[kind=sendDtmf].observedDtmf", "steps[kind=sendDtmf].digits"],
+    "prompts": ["stepResults[kind=waitForPrompt].observedText"],
+    "planted": ["steps"],
+    "orderBy": "stepIndex"
   }
 ]
 ```
@@ -134,37 +141,55 @@ One run:
 | `keypad` | Paths that hold keypad (DTMF) entries |
 | `prompts` | Paths that hold what the IVR said: the prompts |
 | `planted` | Paths that hold test inputs planted on purpose, such as a test script's steps |
+| `orderBy` | The list-element attribute that orders a list (`stepIndex`), for pairing an entry with its prompt. Elements without it, or without `orderBy`, go by position |
 
-**Paths.** A `.` goes between map keys, and `[]` stands for every element of
-a list (or set): `stepResults[].observedDtmf`. A path covers everything
-under it, so `steps` covers `steps[].digits`. The key names and types come
-from `DescribeTable`, so the entry names values only.
+**Paths.**
+- A `.` goes between map keys: `result.status`.
+- `[]` stands for every element of a list (or set): `stepResults[].observedDtmf`.
+- `[name=value]` stands for the list elements that are maps whose attribute
+  `name` is the string or number `value`:
+  `stepResults[kind=sendDtmf].observedDtmf`. Several conditions, all of
+  which must hold, are separated by commas: `[kind=sendDtmf,status=passed]`.
+- A path covers everything under it, so `steps` covers
+  `steps[kind=sendDtmf].digits`.
+- Paths with conditions work in `include`, `exclude`, `keypad`, `prompts`
+  and `planted`. The projection asks for the top-level attribute; the
+  conditions are applied to what comes back.
+- The key names and types come from `DescribeTable`, so the entry names
+  values only.
 
 **How an item is read.**
 - Each string or number leaf is read **on its own**. A finding names the
   leaf's path with `[]` for each list index (`stepResults[].observedDtmf`),
   and its offsets carry the exact leaf as a JSON Pointer
-  (`/stepResults/3/observedDtmf`). Binary values, booleans and nulls are
+  (`/stepResults/5/observedDtmf`). Binary values, booleans and nulls are
   not read.
 - A **keypad** leaf is a customer turn on the `dtmf` channel. It goes
   through the spec's normalization like every other source (`123456789#`
   loses its terminator), and it is never joined to another turn.
-- A **prompt** leaf is a bot turn. Prompt and keypad leaves under one
-  top-level attribute form one conversation, in list order, with a list
-  element's prompt before its keypad entry. So a prompt classes the entry
-  that follows it, as in a Connect flow log: `010180#` after "enter your
-  date of birth" is a date of birth, and a Luhn-failing number after a card
-  prompt is a card with low confidence.
-- A keypad leaf with **no prompt paths configured** takes its own map's other
-  short strings and key names as its prompt (a step labeled "Enter SSN").
-- Every other leaf is read as stored text, with its path and its map's short
-  strings as context.
+- Each keypad leaf is **paired with the nearest preceding prompt leaf in the
+  same list**, in `orderBy` order (a prompt in the same element counts as
+  preceding). The pair is read as a bot turn then a customer turn, so the
+  prompt classes the entry, as in a Connect flow log: `010180#` after
+  "enter your date of birth" is a date of birth, and a Luhn-failing number
+  after a card prompt is a card with low confidence.
+- **Only a configured prompt path is a prompt.** Other text is never used to
+  class an entry: in Stugum's runs, the `text` of an `assertPromptContains`
+  step is an expected-prompt regular expression, and the repeated
+  `observedText` of an `assertPromptContains` result is read only as text.
+- A keypad leaf, when no prompt path is configured at all, takes its own
+  map's other short strings and key names as its prompt (a step labeled
+  "Enter SSN").
+- Every leaf that is not a keypad entry, prompts included, is read as stored
+  text, with its path and its map's short strings as context. That covers
+  free text such as Stugum's `lastHeardText` and `errorMessage`, present on
+  failed or errored runs.
 - A **planted** path's findings carry `planted: true`, so a reviewer can
   tell data a test put there on purpose from a leak. Leave `planted` paths
   out with `exclude` to see leaks only.
 - `[REDACTED]` and `[REDACTED:<label>]` count as redaction markers, not
-  findings. A negative-control run whose entries are redacted labels has
-  zero findings.
+  findings, whatever the label says (`[REDACTED:ssn · asked for SSN]`). A
+  negative-control run whose entries are redacted labels has zero findings.
 
 **Paging, rate limits and budget.**
 - Each run reads at most `DYNAMODB_MAX_PAGES` pages of `DYNAMODB_PAGE_SIZE`

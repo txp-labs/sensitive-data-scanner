@@ -1,102 +1,111 @@
 {
-  "_comment": "Synthetic. Made-up values only, in the shape of a Stugum call-test result item (DynamoDB JSON).",
+  "_comment": "Synthetic. Made-up values only, in the shape of a Stugum call-test run item (DynamoDB JSON) as Stugum described it on 2026-09-29.",
   "Item": {
     "pk": {
       "S": "T#t_0000example"
     },
     "sk": {
-      "S": "R#2026-09-29T15:00:00Z#r_0000negative"
-    },
-    "testId": {
-      "S": "t_0000example"
+      "S": "RUN#2026-09-29T15:00:00Z#r_0000negative"
     },
     "runId": {
       "S": "r_0000negative"
     },
-    "control": {
-      "S": "negative"
+    "parentRunId": {
+      "S": "r_0000suite"
     },
     "status": {
-      "S": "completed"
-    },
-    "startedAt": {
-      "S": "2026-09-29T15:00:00Z"
-    },
-    "callDurationSeconds": {
-      "N": "48"
-    },
-    "passed": {
-      "BOOL": true
+      "S": "passed"
     },
     "steps": {
       "L": [
         {
           "M": {
-            "action": {
-              "S": "expect"
-            },
-            "text": {
-              "S": "Please enter your date of birth as m m d d y y, then press pound."
+            "kind": {
+              "S": "waitForPrompt"
             }
           }
         },
         {
           "M": {
-            "action": {
-              "S": "dtmf"
+            "kind": {
+              "S": "assertPromptContains"
+            },
+            "text": {
+              "S": "(?i)date of birth"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "sendDtmf"
             },
             "digits": {
-              "S": "[REDACTED:dob]"
+              "S": "010180#"
             }
           }
         },
         {
           "M": {
-            "action": {
-              "S": "expect"
+            "kind": {
+              "S": "waitForPrompt"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "assertPromptContains"
             },
             "text": {
-              "S": "Please enter or say your nine digit Social Security number."
+              "S": "(?i)social security number|\\bssn\\b"
             }
           }
         },
         {
           "M": {
-            "action": {
-              "S": "dtmf"
+            "kind": {
+              "S": "sendDtmf"
             },
             "digits": {
-              "S": "[REDACTED:us_ssn]"
+              "S": "123456789#"
             }
           }
         },
         {
           "M": {
-            "action": {
-              "S": "expect"
+            "kind": {
+              "S": "waitForPrompt"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "assertPromptContains"
             },
             "text": {
-              "S": "Please enter your credit card number, then press pound."
+              "S": "(?i)card number"
             }
           }
         },
         {
           "M": {
-            "action": {
-              "S": "dtmf"
+            "kind": {
+              "S": "sendDtmf"
             },
             "digits": {
-              "S": "[REDACTED:card]"
+              "S": "5555666677778888#"
             }
           }
         },
         {
           "M": {
-            "action": {
-              "S": "expect"
+            "kind": {
+              "S": "speakUtterance"
             },
             "text": {
-              "S": "Thank you. Goodbye."
+              "S": "I would like to talk to an agent"
             }
           }
         }
@@ -106,113 +115,149 @@
       "L": [
         {
           "M": {
+            "kind": {
+              "S": "waitForPrompt"
+            },
             "stepIndex": {
               "N": "0"
             },
-            "status": {
-              "S": "passed"
-            },
-            "durationMs": {
-              "N": "1200"
-            },
-            "heard": {
+            "observedText": {
               "S": "Please enter your date of birth as m m d d y y, then press pound."
             }
           }
         },
         {
           "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
             "stepIndex": {
               "N": "1"
             },
-            "status": {
-              "S": "passed"
+            "observedText": {
+              "S": "Please enter your date of birth as m m d d y y, then press pound."
             },
-            "durationMs": {
-              "N": "1210"
-            },
-            "observedDtmf": {
-              "S": "[REDACTED:dob]"
+            "engineVerdict": {
+              "S": "pass"
             }
           }
         },
         {
           "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
             "stepIndex": {
               "N": "2"
             },
-            "status": {
-              "S": "passed"
+            "observedDtmf": {
+              "S": "[REDACTED:dob · asked for date of birth]"
             },
-            "durationMs": {
-              "N": "1220"
+            "observedDtmfCount": {
+              "N": "6"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "waitForPrompt"
             },
-            "heard": {
+            "stepIndex": {
+              "N": "3"
+            },
+            "observedText": {
               "S": "Please enter or say your nine digit Social Security number."
             }
           }
         },
         {
           "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
             "stepIndex": {
-              "N": "3"
+              "N": "4"
             },
-            "status": {
-              "S": "passed"
+            "observedText": {
+              "S": "Please enter or say your nine digit Social Security number."
             },
-            "durationMs": {
-              "N": "1230"
-            },
-            "observedDtmf": {
-              "S": "[REDACTED:us_ssn]"
+            "engineVerdict": {
+              "S": "pass"
             }
           }
         },
         {
           "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
             "stepIndex": {
-              "N": "4"
+              "N": "5"
             },
-            "status": {
-              "S": "passed"
+            "observedDtmf": {
+              "S": "[REDACTED:ssn · asked for SSN]"
             },
-            "durationMs": {
-              "N": "1240"
+            "observedDtmfCount": {
+              "N": "9"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "waitForPrompt"
             },
-            "heard": {
+            "stepIndex": {
+              "N": "6"
+            },
+            "observedText": {
               "S": "Please enter your credit card number, then press pound."
             }
           }
         },
         {
           "M": {
+            "kind": {
+              "S": "assertPromptContains"
+            },
             "stepIndex": {
-              "N": "5"
+              "N": "7"
             },
-            "status": {
-              "S": "passed"
+            "observedText": {
+              "S": "Please enter your credit card number, then press pound."
             },
-            "durationMs": {
-              "N": "1250"
-            },
-            "observedDtmf": {
-              "S": "[REDACTED:card]"
+            "engineVerdict": {
+              "S": "pass"
             }
           }
         },
         {
           "M": {
+            "kind": {
+              "S": "sendDtmf"
+            },
             "stepIndex": {
-              "N": "6"
+              "N": "8"
             },
-            "status": {
-              "S": "passed"
+            "observedDtmf": {
+              "S": "[REDACTED:card · asked for card number]"
             },
-            "durationMs": {
-              "N": "1260"
+            "observedDtmfCount": {
+              "N": "16"
+            }
+          }
+        },
+        {
+          "M": {
+            "kind": {
+              "S": "speakUtterance"
             },
-            "heard": {
-              "S": "Thank you. Goodbye."
+            "stepIndex": {
+              "N": "9"
+            },
+            "observedText": {
+              "S": "I would like to talk to an agent"
             }
           }
         }

@@ -6,37 +6,52 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.2.0 — 2026-09-29
+
 ### Feature
 - A DynamoDB source adapter (`SCAN_DYNAMODB`). It reads named tables with a
   paginated Query (a partition key value, optionally a sort-key prefix) or a
-  Scan, read-only, with a projection on the configured attribute paths
-  (`stepResults[].observedDtmf`, `[]` for list elements). Throttled requests
-  back off and retry; a page cap and the run budget bound each run, and the
-  next run resumes at the last item read. Each string leaf is read on its
-  own. Keypad (DTMF) leaves are read as `dtmf` turns after the prompt that
-  asked for them, with the spec's normalization, so `123456789#` after an
-  SSN prompt is an SSN. Planted test inputs (`planted` paths) are marked in
-  their findings. A finding names the table, a salted hash of the item key,
-  the key masked like an S3 object key, and the attribute path; never a
-  value. The no-leak suite covers the adapter, and positive and negative
-  control fixtures in a call-test result's shape prove findings on one and
-  none on the other.
-- The findings schema gains the `dynamodb_item` resource and format and the
-  `dynamodb` coverage kind. They are additive and appear only when a
-  DynamoDB source is configured; `schemaVersion` stays `1.0`.
+  Scan, read-only, with a projection on the configured attribute paths.
+  Throttled requests back off and retry; a page cap and the run budget bound
+  each run, and the next run resumes at the last item read.
+- Attribute paths use `.` for map keys, `[]` for every list element, and
+  `[name=value]` for the list elements whose attribute has that value
+  (`stepResults[kind=sendDtmf].observedDtmf`), in `include`, `exclude`,
+  `keypad`, `prompts` and `planted`.
+- Each string leaf is read on its own. Each keypad (DTMF) leaf is paired
+  with the nearest preceding prompt in the same list, in the order of the
+  configured `orderBy` attribute (`stepIndex`) or else by position, and read
+  as a `dtmf` turn after it with the spec's normalization, so `123456789#`
+  after an SSN prompt is an SSN. Only configured prompt paths are prompts: an
+  expected-prompt regular expression in a test script never classes an
+  entry. Planted test inputs (`planted` paths) are marked in their findings.
+- A DynamoDB finding names the table, a salted hash of the item key, the key
+  masked like an S3 object key, and the attribute path; never a value. The
+  no-leak suite covers the adapter. Fixtures in the shape of Stugum's
+  call-test runs (made-up values) prove findings on a positive control and
+  none on a negative control whose entries read
+  `[REDACTED:ssn · asked for SSN]`.
 - `[REDACTED]` and `[REDACTED:<label>]` count as redaction markers in
   coverage, like `[PII]`.
 
+### Findings schema
+- `schemaVersion` is now **1.1**, an additive change: the `dynamodb_item`
+  resource and format, and the `dynamodb` coverage kind. A consumer that
+  ignores what it does not know is unaffected; one that checks for exactly
+  `"1.0"` must accept `"1.1"`.
+
 ### Docs
 - README and `docs/ARCHITECTURE.md`: the DynamoDB source, its configuration
-  and its IAM permissions (`dynamodb:Query`, `dynamodb:Scan`,
-  `dynamodb:DescribeTable` on the named tables, and `kms:Decrypt` where a
-  table uses a customer managed key). `docs/FINDINGS.md`: the DynamoDB
-  resource.
+  (with Stugum's run items as the example) and its IAM permissions
+  (`dynamodb:Query`, `dynamodb:Scan`, `dynamodb:DescribeTable` on the named
+  tables, and `kms:Decrypt` where a table uses a customer managed key).
+  `docs/FINDINGS.md`: schema 1.1 and the DynamoDB resource.
 
 ### Internal
 - Release: build the wheel only (the sdist could not carry the spec and
   licenses), and allow re-running the release of an existing tag by hand.
+- `@txp-labs/sensitive-data-spec` moves to 0.2.0 with the runner; the spec
+  (0.1) and the package's behavior are unchanged.
 
 ## 0.1.0 — 2026-09-29
 

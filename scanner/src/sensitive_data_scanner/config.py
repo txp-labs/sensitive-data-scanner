@@ -38,7 +38,17 @@ def s3_targets(buckets: list[str], prefixes: list[str]) -> list[tuple[str, str]]
 
 _TABLE_NAME = re.compile(r"^[A-Za-z0-9_.-]{3,255}$")
 _TARGET_FIELDS = frozenset(
-    {"table", "partition", "sortPrefix", "include", "exclude", "keypad", "prompts", "planted"}
+    {
+        "table",
+        "partition",
+        "sortPrefix",
+        "include",
+        "exclude",
+        "keypad",
+        "prompts",
+        "planted",
+        "orderBy",
+    }
 )
 
 
@@ -58,6 +68,7 @@ class DynamoTarget:
     keypad: tuple[str, ...] = ()
     prompts: tuple[str, ...] = ()
     planted: tuple[str, ...] = ()
+    order_by: str | None = None
 
 
 def _paths(v: Any) -> tuple[str, ...]:
@@ -93,6 +104,9 @@ def dynamodb_targets(raw: str | None) -> list[DynamoTarget]:
             raise ValueError("SCAN_DYNAMODB: partition must be a string or a number")
         if sort_prefix is not None and (partition is None or not isinstance(sort_prefix, str)):
             raise ValueError("SCAN_DYNAMODB: sortPrefix needs a partition and must be a string")
+        order_by = t.get("orderBy")
+        if order_by is not None and (not isinstance(order_by, str) or not order_by.strip()):
+            raise ValueError("SCAN_DYNAMODB: orderBy must be an attribute name")
         out.append(
             DynamoTarget(
                 table=table,
@@ -103,6 +117,7 @@ def dynamodb_targets(raw: str | None) -> list[DynamoTarget]:
                 keypad=_paths(t.get("keypad")),
                 prompts=_paths(t.get("prompts")),
                 planted=_paths(t.get("planted")),
+                order_by=order_by,
             )
         )
     return out

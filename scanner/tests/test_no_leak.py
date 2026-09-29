@@ -29,9 +29,9 @@ from sensitive_data_scanner.engine.conversation import classify
 from sensitive_data_scanner.engine.normalize import normalize
 from sensitive_data_scanner.engine.spec import load_spec
 from sensitive_data_scanner.safety import ScanError, redact_digits
-from sensitive_data_scanner.scan.attributes import AttributeRules, scan_attributes
+from sensitive_data_scanner.scan.attributes import scan_attributes
 from sensitive_data_scanner.scan.item import scan_item_text
-from sensitive_data_scanner.scan.paths import parse_path
+from sensitive_data_scanner.sources.dynamodb import DynamoDBSource
 from synthetic import CARDS, SSN_A, SSN_B, all_values, dashed, printed, spaced, spoken_groups
 
 SPEC = load_spec()
@@ -158,7 +158,8 @@ def ddb_items() -> list[dict[str, Any]]:
     keyed = load_item("stugum-positive")
     keyed["pk"] = {"S": f"CUST#{SSN_B}"}
     keyed["sk"] = {"S": f"CARD#{CARDS['mastercard']}"}
-    return [load_item("stugum-positive"), load_item("stugum-negative"), keyed]
+    others = [load_item(n) for n in ("stugum-negative", "stugum-regex-not-prompt", "stugum-failed")]
+    return [load_item("stugum-positive"), keyed, *others]
 
 
 def test_no_value_leaves_the_dynamodb_source(
@@ -186,7 +187,7 @@ def test_no_value_leaves_the_dynamodb_source(
         config(s3_targets=[], dynamodb_targets=[target()], event_bus_arn="arn:aws:events:x:1:b/c")
     )
     assert doc is not None
-    assert doc["findingsTotal"] >= 12  # both keyed items, steps and stepResults, three classes
+    assert doc["findingsTotal"] >= 6  # both clear items, three classes each
     outputs = {
         "findings/latest.json": json.dumps(env.latest()),
         "events": json.dumps(sent),
@@ -196,10 +197,7 @@ def test_no_value_leaves_the_dynamodb_source(
     for name, blob in outputs.items():
         assert leaks(blob) == [], name
     detector = __import__("aws_fixtures").shared_detector()
-    rules = AttributeRules(
-        keypad=(parse_path("stepResults[].observedDtmf"), parse_path("steps[].digits")),
-        prompts=(parse_path("stepResults[].heard"), parse_path("steps[].text")),
-    )
+    rules = DynamoDBSource(Ddb().client, target=target(), region="us-west-2").rules
     results = [scan_attributes(item, detector, rules) for item in ddb_items()]
     assert results[0].by_path  # the positive control was found
     blobs = [repr(r) + repr(list(r.by_path.values())) for r in results]

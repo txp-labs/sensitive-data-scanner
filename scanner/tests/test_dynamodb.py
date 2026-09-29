@@ -15,11 +15,11 @@ from jsonschema import Draft202012Validator
 
 from aws_fixtures import NOW, Env, config, shared_detector
 from conftest import REPO
-from ddb_fixtures import PARTITION, TABLE, Ddb, key_of, load_item, page, target
+from ddb_fixtures import KEYPAD, PARTITION, PROMPT, TABLE, Ddb, key_of, load_item, page, target
 from sensitive_data_scanner.config import DynamoTarget, dynamodb_targets, read_config
 from sensitive_data_scanner.findings import findings_document
 from sensitive_data_scanner.scan.attributes import AttributeRules, iter_leaves, scan_attributes
-from sensitive_data_scanner.scan.paths import parse_path, render_path
+from sensitive_data_scanner.scan.paths import EVERY, Elements, parse_path, render_path
 from sensitive_data_scanner.sources.base import Budget, FindingStore, SourceRun
 from sensitive_data_scanner.sources.dynamodb import DynamoDBSource
 from synthetic import CARDS, SSN_A
@@ -90,11 +90,13 @@ def test_positive_control_has_findings_on_each_keypad_entry() -> None:
                 "#p1": "sk",
                 "#p2": "stepResults",
                 "#p3": "steps",
+                "#p4": "lastHeardText",
+                "#p5": "errorMessage",
                 "#pk": "pk",
                 "#sk": "sk",
             },
-            "ExpressionAttributeValues": {":pk": {"S": PARTITION}, ":sk": {"S": "R#"}},
-            "ProjectionExpression": "#p0, #p1, #p2, #p3",
+            "ExpressionAttributeValues": {":pk": {"S": PARTITION}, ":sk": {"S": "RUN#"}},
+            "ProjectionExpression": "#p0, #p1, #p2, #p3, #p4, #p5",
         },
     )
     result, store = run(source(ddb))
@@ -109,21 +111,24 @@ def test_positive_control_has_findings_on_each_keypad_entry() -> None:
     assert (leak["card"]["confidence"], leak["card"]["via"]) == ("low", ["prompt"])
     # The terminator is not part of the value: offsets end before "#".
     assert leak["us_ssn"]["offsets"] == [
-        {"pointer": "/stepResults/3/observedDtmf", "start": 0, "end": 9}
+        {"pointer": "/stepResults/5/observedDtmf", "start": 0, "end": 9}
     ]
-    assert leak["dob"]["offsets"][0]["pointer"] == "/stepResults/1/observedDtmf"
-    assert leak["card"]["offsets"][0]["pointer"] == "/stepResults/5/observedDtmf"
+    assert leak["dob"]["offsets"][0]["pointer"] == "/stepResults/2/observedDtmf"
+    assert leak["card"]["offsets"][0]["pointer"] == "/stepResults/8/observedDtmf"
     assert "planted" not in leak["dob"]["resource"]
-
-    planted = found["steps[].digits"]
-    assert set(planted) == {"dob", "us_ssn", "card"}
-    assert all(f["resource"]["planted"] is True for f in planted.values())
+    # The planted digits in `steps` have no prompt paired with them (the test script's
+    # expected-prompt regexes are not prompts), and none of them has a card's or an
+    # SSN's standalone shape: nothing is reported there.
+    assert set(found) == {"stepResults[].observedDtmf"}
 
     f = leak["dob"]
     assert f["format"] == "dynamodb_item"
     assert f["resource"]["type"] == "dynamodb_item"
     assert f["resource"]["table"] == TABLE
-    assert f["resource"]["key"] == {"pk": PARTITION, "sk": "R#2026-09-29T15:00:00Z#r_0000positive"}
+    assert f["resource"]["key"] == {
+        "pk": PARTITION,
+        "sk": "RUN#2026-09-29T15:00:00Z#r_0000positive",
+    }
     assert len(f["resource"]["keyHash"]) == 64
     assert f["link"].startswith("https://us-west-2.console.aws.amazon.com/dynamodbv2/")
     cov = doc["coverage"][0]
@@ -141,7 +146,8 @@ def test_negative_control_has_no_findings() -> None:
     assert doc["findingsTotal"] == 0
     cov = doc["coverage"][0]
     assert cov["scanned"] == 1
-    assert cov["redactionMarkers"] == 6  # [REDACTED:…] in steps and in stepResults
+    # "[REDACTED:ssn · asked for SSN]" and the others: markers, not findings.
+    assert cov["redactionMarkers"] == 3
     assert cov["passComplete"] is True
 
 
@@ -180,7 +186,7 @@ def test_scan_without_a_partition_and_without_a_projection() -> None:
     ddb.describe()
     ddb.scan(page([load_item("stugum-positive")]), {"TableName": TABLE, "Limit": 100})
     t = DynamoTarget(
-        table=TABLE, keypad=("stepResults[].observedDtmf",), prompts=("stepResults[].heard",)
+        table=TABLE, keypad=("stepResults[].observedDtmf",), prompts=("stepResults[].observedText",)
     )
     result, store = run(source(ddb, t))
     ddb.stub.assert_no_pending_responses()
@@ -338,10 +344,17 @@ def test_key_hash_is_salted_and_stable_across_runs() -> None:
 
 
 def test_paths_parse_and_render() -> None:
-    assert parse_path("stepResults[].observedDtmf") == ("stepResults", "[]", "observedDtmf")
-    assert parse_path("a[][].b.c") == ("a", "[]", "[]", "b", "c")
-    assert render_path(("a", "[]", "[]", "b", "c")) == "a[][].b.c"
-    for bad in ["", "[]a", "a..b", "a[1]", ".a", "a.", "a[]b"]:
+    assert parse_path("stepResults[].observedDtmf") == ("stepResults", EVERY, "observedDtmf")
+    assert parse_path("a[][].b.c") == ("a", EVERY, EVERY, "b", "c")
+    assert render_path(("a", EVERY, EVERY, "b", "c")) == "a[][].b.c"
+    where = parse_path("stepResults[kind=sendDtmf, status=passed].observedDtmf")
+    assert where == (
+        "stepResults",
+        Elements((("kind", "sendDtmf"), ("status", "passed"))),
+        "observedDtmf",
+    )
+    assert render_path(where) == "stepResults[kind=sendDtmf,status=passed].observedDtmf"
+    for bad in ["", "[]a", "a..b", "a[1]", ".a", "a.", "a[]b", "a[kind]", "a[=x]", "a[k=v"]:
         with pytest.raises(ValueError, match="attribute path"):
             parse_path(bad)
 
@@ -356,10 +369,8 @@ def test_every_leaf_kind_is_read_or_skipped() -> None:
         "tags": {"SS": ["a", "b"]},
         "m": {"M": {"l": {"L": [{"M": {"v": {"S": "y"}}}]}}},
     }
-    got = {
-        ".".join(map(str, leaf.concrete)): leaf.text for leaf in iter_leaves(item, AttributeRules())
-    }
-    assert got == {"s": "x", "n": "12", "tags.0": "a", "tags.1": "b", "m.l.0.v": "y"}
+    got = {leaf.pointer: leaf.text for leaf in iter_leaves(item, AttributeRules())}
+    assert got == {"/s": "x", "/n": "12", "/tags/0": "a", "/tags/1": "b", "/m/l/0/v": "y"}
 
 
 def test_a_keypad_entry_without_prompt_paths_takes_its_step_label_as_the_prompt() -> None:
@@ -400,11 +411,12 @@ def test_config_reads_scan_dynamodb() -> None:
             {
                 "table": "stugum",
                 "partition": "T#t_0000example",
-                "sortPrefix": "R#",
-                "include": ["stepResults[].observedDtmf", "stepResults[].heard", "steps"],
-                "keypad": ["stepResults[].observedDtmf", "steps[].digits"],
-                "prompts": ["stepResults[].heard", "steps[].text"],
+                "sortPrefix": "RUN#",
+                "include": [KEYPAD, PROMPT, "steps", "lastHeardText", "errorMessage"],
+                "keypad": [KEYPAD, "steps[kind=sendDtmf].digits"],
+                "prompts": [PROMPT],
                 "planted": ["steps"],
+                "orderBy": "stepIndex",
             },
             {"table": "other_table"},
         ]
@@ -413,8 +425,9 @@ def test_config_reads_scan_dynamodb() -> None:
     assert c.dynamodb_max_pages == 5
     assert c.dynamodb_page_size == 100
     first, second = c.dynamodb_targets
-    assert (first.table, first.partition, first.sort_prefix) == ("stugum", "T#t_0000example", "R#")
-    assert first.planted == ("steps",)
+    assert (first.table, first.partition) == ("stugum", "T#t_0000example")
+    assert first.sort_prefix == "RUN#"
+    assert (first.planted, first.order_by) == (("steps",), "stepIndex")
     assert (second.table, second.partition, second.include) == ("other_table", None, ())
 
 
@@ -428,6 +441,8 @@ def test_config_reads_scan_dynamodb() -> None:
         '[{"table": "ok_table", "sortPrefix": "R#"}]',
         '[{"table": "ok_table", "include": ["a[1]"]}]',
         '[{"table": "ok_table", "include": "steps"}]',
+        '[{"table": "ok_table", "include": ["steps[kind]"]}]',
+        '[{"table": "ok_table", "orderBy": 3}]',
     ],
 )
 def test_config_refuses_a_bad_scan_dynamodb(raw: str) -> None:
@@ -445,7 +460,7 @@ def test_runner_writes_dynamodb_findings(env: Env) -> None:
     errors = [f"{list(e.path)}: {e.message}" for e in SCHEMA.iter_errors(doc)]
     assert errors == []
     assert [c["kind"] for c in doc["coverage"]] == ["dynamodb"]
-    assert doc["totals"] == {"card": 2, "dob": 2, "us_ssn": 2}
+    assert doc["totals"] == {"card": 1, "dob": 1, "us_ssn": 1}
     runs = {f["resource"]["key"]["sk"].rsplit("#", 1)[1] for f in doc["findings"]}
     assert runs == {"r_0000positive"}
     state = env.state()
@@ -458,3 +473,85 @@ def test_runner_refuses_dynamodb_targets_without_a_client(env: Env) -> None:
 
     with pytest.raises(ScanError):
         env.run(config(s3_targets=[], dynamodb_targets=[target()]))
+
+
+# ------------------------------------------------------------------ Stugum's shape
+
+
+def rules_of(t: DynamoTarget) -> AttributeRules:
+    return DynamoDBSource(Ddb().client, target=t, region="us-west-2").rules
+
+
+def test_an_expected_prompt_regex_is_never_a_prompt() -> None:
+    """The test script's assertPromptContains regex names the SSN; the IVR asked for a menu
+    choice. The nine digits are not classed as an SSN."""
+    item = load_item("stugum-regex-not-prompt")
+    result = scan_attributes(item, shared_detector(), rules_of(target()))
+    assert result.by_path == {}
+    # The same regex, wrongly configured as a prompt, would class the planted entry:
+    # the fixture really does hold what the rule keeps out.
+    wrong = rules_of(target(prompts=(PROMPT, "steps[kind=assertPromptContains].text")))
+    found = scan_attributes(item, shared_detector(), wrong).by_path
+    assert set(found["steps[].digits"].findings) == {"us_ssn"}
+
+
+def test_a_redacted_label_that_names_the_class_gives_no_finding() -> None:
+    item = load_item("stugum-negative")
+    result = scan_attributes(item, shared_detector(), rules_of(target()))
+    assert result.by_path == {}
+    assert result.redaction_markers == 3
+
+
+def test_each_entry_pairs_with_the_nearest_preceding_prompt_by_order_by() -> None:
+    def entry(kind: str, index: int, **attrs: str) -> dict[str, Any]:
+        m: dict[str, Any] = {"kind": {"S": kind}, "stepIndex": {"N": str(index)}}
+        m.update({k: {"S": v} for k, v in attrs.items()})
+        return {"M": m}
+
+    dob = "Please enter your date of birth as m m d d y y, then press pound."
+    ssn = "Please enter or say your nine digit Social Security number."
+    # Stored out of order: stepIndex, not the array, is the order of the call.
+    item = {
+        "pk": {"S": "T#t_1"},
+        "stepResults": {
+            "L": [
+                entry("waitForPrompt", 3, observedText=ssn),
+                entry("sendDtmf", 2, observedDtmf="010180#"),
+                entry("waitForPrompt", 0, observedText=dob),
+                entry("assertPromptContains", 1, observedText=dob),
+                entry("sendDtmf", 5, observedDtmf=f"{SSN_A}#"),
+                entry("assertPromptContains", 4, observedText=ssn),
+            ]
+        },
+    }
+    by_index = scan_attributes(item, shared_detector(), rules_of(target()))
+    found = by_index.by_path["stepResults[].observedDtmf"].findings
+    assert {c: (f.confidence, [o.pointer for o in f.offsets]) for c, f in found.items()} == {
+        "dob": ("high", ["/stepResults/1/observedDtmf"]),
+        "us_ssn": ("high", ["/stepResults/4/observedDtmf"]),
+    }
+    # By array order instead, each entry would take the other prompt.
+    by_array = scan_attributes(item, shared_detector(), rules_of(target(order_by=None)))
+    found = by_array.by_path["stepResults[].observedDtmf"].findings
+    assert found["us_ssn"].offsets[0].pointer == "/stepResults/1/observedDtmf"
+
+
+def test_a_failed_run_has_its_free_text_read() -> None:
+    item = load_item("stugum-failed")
+    result = scan_attributes(item, shared_detector(), rules_of(target()))
+    assert set(result.by_path) == {"lastHeardText", "stepResults[].observedDtmf"}
+    assert set(result.by_path["lastHeardText"].findings) == {"card"}
+
+
+def test_planted_steps_are_marked() -> None:
+    item = load_item("stugum-positive")
+    item["steps"]["L"][8]["M"]["digits"] = {"S": f"{CARDS['visa']}#"}
+    ddb = Ddb()
+    ddb.describe()
+    ddb.query(page([item]))
+    result, store = run(source(ddb))
+    found = by_path(document(store, result))
+    planted = found["steps[].digits"]["card"]
+    assert planted["resource"]["planted"] is True
+    assert planted["offsets"][0]["pointer"] == "/steps/8/digits"
+    assert "planted" not in found["stepResults[].observedDtmf"]["card"]["resource"]

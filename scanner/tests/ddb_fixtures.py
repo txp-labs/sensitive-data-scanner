@@ -1,8 +1,10 @@
 """A stubbed DynamoDB client (botocore Stubber) and the Stugum-shaped item fixtures.
 
 The fixtures under fixtures/dynamodb/ are synthetic: made-up values in the
-shape of a call-test result item. The positive control holds the keypad
-entries in clear; the negative control holds `[REDACTED:…]` labels instead.
+shape of a Stugum call-test run item. The positive control holds the
+keypad entries in clear; the negative control holds `[REDACTED:…]` labels
+instead; the regex fixture has an SSN regex in its test script and a menu
+prompt before a nine-digit entry; the failed run has free text at the top.
 """
 
 from __future__ import annotations
@@ -27,15 +29,21 @@ def load_item(name: str) -> dict[str, Any]:
     return copy.deepcopy(data["Item"])
 
 
+KEYPAD = "stepResults[kind=sendDtmf].observedDtmf"
+PROMPT = "stepResults[kind=waitForPrompt].observedText"
+
+
 def target(**kw: Any) -> DynamoTarget:
+    """The configuration for Stugum's run items, as documented in docs/ARCHITECTURE.md."""
     base: dict[str, Any] = {
         "table": TABLE,
         "partition": PARTITION,
-        "sort_prefix": "R#",
-        "include": ("stepResults[].observedDtmf", "stepResults[].heard", "steps"),
-        "keypad": ("stepResults[].observedDtmf", "steps[].digits"),
-        "prompts": ("stepResults[].heard", "steps[].text"),
+        "sort_prefix": "RUN#",
+        "include": (KEYPAD, PROMPT, "steps", "lastHeardText", "errorMessage"),
+        "keypad": (KEYPAD, "steps[kind=sendDtmf].digits"),
+        "prompts": (PROMPT,),
         "planted": ("steps",),
+        "order_by": "stepIndex",
     }
     base.update(kw)
     return DynamoTarget(**base)

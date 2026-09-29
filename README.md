@@ -4,9 +4,10 @@ Find card numbers, US Social Security numbers and other sensitive data in your
 own cloud storage, logs and tables, **without the data ever leaving your
 account**.
 
-> **Status: 0.1.0, tested and not yet run against real AWS.**
-> - **Proven by tests:** detection, the AWS adapters (against moto), the
->   findings contract and the no-leak guarantee.
+> **Status: 0.2.0, tested and not yet run against real AWS.**
+> - **Proven by tests:** detection, the AWS adapters (S3 and CloudWatch Logs
+>   against moto, DynamoDB against botocore's Stubber), the findings
+>   contract and the no-leak guarantee.
 > - **Not yet proven:** a first run in a real account. See the release notes
 >   and [docs/RELEASING.md](docs/RELEASING.md).
 
@@ -54,8 +55,9 @@ Detection uses [Microsoft Presidio](https://github.com/microsoft/presidio)
 - **Source adapters:** S3 (with Amazon Connect chat and Contact Lens
   transcripts and Lex logs), CloudWatch Logs (Connect flow logs, Lex V2
   conversation logs, Lambda logs), and DynamoDB (a paginated Query or Scan,
-  read attribute by attribute; keypad entries are read after the prompt
-  that asked for them, and planted test inputs are told apart from leaks).
+  read attribute by attribute, with paths that select list elements by
+  attribute; each keypad entry is read after the nearest prompt before it,
+  and planted test inputs are told apart from leaks).
   Azure and Google Cloud come later.
 - **The findings contract:** a documented, versioned schema
   ([docs/FINDINGS.md](docs/FINDINGS.md)), so any tool can consume the
@@ -91,7 +93,7 @@ SCAN_BUCKETS=amazon-connect-1a2b3c
 SCAN_PREFIXES=amazon-connect-1a2b3c/connect/my-instance/
 SCAN_LOG_GROUPS=/aws/connect/my-instance,/aws/lex/PaymentBot
 # optional: DynamoDB tables, as JSON (see docs/ARCHITECTURE.md)
-SCAN_DYNAMODB='[{"table":"call-tests","partition":"T#t_123","sortPrefix":"R#","include":["stepResults[].observedDtmf","stepResults[].heard","steps"],"keypad":["stepResults[].observedDtmf","steps[].digits"],"prompts":["stepResults[].heard","steps[].text"],"planted":["steps"]}]'
+SCAN_DYNAMODB='[{"table":"stugum","partition":"T#t_0123abcd","sortPrefix":"RUN#","include":["stepResults[kind=sendDtmf].observedDtmf","stepResults[kind=waitForPrompt].observedText","steps","lastHeardText","errorMessage"],"keypad":["stepResults[kind=sendDtmf].observedDtmf","steps[kind=sendDtmf].digits"],"prompts":["stepResults[kind=waitForPrompt].observedText"],"planted":["steps"],"orderBy":"stepIndex"}]'
 # optional: push findings to your own EventBridge bus as they are written
 FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
 ```
