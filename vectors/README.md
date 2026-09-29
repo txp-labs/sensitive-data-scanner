@@ -1,0 +1,15 @@
+# Test vectors
+
+Synthetic conversation cases that every implementation of the spec must pass.
+The format, and what each field means, is in [spec/README.md](../spec/README.md#vectors).
+
+| File | Cases |
+|---|---|
+| `stugum-live.jsonl` | Every case from Stugum's live IVR run of 29 Sep 2026: keypad and spoken SSN, DOB and card entries, the retry prefix |
+| `transcripts.jsonl` | txp-labs/mermera-attestation-app#1067's fixtures as conversations: Connect chat and Contact Lens transcripts, spoken and split-turn forms, near-misses, redacted `[PII]` turns |
+| `logs.jsonl` | Lex V2 conversation logs and Connect flow logs |
+| `normalize.jsonl` | Normalization input/output pairs, with each digit run's original range |
+
+Never add a real card number, SSN or other personal value. Card numbers here
+are made-up bodies with a computed Luhn check digit, or published test
+numbers; SSNs are arbitrary structurally valid numbers or published samples.

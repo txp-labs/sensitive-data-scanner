@@ -7,13 +7,18 @@ license = "Apache-2.0"
 license-files = ["../LICENSE", "../NOTICE"]
 requires-python = ">=3.12"
 authors = [{ name = "txp-labs, LLC" }]
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0.3",
+]
 
 [dependency-groups]
 dev = [
+  "jsonschema>=4.26.0",
   "mypy>=1.18",
   "pytest>=8.4",
   "ruff>=0.13",
+  "types-jsonschema>=4.26.0.20260518",
+  "types-pyyaml>=6.0.12.20260906",
 ]
 
 [build-system]
@@ -33,6 +38,9 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "RUF", "SIM", "PL", "T20"]
 ignore = [
   "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",
 ]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sensitive_data_scanner", "conftest"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLC0415"]
