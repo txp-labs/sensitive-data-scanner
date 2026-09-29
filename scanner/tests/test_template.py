@@ -82,7 +82,8 @@ READ = re.compile(
     r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$"
     r"|redshift:DescribeClusters$|redshift-serverless:List"
     r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$"
-    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet))"
+    r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet)"
+    r"|ssm:GetParameter$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -185,6 +186,31 @@ def test_denies_keep_writes_home_and_lake_formation_out() -> None:
         assert not any(re.fullmatch(d.replace("*", ".*"), a) for d in denied), a
 
 
+def test_the_scanner_may_list_its_own_bucket() -> None:
+    """Without s3:ListBucket on the results bucket, S3 answers the first run's missing
+    state file with 403, not 404 (#24). The runner copes, but the grant stays."""
+    own = [
+        s
+        for s in statements()
+        if s["Effect"] == "Allow"
+        and "s3:ListBucket" in actions(s)
+        and s["Resource"] == {"Fn::GetAtt": ["ResultsBucket", "Arn"]}
+    ]
+    assert own, "s3:ListBucket on the results bucket"
+
+
+def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
+    ssm = [s for s in statements() if any(a.startswith("ssm:") for a in actions(s))]
+    assert [s["Sid"] for s in ssm] == ["ReadOwnConfigParameter"]
+    assert actions(ssm[0]) == ["ssm:GetParameter"]
+    assert in_account(ssm[0]["Resource"], "ssm", "parameter/sensitive-data-scanner/")
+    stmts = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+    gated = [s for s in stmts if isinstance(s, dict) and "Fn::If" in s]
+    assert any(s["Fn::If"][0] == "ConfigInSsm" for s in gated)
+    env = RES["Function"]["Properties"]["Environment"]["Variables"]
+    assert env["CONFIG_LOCATION"] == {"Ref": "ConfigLocation"}
+
+
 def test_the_export_role_writes_only_the_exports_prefix() -> None:
     role = RES["RdsExportRole"]["Properties"]
     assert role["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {
@@ -223,6 +249,7 @@ SERVICES = {
     "redshift-data": "redshift-data",
     "opensearch": "es",
     "opensearchserverless": "aoss",
+    "ssm": "ssm",
 }
 
 

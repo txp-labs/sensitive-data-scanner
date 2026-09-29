@@ -2,8 +2,10 @@
 
     sensitive_data_scanner.handler.handler
 
-The scan's configuration comes from environment variables (config.py). A
-failed run raises `ScanError`, whose message is an error name only.
+The scan's configuration comes from environment variables, and from a
+configuration document in the invoke payload (`{"config": {...}}`) or in a
+file in S3 or SSM (`CONFIG_LOCATION`, or the payload's `configLocation`); see
+config.py. A failed run raises `ScanError`, whose message is an error name only.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Any
 
 import boto3
 
-from .config import read_config
+from .config import load_config
 from .runner import Clients, run_scan
 from .safety import ScanError, error_name, log_event
 
@@ -31,10 +33,17 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
     region = os.environ.get("AWS_REGION", "us-east-1")
     account = str(context.invoked_function_arn).split(":")[4]
     remaining_s = context.get_remaining_time_in_millis() / 1000
+    made: dict[str, Any] = {}
+
+    def client(service: str) -> Any:
+        if service not in made:
+            made[service] = boto3.client(service, region_name=region)  # type: ignore[call-overload]
+        return made[service]
+
     try:
-        config = read_config()
+        config = load_config(event, client)
         clients = Clients(
-            s3=boto3.client("s3", region_name=region),
+            s3=client("s3"),
             logs=boto3.client("logs", region_name=region),
             events=boto3.client("events", region_name=region) if config.event_bus_arn else None,
             dynamodb=(

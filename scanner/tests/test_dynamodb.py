@@ -316,7 +316,11 @@ def test_a_key_that_could_be_sensitive_is_masked_and_hashed() -> None:
     f = doc["findings"][0]
     assert f["resource"]["key"] == {"pk": "CUST##########", "sk": "CARD#################"}
     assert f["resource"]["keyMasked"] is True
-    assert f["link"] is None
+    # The link names the table only, so a masked key keeps it (#24).
+    assert f["link"] == (
+        "https://us-west-2.console.aws.amazon.com/dynamodbv2/home?region=us-west-2"
+        "#item-explorer?table=example-call-tests"
+    )
     blob = json.dumps(doc)
     assert SSN_A not in blob and CARDS["visa"] not in blob
 

@@ -282,10 +282,25 @@ or an SSN is replaced with `#`:
 - a 3-2-4 or bare nine-digit run;
 - any run of 13 or more digits.
 
-The resource then carries `keyMasked: true` (or `nameMasked: true`), and
-its `link` is `null`: a console link would carry the name unmasked. Object
+The resource then carries `keyMasked: true` (or `nameMasked: true`). Object
 keys, log stream names, DynamoDB key values and attribute paths, source
 targets and error names all go through the same masking.
+
+A `link` is `null` only when a name it would carry was masked, because it
+would carry that name unmasked. Each link names only some of the resource:
+
+| Resource | The link names | So a masked… |
+|---|---|---|
+| `s3_object` | the bucket and the key | bucket or key drops it; a masked column or catalog name does not |
+| `log_event` | the log group and stream | group or stream drops it |
+| `dynamodb_item` | the table only (the item explorer); never a key | table drops it; a masked key or attribute path does not |
+| `rds_column` | the cluster or instance | identifier drops it; a masked database, table or column does not |
+| `store_field` (Redshift, OpenSearch) | the cluster, workgroup, domain or collection | store drops it; a masked database, table, index or field does not |
+
+So a DynamoDB item keyed by a tenant id with a bare nine-digit run, such as
+`T#t_#########`, keeps its link to the table. The reviewer opens the table
+and finds the item from the masked key and the finding's other fields. In
+0.2.0 and earlier, any masking dropped the link.
 
 ### Coverage
 

@@ -136,6 +136,52 @@ One run:
 | `REDSHIFT_STATEMENT_TIMEOUT_SECONDS` | How long the run waits for one Data API statement before counting the table unreadable | 60 |
 | `OPENSEARCH_DOCS_PER_INDEX`, `OPENSEARCH_MAX_INDICES` | Documents sampled per index (`_search?size=`), and indices per domain or collection | 100 and 500 |
 | `OPENSEARCH_SERVERLESS_READ` | Read OpenSearch Serverless collections ([below](#opensearch-domains-and-serverless-collections)) | off: reported `read_not_configured` |
+| `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
+
+#### Configuration beyond 4 KB
+
+Lambda holds at most 4 KB of environment variables, and a list of DynamoDB
+tables passes that quickly: 16 entries came to about 7.2 KB in the first
+real-account run. So the same settings can also come from a **configuration
+document**, a JSON object whose keys are the variable names above:
+
+```json
+{
+  "SCAN_DYNAMODB": [{ "table": "example-calls", "partition": "T#t_0000example" }],
+  "DISCOVER": ["s3", "dynamodb"],
+  "MAX_RUN_SECONDS": 600,
+  "DYNAMODB_EXPORT": true
+}
+```
+
+- `SCAN_DYNAMODB`, `DISCOVER_SAMPLING` and `RDS_DATA_API` take their JSON
+  directly; a list of strings is joined with commas; numbers and booleans are
+  written as themselves; `null` unsets.
+- A name the scanner does not read is an error, so a typo is never silently
+  ignored. A document cannot set `CONFIG_LOCATION` or
+  `AWS_LAMBDA_LOG_GROUP_NAME`.
+
+It can come from three places. Each one wins over the ones before it:
+
+1. **Environment variables**, as before.
+2. **A file**, named by `CONFIG_LOCATION` or by the invoke payload's
+   `configLocation`:
+   - an S3 object (`s3://bucket/key`, up to 1 MiB), read with `s3:GetObject`;
+   - or an SSM parameter (`ssm:/sensitive-data-scanner/config`, or its ARN),
+     read with `ssm:GetParameter`. A standard parameter holds 4 KB and an
+     advanced one 8 KB, so S3 is the place for anything larger.
+3. **The invoke payload's `config`**: `{"config": {...}}`, for example as the
+   EventBridge Scheduler target's input. Several schedules can then share one
+   function, each with its own batch of tables.
+
+The payload's other keys are ignored, so a schedule that sends nothing, or
+sends its own event, leaves the configuration as it was. Nothing in the
+configuration is secret.
+
+`scanner.yaml` takes `ConfigLocation`. It grants `ssm:GetParameter` only on
+parameters under `/sensitive-data-scanner/`, and only when the location is
+in SSM. An S3 location is read with the same `s3:GetObject` the S3 source
+already holds.
 
 ### Discovery
 
@@ -604,6 +650,15 @@ scanner's own.
   results bucket only: `findings/`, `state/`, and the exports the scanner
   starts under `exports/`, which it deletes once read. Nothing else is ever
   written. A test holds `delete` to the `exports/` prefix.
+- **List**: `s3:ListBucket` on the results bucket, conditioned on the results
+  prefix if it has one (`s3:prefix` `<prefix>/*`).
+  - The scanner lists its own `exports/`.
+  - Without this permission, S3 answers a missing object with 403
+    AccessDenied instead of 404. The first run's state file is missing.
+  - The runner copes: a 403 on the state file counts as "no state yet" when
+    the lock the run has just written can be read, which shows its access is
+    otherwise fine.
+  - Grant it anyway, so a real denial is never confused with a missing file.
 - **Optional**: `events:PutEvents` on the one consumer bus ARN.
 - **No inbound access.** A consumer reads `findings/*` in the results
   bucket, or receives events. It never needs `state/*`.
@@ -768,7 +823,8 @@ several things:
 
 | Source | Actions | Resource | Condition |
 |---|---|---|---|
-| Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` | the results bucket and its objects | |
+| Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` (it lists `exports/`, and it makes a missing state file a 404, not a 403) | the results bucket and its objects | |
+| Its configuration document, with `ConfigLocation` in SSM | `ssm:GetParameter` | parameters under `/sensitive-data-scanner/` in this account and region | |
 | Its own logs | `logs:CreateLogStream`, `logs:PutLogEvents` | its log group | |
 | S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
 | CloudWatch Logs | `logs:DescribeLogGroups`, `logs:FilterLogEvents`, `logs:ListTagsForResource` | `*` | |
