@@ -1,0 +1,9 @@
+sensitive-data-scanner
+Copyright 2026 txp-labs, LLC
+
+This product includes software developed by txp-labs, LLC.
+
+This product depends on Microsoft Presidio (https://github.com/microsoft/presidio),
+Copyright (c) Microsoft Corporation, licensed under the MIT License. The MIT
+License text is included with each distributed release under
+third_party/presidio/LICENSE.
