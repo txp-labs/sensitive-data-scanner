@@ -7,12 +7,24 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Re-run the release of an existing tag with this workflow as it is on the
+  # default branch (for a fix to the workflow itself). The code built is the
+  # tag's.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.1.0"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -25,13 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
       - id: v
-        env:
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="${TAG#v}"
+          case "${RELEASE_TAG}" in v[0-9]*) ;; *) echo "not a release tag"; exit 1;; esac
+          version="${RELEASE_TAG#v}"
           py=$(python3 -c 'import tomllib;print(tomllib.load(open("scanner/pyproject.toml","rb"))["project"]["version"])')
           ts=$(python3 -c 'import json;print(json.load(open("packages/spec-ts/package.json"))["version"])')
           echo "tag ${version}, scanner ${py}, spec-ts ${ts}"
@@ -48,6 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -58,7 +71,9 @@ jobs:
         run: |
           set -euo pipefail
           scripts/build-lambda-zip.sh "${VERSION}" out
-          (cd scanner && uv build --out-dir ../out)
+          # The wheel only: the sdist cannot carry the spec and licenses from
+          # outside scanner/. The source release is the tag itself.
+          (cd scanner && uv build --wheel --out-dir ../out)
           mkdir -p sbom-src && (cd sbom-src && unzip -q ../out/*-lambda-*.zip)
       - name: SBOM of the Lambda zip (SPDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -88,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -128,6 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -148,5 +165,4 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --notes-file notes.md --verify-tag
+        run: gh release create "${RELEASE_TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${RELEASE_TAG}" --notes-file notes.md --verify-tag

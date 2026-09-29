@@ -11,7 +11,7 @@ pinned by digest.
 |---|---|
 | `ghcr.io/txp-labs/sensitive-data-scanner:X.Y.Z` | The Lambda container image. Python 3.12 slim, the Lambda runtime interface client; handler `sensitive_data_scanner.handler.handler`. The release notes and `IMAGE_DIGEST` give its digest |
 | `sensitive-data-scanner-X.Y.Z-lambda-python3.12-x86_64.zip` | The same scanner as a Lambda zip for the managed `python3.12` runtime (x86_64). The same handler |
-| `sensitive_data_scanner-X.Y.Z-py3-none-any.whl`, `.tar.gz` | The Python package, with the spec, the findings schema and the licenses inside |
+| `sensitive_data_scanner-X.Y.Z-py3-none-any.whl` | The Python package, with the spec, the findings schema and the licenses inside. There is no sdist: the source release is the tag |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the image (syft) |
 | `SHA256SUMS` | SHA-256 of every file above |
 
@@ -41,6 +41,9 @@ pinned by digest.
      heading agree.
    - Then `artifacts` (zip, wheel, SBOM) and `image` (build, push to GHCR,
      SBOM) run in parallel.
+   - If the workflow itself needs a fix after the tag is pushed, merge the
+     fix and run **Release** by hand (`workflow_dispatch`) with the existing
+     tag. It builds the tag's code with the fixed workflow.
    - Finally `release` writes `SHA256SUMS` and creates the GitHub Release.
 5. **Check the Release page:** every asset is attached, and the image digest
    in the notes matches the one in GHCR.
