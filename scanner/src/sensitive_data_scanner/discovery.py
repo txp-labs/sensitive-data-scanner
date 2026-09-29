@@ -8,7 +8,13 @@ list for the user to write:
 - **CloudWatch Logs:** `DescribeLogGroups`, each group read by the logs
   source;
 - **DynamoDB:** `ListTables` and `DescribeTable`, each table read by a
-  (sampled) Scan.
+  (sampled) Scan;
+- **Glue Data Catalog:** `GetDatabases` and `GetTables`, each table read at
+  its S3 location, by column, with findings that name the database, table
+  and column. The bucket's own source then leaves that prefix to it. Lake
+  Formation is respected: the scanner reads with its own IAM only and
+  never asks Lake Formation for credentials, so a denial is reported
+  (`lake_formation`), not worked around.
 
 An allow list and a deny list (`DISCOVER_ALLOW`, `DISCOVER_DENY`) narrow what
 is read, by name glob or by tag. A deny rule wins over an allow rule. The
@@ -16,9 +22,9 @@ scanner's own results bucket and log group are never read.
 
 Every store listed is reported in the run's summary, **including the ones not
 read and why** (`denied`, `not_allowed`, `self`, `too_large`, `unsupported`,
-`kms_access`, `access_denied`, `tags_unreadable`, or `deferred` to a later run
-by the budget), so a coverage gap is visible rather than silent. Names in the
-summary are masked like object keys.
+`kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, or
+`deferred` to a later run by the budget), so a coverage gap is visible rather
+than silent. Names in the summary are masked like object keys.
 """
 
 from __future__ import annotations
@@ -44,11 +50,25 @@ READABLE_TABLE_STATES = frozenset({"ACTIVE", "UPDATING"})
 READABLE_LOG_CLASSES = frozenset({"STANDARD", "INFREQUENT_ACCESS"})
 
 
+@dataclass(frozen=True)
+class GlueTable:
+    """What the reader needs from a Glue table: where it is and how its rows are laid out."""
+
+    database: str
+    name: str
+    bucket: str
+    prefix: str
+    columns: tuple[str, ...] = ()
+    serde: str | None = None  # csv | json | None (by file)
+    delimiter: str = ","
+    skip_header: int = 0
+
+
 @dataclass
 class Store:
     """One data store, listed by discovery or named in the configuration."""
 
-    kind: str  # s3 | cloudwatch_logs | dynamodb
+    kind: str  # s3 | cloudwatch_logs | dynamodb | glue_table
     name: str
     origin: str = "discovery"  # discovery | config
     tags: dict[str, str] | None = None
@@ -62,6 +82,7 @@ class Store:
     gaps: dict[str, int] = field(default_factory=dict)
     backlog: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
+    table: GlueTable | None = None
 
     def skip(self, reason: str, error: str | None = None) -> None:
         self.status = "skipped"
@@ -92,7 +113,8 @@ class Store:
             out["gaps"] = dict(sorted(self.gaps.items()))
         if self.backlog:
             out["backlog"] = True
-        out.update(self.extra)
+        for k, v in self.extra.items():
+            out[k] = redact_digits(v) if isinstance(v, str) else v
         return out
 
 
@@ -156,7 +178,7 @@ def decide(store: Store, config: Config, tag_error: str | None = None) -> None:
         store.skip("not_allowed", tag_error)
         return
     pct, per = config.sampling_for(kind, name, tags)
-    if kind == "s3":
+    if kind in ("s3", "glue_table"):
         store.sample_percent = pct if pct is not None else config.sample_percent
         store.max_per_prefix = per if per is not None else config.s3_max_objects_per_prefix
     elif kind == "dynamodb":
@@ -247,11 +269,152 @@ def _discover_dynamodb(config: Config, clients: Clients, out: Discovery) -> None
             store.skip("too_large")
 
 
+def _glue_tags(clients: Clients, arn: str) -> dict[str, str]:
+    if clients.glue is None:
+        raise ValueError("no Glue client")
+    r = clients.glue.get_tags(ResourceArn=arn)
+    return {str(k): str(v) for k, v in (r.get("Tags") or {}).items()}
+
+
+def is_lake_formation_denial(err: BaseException) -> bool:
+    """A Glue or S3 denial that Lake Formation made (the message says so; never kept)."""
+    response = getattr(err, "response", None)
+    if not isinstance(response, dict):
+        return False
+    message = str((response.get("Error") or {}).get("Message") or "").lower()
+    return "lake formation" in message or "lakeformation" in message
+
+
+def _serde(sd: dict[str, Any]) -> tuple[str | None, str]:
+    info = sd.get("SerdeInfo") or {}
+    lib = str(info.get("SerializationLibrary") or "")
+    params = info.get("Parameters") or {}
+    if "OpenCSVSerde" in lib:
+        return "csv", str(params.get("separatorChar") or ",")[:1] or ","
+    if "LazySimpleSerDe" in lib:
+        # Hive's default field delimiter is Ctrl-A.
+        return "csv", str(
+            params.get("field.delim") or params.get("serialization.format") or "\x01"
+        )[:1]
+    if "JsonSerDe" in lib or "JsonSerde" in lib:
+        return "json", ","
+    return None, ","
+
+
+def glue_location(location: str) -> tuple[str, str] | None:
+    """`s3://bucket/path/table` to (bucket, `path/table/`); None when not S3."""
+    for scheme in ("s3://", "s3a://", "s3n://"):
+        if location.startswith(scheme):
+            rest = location[len(scheme) :]
+            bucket, _, prefix = rest.partition("/")
+            if not bucket:
+                return None
+            prefix = prefix.lstrip("/")
+            if prefix and not prefix.endswith("/"):
+                prefix += "/"
+            return bucket, prefix
+    return None
+
+
+def _discover_glue(
+    config: Config, clients: Clients, region: str, account: str, out: Discovery
+) -> None:
+    if clients.glue is None:
+        raise ValueError("no Glue client")
+    glue = clients.glue
+    databases: list[dict[str, Any]] = []
+    for page in glue.get_paginator("get_databases").paginate():
+        databases.extend(page.get("DatabaseList", []))  # type: ignore[arg-type]
+    for db in databases:
+        db_name = str(db["Name"])
+        if db.get("TargetDatabase"):
+            store = Store("glue_table", f"{db_name}.*")
+            store.skip("unsupported")  # a resource link: the owning account's scanner reads it
+            store.extra["catalogObject"] = "resource_link"
+            out.stores.append(store)
+            continue
+        try:
+            tables: list[dict[str, Any]] = []
+            for tpage in glue.get_paginator("get_tables").paginate(DatabaseName=db_name):
+                tables.extend(tpage.get("TableList", []))  # type: ignore[arg-type]
+        except Exception as err:
+            store = Store("glue_table", f"{db_name}.*")
+            store.status = "error"
+            store.error = error_name(err)
+            store.reason = (
+                "lake_formation" if is_lake_formation_denial(err) else _reason(store.error)
+            )
+            out.stores.append(store)
+            continue
+        for t in tables:
+            _glue_table(
+                config,
+                clients,
+                db_name,
+                t,
+                arn_prefix=f"arn:aws:glue:{region}:{account}:table",
+                out=out,
+            )
+
+
+def _glue_table(
+    config: Config,
+    clients: Clients,
+    db_name: str,
+    t: dict[str, Any],
+    *,
+    arn_prefix: str,
+    out: Discovery,
+) -> None:
+    name = str(t["Name"])
+    store = Store("glue_table", f"{db_name}.{name}")
+    out.stores.append(store)
+    if t.get("IsRegisteredWithLakeFormation"):
+        store.extra["lakeFormation"] = True
+    if t.get("TargetTable"):
+        store.skip("unsupported")
+        store.extra["catalogObject"] = "resource_link"
+        return
+    if str(t.get("TableType") or "") == "VIRTUAL_VIEW":
+        store.skip("unsupported")
+        store.extra["catalogObject"] = "view"
+        return
+    sd = t.get("StorageDescriptor") or {}
+    where = glue_location(str(sd.get("Location") or ""))
+    if where is None:
+        store.skip("unsupported")
+        store.extra["catalogObject"] = "not_s3"
+        return
+    store.extra["location"] = f"{where[0]}/{where[1]}"
+    if store.extra.get("lakeFormation") and config.glue_lake_formation == "skip":
+        store.skip("lake_formation")
+        return
+    serde, delimiter = _serde(sd)
+    try:
+        skip = int((t.get("Parameters") or {}).get("skip.header.line.count") or 0)
+    except ValueError:
+        skip = 0
+    columns = [str(c["Name"]) for c in sd.get("Columns") or [] if c.get("Name")]
+    columns += [str(c["Name"]) for c in t.get("PartitionKeys") or [] if c.get("Name")]
+    store.table = GlueTable(
+        database=db_name,
+        name=name,
+        bucket=where[0],
+        prefix=where[1],
+        columns=tuple(columns),
+        serde=serde,
+        delimiter=delimiter,
+        skip_header=max(0, skip),
+    )
+    arn = f"{arn_prefix}/{db_name}/{name}"
+    _with_tags(store, config, _glue_tags, clients, arn)
+
+
 def _reason(error: str | None) -> str:
     return "access_denied" if error in ACCESS_DENIED else "error"
 
 
-def discover(config: Config, clients: Clients, region: str) -> Discovery:
+def discover(config: Config, clients: Clients, region: str, account: str = "") -> Discovery:
     """List the stores of each kind in `config.discover`. A listing that fails is named."""
     out = Discovery()
     steps: list[tuple[str, Any]] = []
@@ -261,6 +424,8 @@ def discover(config: Config, clients: Clients, region: str) -> Discovery:
         steps.append(("cloudwatch_logs", lambda: _discover_logs(config, clients, out)))
     if "dynamodb" in config.discover:
         steps.append(("dynamodb", lambda: _discover_dynamodb(config, clients, out)))
+    if "glue_table" in config.discover:
+        steps.append(("glue_table", lambda: _discover_glue(config, clients, region, account, out)))
     for kind, step in steps:
         try:
             step()
@@ -295,6 +460,8 @@ def settle(store: Store, coverages: list[Any]) -> None:
         store.status = "error"
         store.error = errors[0].error
         store.reason = "kms_access" if errors[0].kms_denied else _reason(store.error)
+        if store.reason == "access_denied" and store.extra.get("lakeFormation"):
+            store.reason = "lake_formation"
         return
     store.status = "scanned"
     if sum(c.scanned for c in coverages) == 0 and unsupported and not unreadable:

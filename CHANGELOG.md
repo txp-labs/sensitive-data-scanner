@@ -53,22 +53,51 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `@txp-labs/sensitive-data-spec` exports `isMenuOrQuestion` and
   `itinStructureValid`.
 
+- Columnar and data-lake formats in S3: Parquet and ORC (pyarrow, one row
+  group or stripe at a time through ranged GETs, up to `COLUMNAR_MAX_ROWS`),
+  Avro (a small reader of its own; every codec), and zstd as well as gzip
+  CSV and JSON lines. Files without an extension are recognized by their
+  magic bytes. Findings name the column, and offsets the row and column.
+- Glue Data Catalog discovery (`DISCOVER` with `glue`): each table is read
+  at its S3 location, and findings name the database, table and column.
+  CSV tables are read with the catalog's columns and SerDe delimiter; views,
+  non-S3 tables and resource links are reported, not read. A bucket leaves
+  its tables' prefixes to them.
+- Lake Formation is respected: the scanner reads with its own IAM only and
+  never asks Lake Formation for access. A denial is reported as
+  `lake_formation`; `GLUE_LAKE_FORMATION=skip` leaves registered tables
+  unread and reported.
+
 ### Findings schema
 - `schemaVersion` is now **1.2**, additive: the `discovery` summary,
-  `kmsDenied` in coverage, and `#` allowed in a masked bucket or table name.
-  EventBridge parts now also split `coverage` and `discovery.stores`.
+  `kmsDenied` in coverage, `#` allowed in a masked bucket or table name,
+  `column` and `catalog` on an S3 object, the `parquet`, `orc` and `avro`
+  formats, the `glue_table` coverage kind, the `columnar` skip kind and the
+  `lake_formation` reason. EventBridge parts now also split `coverage` and
+  `discovery.stores`.
+
+### Internal
+- pyarrow joins as the `columnar` dependency group, installed in the
+  container image and not in the Lambda zip, which it would push past
+  Lambda's 250 MB unzipped limit. The zip counts the formats it cannot read
+  as skipped `columnar`; CI checks the zip has no pyarrow and the image reads
+  Parquet and ORC. fastavro is a test-only dependency, to write Avro
+  fixtures with an implementation other than the scanner's.
 
 ### Security
 - A bucket or table name holding a number that could be a card or an SSN is
   now masked in findings, like an object key, and a finding whose log group
   or stream name was masked no longer carries a console link (the link held
   the name unmasked). The no-leak suite covers discovery, with stores whose
-  names hold values.
+  names hold values, and the columnar formats and catalog, with values in
+  cells, column names, nested keys and table names.
 
 ### Docs
 - `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,
-  the run summary, and the read-only IAM each kind of discovery needs.
-  `docs/FINDINGS.md`: schema 1.2 and the run summary.
+  the run summary, columnar formats, Glue and Lake Formation, and the
+  read-only IAM each kind of discovery needs. `docs/FINDINGS.md`: schema
+  1.2, the run summary and column findings. `docs/RELEASING.md`: which
+  formats the image and the zip read.
 
 ### Internal
 - `packages/spec-ts/dist/` is committed, so the package can be consumed by

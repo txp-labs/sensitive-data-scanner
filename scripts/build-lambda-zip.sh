@@ -6,6 +6,12 @@
 #   scripts/build-lambda-zip.sh <version> <out-dir>
 #
 # The handler is sensitive_data_scanner.handler.handler (runtime python3.12).
+#
+# The zip carries no pyarrow (the `columnar` dependency group): with it the
+# package would pass Lambda's 250 MB unzipped limit. The zip therefore reads
+# every text format, gzip and Avro (null, deflate, bzip2, xz), and counts
+# Parquet, ORC, zstd and snappy/zstandard Avro as skipped `columnar`. The
+# container image reads them all.
 set -euo pipefail
 version="${1:?version}"
 out="$(mkdir -p "${2:?out dir}" && cd "$2" && pwd)"
@@ -14,7 +20,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 cd "$root/scanner"
-uv export --frozen --no-dev --no-emit-project -o "$work/requirements.txt"
+uv export --frozen --no-default-groups --no-emit-project -o "$work/requirements.txt"
 uv pip install \
   --python 3.12 \
   --target "$work/package" \

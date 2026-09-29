@@ -144,12 +144,14 @@ jobs:
       - name: Build the Lambda zip
         run: scripts/build-lambda-zip.sh ci out
 
-      - name: The zip fits Lambda's 250 MB unzipped limit
+      - name: The zip fits Lambda's 250 MB unzipped limit, without pyarrow
         run: |
           set -euo pipefail
           size=$(unzip -l out/*.zip | tail -1 | awk '{print $1}')
           echo "unzipped bytes: ${size}"
           test "${size}" -lt 262144000
+          # pyarrow is the container image's: in the zip it would pass the limit.
+          if unzip -l out/*.zip | grep -q ' pyarrow/'; then echo "pyarrow in the zip"; exit 1; fi
 
       - name: Build the container image
         run: docker build -t sensitive-data-scanner:ci .
@@ -169,5 +171,15 @@ jobs:
           ])
           assert [(x.cls, x.via, x.confidence) for x in a.detections] == [("us_ssn", "prompt", "high")]
           import sensitive_data_scanner.handler, awslambdaric
+          # The image reads the columnar formats: Parquet, ORC and zstd through pyarrow.
+          import io
+          import pyarrow as pa, pyarrow.parquet as pq, pyarrow.orc as orc
+          from sensitive_data_scanner.scan.columnar import pyarrow_available, scan_table
+          assert pyarrow_available()
+          t = pa.table({"card_number": ["4111111111111111"], "note": ["x"]})
+          for kind, write in (("parquet", pq.write_table), ("orc", orc.write_table)):
+              buf = io.BytesIO(); write(t, buf); buf.seek(0)
+              r = scan_table(kind, buf, d, 100)
+              assert r.rows == 1, kind
           print("ok")
           '

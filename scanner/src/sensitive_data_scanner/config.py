@@ -25,6 +25,13 @@ def _int(v: str | None, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, n))
 
 
+def _choice(v: str | None, allowed: tuple[str, ...], default: str) -> str:
+    t = (v or "").strip().lower() or default
+    if t not in allowed:
+        raise ValueError("a setting has a value it does not accept")
+    return t
+
+
 def s3_targets(buckets: list[str], prefixes: list[str]) -> list[tuple[str, str]]:
     """`SCAN_BUCKETS=a,b` and `SCAN_PREFIXES=a/connect/x/` give a/connect/x/ and b (whole)."""
     out: list[tuple[str, str]] = []
@@ -125,17 +132,25 @@ def dynamodb_targets(raw: str | None) -> list[DynamoTarget]:
 
 
 # Discovery: which kinds of store to list, and the allow and deny overrides.
-DISCOVER_KINDS = {"s3": "s3", "logs": "cloudwatch_logs", "dynamodb": "dynamodb"}
+DISCOVER_KINDS = {
+    "s3": "s3",
+    "logs": "cloudwatch_logs",
+    "dynamodb": "dynamodb",
+    "glue": "glue_table",
+}
 _KIND_ALIASES = {
     "s3": "s3",
     "logs": "cloudwatch_logs",
     "cloudwatch_logs": "cloudwatch_logs",
     "dynamodb": "dynamodb",
+    "glue": "glue_table",
+    "glue_table": "glue_table",
 }
 
 
 def discover_kinds(raw: str | None) -> frozenset[str]:
-    """`DISCOVER`: `all`, or a comma-separated list of `s3`, `logs`, `dynamodb`. Empty: off."""
+    """`DISCOVER`: `all`, or a comma-separated list of `s3`, `logs`, `dynamodb`, `glue`.
+    Empty: off."""
     names = [n.lower() for n in _list(raw)]
     if not names or names == ["none"]:
         return frozenset()
@@ -269,6 +284,9 @@ class Config:
     max_log_events_per_run: int = 0
     max_table_items_per_run: int = 0
     max_run_seconds: int = 0
+    # Columnar and data-lake formats.
+    columnar_max_rows: int = 10_000
+    glue_lake_formation: str = "read"  # read (with the scanner's own IAM) | skip
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -314,4 +332,6 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         max_log_events_per_run=_int(e.get("MAX_LOG_EVENTS_PER_RUN"), 0, 0, 1_000_000),
         max_table_items_per_run=_int(e.get("MAX_TABLE_ITEMS_PER_RUN"), 0, 0, 1_000_000),
         max_run_seconds=_int(e.get("MAX_RUN_SECONDS"), 0, 0, 24 * 3600),
+        columnar_max_rows=_int(e.get("COLUMNAR_MAX_ROWS"), 10_000, 1, 10_000_000),
+        glue_lake_formation=_choice(e.get("GLUE_LAKE_FORMATION"), ("read", "skip"), "read"),
     )

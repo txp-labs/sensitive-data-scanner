@@ -12,9 +12,11 @@ value shows up in findings, events, logs, exception messages or object reprs.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
-- Version 1.2 adds discovery: the `discovery` run summary (every store, read
-  or not, and why), `kmsDenied` in coverage, and `#` in a masked bucket or
-  table name. All additive.
+- Version 1.2 adds discovery and data-lake formats: the `discovery` run
+  summary (every store, read or not, and why), `kmsDenied` in coverage, `#`
+  in a masked bucket or table name, `column` and `catalog` on an S3 object,
+  the `parquet`, `orc` and `avro` formats, the `glue_table` coverage kind and
+  the `columnar` skip kind. All additive.
 
 ## Where findings go
 
@@ -122,7 +124,7 @@ One class of data at one location.
 | `id` | A stable hash of the resource and class. It stays the same across runs for the same location (and object version). Key triage decisions on it. |
 | `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). `dynamodb_item`: `table`, `keyHash`, `key` and `attributePath` (below). |
 | `connect` | The Amazon Connect contact and instance, when the item names one: a chat or Contact Lens transcript, or a flow log event. |
-| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text` or `dynamodb_item`. |
+| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`. |
 | `class`, `severity` | The spec class (`card`, `us_ssn`, `us_itin`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
 | `count` | Distinct values of the class in the item. The same card read out by a caller and read back by the agent counts once. |
 | `occurrences` | Every place a value appears in the item. |
@@ -130,6 +132,37 @@ One class of data at one location.
 | `via` | How the values were found: `prompt` (a bot or agent asked for this class), `context` (a context word was nearby) or `shape` (the value alone looks like it). |
 | `offsets` | Where each occurrence is, at most 50 (`offsetsTruncated` says if more exist). `start` and `end` are UTF-16 code units. For a JSON item, `pointer` (RFC 6901) names the string they are in. A value split across a caller's turns has one offset per turn. |
 | `link` | A deep link into the account's own AWS console: the S3 object version, the log event, or the DynamoDB table's item explorer (it names no key; query by the masked key). A reviewer follows it with their own access. It is `null` when the key had to be masked. |
+
+### A table finding: a column (1.2)
+
+A Parquet, ORC or Avro file, or an object of a Glue table, gives one finding
+per class per column:
+
+```json
+{
+  "resource": {
+    "type": "s3_object",
+    "bucket": "example-lake",
+    "key": "curated/customers/dt=2026-09-28/part-00000.snappy.parquet",
+    "versionId": "null",
+    "column": "card_number",
+    "catalog": { "database": "curated", "table": "customers" }
+  },
+  "format": "parquet",
+  "class": "card",
+  "count": 2,
+  "offsets": [
+    { "pointer": "/0/card_number", "start": 0, "end": 16 },
+    { "pointer": "/1/card_number", "start": 0, "end": 16 }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `column` | The column the values are in, masked like a key. A nested column's offsets point inside it (`/0/payment/pan`) |
+| `catalog` | For an object read as part of a Glue table: its `database` and `table`, masked like keys |
+| `offsets[].pointer` | `/<row>/<column>`: the row within the file (from 0), and the column |
 
 ### A DynamoDB finding
 
@@ -185,13 +218,13 @@ One entry per source says what was, and was not, read:
 
 | Field | Meaning |
 |---|---|
-| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, or `dynamodb` with the table (`<table> (query)` for a partition Query) |
+| `kind`, `target` | `s3` with `bucket/prefix`, `cloudwatch_logs` with the log group, `dynamodb` with the table (`<table> (query)` for a partition Query), or `glue_table` with `database.table` (1.2) |
 | `listed`, `eligible`, `scanned` | Objects listed, events returned, or DynamoDB items evaluated (`ScannedCount`); the new or changed ones (for DynamoDB, the items returned); the ones read this run |
 | `sampledOut`, `samplePercent` | Left out by sampling. Sampling is stated, never silent |
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
 | `unreadable` | Listed but could not be read (a KMS key the scanner may not use, or an object deleted mid-run) |
 | `bytesScanned` | Bytes read |
-| `skipped` | Not read, by kind: audio, video, image, document, archive, binary |
+| `skipped` | Not read, by kind: audio, video, image, document, archive, binary, or (1.2) `columnar`: a Parquet, ORC, zstd or snappy/zstandard Avro file this build cannot read (the Lambda zip; the container image reads them), or one whose byte cap fell before its first rows |
 | `formats` | Items by format |
 | `testValues` | Published test card numbers and sample SSNs, set apart and never findings |
 | `suppressed` | Numbers next to a word like "order" or "phone", with no card word |
@@ -226,16 +259,18 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs` or `dynamodb`, and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb` or `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `tags_unreadable`, `budget`, `error` |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error` |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
 | `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat` |
 | `backlog` | More to read on the next run |
-| `logGroupClass`, `tableStatus` | Why an `unsupported` store is unsupported |
+| `logGroupClass`, `tableStatus`, `catalogObject` | Why an `unsupported` store is unsupported (`catalogObject`: `view`, `not_s3`, `resource_link`) |
+| `location` | A Glue table's S3 location, `bucket/prefix`, masked |
+| `lakeFormation` | The Glue table is registered with Lake Formation |
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind

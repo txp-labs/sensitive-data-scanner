@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from aws_fixtures import RESULTS, Env, config, epoch_ms
+from aws_fixtures import DATA, RESULTS, Env, config, epoch_ms
 from conftest import all_conversation_vectors, turns_of
 from ddb_fixtures import FIXTURES, Ddb, load_item, page, target
 from sensitive_data_scanner import safety
@@ -284,6 +284,82 @@ def test_no_value_leaves_discovery(
     }
     for name, blob in outputs.items():
         assert leaks(blob) == [], name
+
+
+def test_no_value_leaves_columnar_formats_or_the_catalog(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Parquet, ORC, Avro and zstd JSON lines with values in cells, in column names and in
+    nested keys, and a Glue table whose database, name and location hold values."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from table_fixtures import (
+        Glue,
+        arrow_table,
+        avro_bytes,
+        glue_table,
+        orc_bytes,
+        parquet_bytes,
+        zstd_bytes,
+    )
+
+    rows = [
+        {
+            f"acct_{CARDS['visa']}": CARDS["visa"],
+            "ssn": int(SSN_A),
+            "nested": {CARDS["jcb"]: dashed(SSN_B), "pan": CARDS["amex"]},
+        }
+    ]
+    env.put("lake/a.parquet", parquet_bytes(arrow_table(rows)))
+    env.put("lake/b.orc", orc_bytes(arrow_table(rows)))
+    env.put("lake/c.avro", avro_bytes("snappy"))
+    env.put("lake/d.jsonl.zst", zstd_bytes(json.dumps(rows[0], default=str).encode()))
+    env.put(f"gov/{SSN_B}/part-0.parquet", parquet_bytes(arrow_table(rows)))
+    glue = Glue()
+    glue.databases(f"db_{SSN_A}")
+    glue.tables(
+        f"db_{SSN_A}",
+        [glue_table(f"t_{CARDS['mastercard']}", f"s3://{DATA}/gov/{SSN_B}/")],
+    )
+    env.clients.glue = glue.client
+    sent: list[dict[str, Any]] = []
+
+    class Bus:
+        def put_events(self, Entries: list[dict[str, Any]]) -> dict[str, Any]:
+            sent.extend(Entries)
+            return {"FailedEntryCount": 0}
+
+    env.clients.events = Bus()  # type: ignore[assignment]
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"s3", "glue_table"}),
+            deny=__import__("sensitive_data_scanner.config").config.store_rules(f"s3:{RESULTS}"),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    formats = {f["format"] for f in doc["findings"]}
+    assert {"parquet", "orc", "avro", "json"} <= formats
+    assert any(f["resource"].get("catalog") for f in doc["findings"])
+    outputs = {
+        "findings/latest.json": json.dumps(env.latest()),
+        "events": json.dumps(sent),
+        "stdout+stderr": "".join(capsys.readouterr()),
+        "log records": "\n".join(r.getMessage() for r in caplog.records),
+    }
+    for name, blob in outputs.items():
+        assert leaks(blob) == [], name
+    from sensitive_data_scanner.scan.columnar import scan_rows
+
+    result = scan_rows(
+        "parquet", list(rows[0]), rows, __import__("aws_fixtures").shared_detector(), 10
+    )
+    assert result.by_column
+    # Column names are names from the account, like keys: a repr shows counts only.
+    assert leaks(repr(result)) == []
 
 
 def test_ddb_candidates_hold_the_fixture_values() -> None:

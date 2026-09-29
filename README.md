@@ -15,11 +15,13 @@ account**.
 
 The scanner runs **inside the cloud account it scans**. It **discovers** the
 stores in the account and region (S3 buckets, CloudWatch log groups,
-DynamoDB tables), or reads the ones you name, looks for sensitive data, and
+DynamoDB tables, Glue Data Catalog tables), or reads the ones you name,
+looks for sensitive data, and
 writes **findings only** to a results store in the same account:
 
 - the kind of data (card number, US SSN or ITIN, date of birth, and more);
-- where it was found: account, region, object and version; log group,
+- where it was found: account, region, object and version (and for Parquet,
+  ORC, Avro and catalog tables, the column, database and table); log group,
   stream and time; or DynamoDB table, a hash of the item's key and the
   attribute path; and the Amazon Connect contact;
 - how many, how confident, and where in the item (offsets);
@@ -80,8 +82,11 @@ TypeScript package are tested against every vector, and against each other.
 
 Every release publishes:
 
-- a container image: `ghcr.io/txp-labs/sensitive-data-scanner:<version>`;
-- a Lambda zip for `python3.12` (x86_64).
+- a container image: `ghcr.io/txp-labs/sensitive-data-scanner:<version>`,
+  which reads every format, Parquet and ORC included;
+- a Lambda zip for `python3.12` (x86_64), without pyarrow, which reports
+  Parquet, ORC and zstd files as skipped (they do not fit in a zip). Use the
+  image to scan a data lake.
 
 The handler is `sensitive_data_scanner.handler.handler`. Schedule it with
 EventBridge Scheduler at least daily, and give it:

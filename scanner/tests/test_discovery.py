@@ -37,7 +37,8 @@ SCHEMA = Draft202012Validator(
     json.loads((REPO / "schema" / "findings.schema.json").read_text()),
     format_checker=Draft202012Validator.FORMAT_CHECKER,
 )
-ALL = frozenset({"s3", "cloudwatch_logs", "dynamodb"})
+ALL = frozenset({"s3", "cloudwatch_logs", "dynamodb", "glue_table"})
+THREE = frozenset({"s3", "cloudwatch_logs", "dynamodb"})
 SELF_GROUP = "/aws/lambda/sensitive-data-scanner"
 
 
@@ -221,7 +222,7 @@ def test_discovery_reads_every_kind_and_reports_every_store(env: Env) -> None:
     doc = env.run(
         config(
             s3_targets=[],
-            discover=ALL,
+            discover=THREE,
             deny=store_rules("s3:*-archive-logs"),
             self_log_group=SELF_GROUP,
             dynamodb_max_table_bytes=10 * 1024**3,
