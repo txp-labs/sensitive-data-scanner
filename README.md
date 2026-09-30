@@ -65,7 +65,9 @@ Detection uses [Microsoft Presidio](https://github.com/microsoft/presidio)
   read attribute by attribute, with paths that select list elements by
   attribute; each keypad entry is read after the nearest prompt before it,
   and planted test inputs are told apart from leaks).
-  Azure and Google Cloud come later.
+  The Azure scanner ([docs/AZURE.md](docs/AZURE.md)) and the Google Cloud
+  scanner ([docs/GCP.md](docs/GCP.md)) discover and read their clouds' stores
+  the same way.
 - **The findings contract:** a documented, versioned schema
   ([docs/FINDINGS.md](docs/FINDINGS.md)), so any tool can consume the
   results.

@@ -96,6 +96,32 @@ bumps the minor version. Spec changes are listed under **Spec**.
   Releases publish `ghcr.io/txp-labs/sensitive-data-scanner-azure:X.Y.Z`
   (with its SBOM and `AZURE_IMAGE_DIGEST`), the Azure wheel and the compiled
   template.
+- **Google Cloud, step 1: the package and Cloud Storage** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 5):
+  `sensitive-data-scanner-gcp` (`scanner/gcp`), a Cloud Run job's image
+  (`docker build --target gcp`) that runs in the customer's organization as
+  its own service account (Application Default Credentials, no key)
+  ([docs/GCP.md](docs/GCP.md)):
+  - Every Google API over REST through google-auth's authorized session: no
+    gRPC stack in the image.
+  - Discovery across every project under an organization
+    (`GCP_ORGANIZATION`), folders (`GCP_FOLDERS`) or projects
+    (`GCP_PROJECTS`) with Cloud Asset Inventory's `searchAllResources`, one
+    paged search per kind; project numbers resolved to ids.
+  - Cloud Storage (`gcs`), read by the core's readers through the JSON API:
+    Parquet, ORC and Avro by column, gzip and zstd, JSON, CSV, transcripts
+    and text; incremental, resumable within a listing page, sampled by name
+    and per directory, within the run's budget. Objects under a
+    customer-supplied key (CSEK) are counted in `kmsDenied`, never read.
+  - `atRestEncryption` per object: its Cloud KMS key (CMEK) is
+    `customer_managed_key`, hashed from the key's versionless resource name;
+    otherwise `service_managed`.
+  - A VPC Service Controls perimeter that keeps the job out is the `network`
+    gap; a requester-pays bucket is `requester_pays` (new reason); a missing
+    permission is `access_denied`.
+  - Findings go to the job's own state bucket (`findings/latest.json`; the
+    lock is created only if absent), the core's signed HTTPS sink, Pub/Sub
+    as the service account (optional), or a file.
+    `python -m sensitive_data_gcp check` lists without reading or sending.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -278,7 +304,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.6**, additive: the Azure scanner's
+- `schemaVersion` is now **1.7**, additive: the Google Cloud scanner's
+  `platform: gcp`, the `gcs_object` resource, `project` and
+  `resourceNameHash` (the SHA-256 of the store's full resource name) on
+  Google Cloud findings and stores, the `gcs` kind, the `requester_pays`
+  reason and Google Cloud console links.
+- Version **1.6**, additive: the Azure scanner's
   `platform: azure`, the `blob_object` resource, `subscription`,
   `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
   resource ID) on Azure findings and stores, the `azure_blob`, `azure_sql`,
@@ -299,6 +330,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/GCP.md`: the Google Cloud scanner, its stores and permissions,
+  findings and settings.
 - `docs/AZURE.md`: the Azure scanner, its stores and roles, findings,
   settings and deployment (the Bicep parameters, the roles and why each is a
   read, what the template cannot grant).
@@ -309,6 +342,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- CI builds the `gcp` image and smoke-tests it with no network (a wrong
+  setting by its code, no gRPC, AWS or Azure SDK in it). The no-leak suite
+  covers the Google Cloud scanner, with values in project, bucket, object,
+  column and key names, a label and Google's error messages; a test keeps
+  Google's libraries in `sensitive_data_gcp`. The core counts Google's
+  `PERMISSION_DENIED` as `access_denied`.
 - CI checks the Azure template: Bicep lint, and `main.json` matches a fresh
   build with a pinned, checksum-verified Bicep; the `azure` image is built
   and smoke-tested with no network.

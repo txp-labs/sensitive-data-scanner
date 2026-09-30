@@ -1,4 +1,4 @@
-# Findings, schema version 1.6
+# Findings, schema version 1.7
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.6"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.7"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -67,6 +67,12 @@ value shows up in findings, events, logs, exception messages or object reprs.
   fields `hierarchicalNamespace` and `networkRestricted`, the skip kind
   `archive_tier`, and Azure portal links. All additive: an AWS document is
   1.5's with a new version.
+- Version 1.7 adds the Google Cloud scanner ([GCP.md](GCP.md)): `platform:
+  gcp` (the document names its `site`), the `gcs_object` resource (an object
+  of a Cloud Storage bucket), `project` and `resourceNameHash` on a
+  `gcs_object` or `store_field` resource and on a store in the run summary,
+  the `gcs` kind, the store reason `requester_pays`, and Google Cloud console
+  links. All additive: an AWS document is 1.6's with a new version.
 
 ## Where findings go
 
@@ -338,6 +344,37 @@ A blob of a Blob Storage or ADLS Gen2 container, read like an S3 object
 | `resourceIdHash` | The SHA-256 of the store's Azure resource ID in lower case (for a blob, the storage account's). The ID is never written: it names the group and the resource |
 | `link` | The storage account's page in the Azure portal; `null` when the subscription, group or account name had to be masked |
 
+### A Cloud Storage object (1.7)
+
+An object of a Google Cloud Storage bucket, read like an S3 object (text,
+JSON, CSV, and a table file by column):
+
+```json
+{
+  "resource": {
+    "type": "gcs_object",
+    "bucket": "acme-lake",
+    "object": "exports/cards.csv",
+    "generation": "1700000000000001",
+    "project": "acme-data",
+    "resourceNameHash": "4be0…(64 hex)"
+  },
+  "format": "csv",
+  "class": "card",
+  "atRestEncryption": "service_managed",
+  "link": "https://console.cloud.google.com/storage/browser/acme-lake?project=acme-data"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `bucket`, `object` | The bucket and the object's name, masked like a key |
+| `generation` | The object generation read |
+| `column` | For a Parquet, ORC or Avro file, the column, as for S3 |
+| `project` | The project the bucket is in, masked like a key. Every Google Cloud store's finding (a `store_field` too) carries it |
+| `resourceNameHash` | The SHA-256 of the store's full resource name exactly as Cloud Asset Inventory gives it (for an object, its bucket's: `//storage.googleapis.com/<bucket>`). The name is never written |
+| `link` | The bucket's page in the Google Cloud console; `null` when the bucket or project name had to be masked |
+
 ### A DynamoDB finding
 
 One class of data in one attribute path of one item:
@@ -396,6 +433,7 @@ would carry that name unmasked. Each link names only some of the resource:
 | `rds_column` | the cluster or instance | identifier drops it; a masked database, table or column does not |
 | `store_field` (Redshift, OpenSearch) | the cluster, workgroup, domain or collection | store drops it; a masked database, table, index or field does not |
 | `blob_object` and Azure's `store_field` (1.6) | the subscription, resource group and resource (the storage account, server, ...) | any of them drops it; a masked container, blob, table or column does not |
+| `gcs_object` and Google Cloud's `store_field` (1.7) | the project and the store (the bucket, dataset, instance, ...) | any of them drops it; a masked object, table or column does not |
 
 So a DynamoDB item keyed by a tenant id with a bare nine-digit run, such as
 `T#t_#########`, keeps its link to the table. The reviewer opens the table
@@ -445,6 +483,7 @@ Where each store's value comes from:
 | Timestream, Keyspaces | The database's `KmsKeyId`; the table's `encryptionSpecification` |
 | Azure Blob Storage and ADLS Gen2 (1.6) | The blob's encryption scope (from the listing), else its container's default scope, else the account's encryption: `Microsoft.Storage` is `service_managed`; `Microsoft.Keyvault` is `customer_managed_key`, hashed from the key's versionless identifier in lower case (`https://<vault>.vault.azure.net/keys/<name>`). Azure Storage always encrypts, so never `none`. The run summary gives the container's default |
 | Azure disk snapshots, Key Vault (1.6) | A snapshot's `encryption.type`: a platform key is `service_managed`, a customer key through a disk encryption set `customer_managed_key` (hashed from the set's active key). Key Vault's secrets: `service_managed` |
+| Google Cloud Storage (1.7) | The object's own `kmsKeyName` (a CMEK): `customer_managed_key`, hashed from the key's resource name without its version (`projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>`); else Google's own keys, `service_managed`. Google Cloud always encrypts, so never `none`. An object under a customer-supplied key (CSEK) is never read (`kmsDenied`). The run summary gives the bucket's default key |
 | Azure Log Analytics (1.6) | The workspace's dedicated cluster's Key Vault key (`customer_managed_key`, hashed), else `service_managed` |
 | Azure Cosmos DB, Table and Queue Storage (1.6) | Cosmos DB: the account's or vCore cluster's Key Vault key (`customer_managed_key`, hashed), else `service_managed`. Tables and queues: the account's key when its encryption covers the service (`keyType: Account`), else `service_managed` |
 | Azure's databases (1.6) | From Resource Manager: an Azure SQL server's or Managed Instance's TDE protector (`ServiceManaged` is `service_managed`; an `AzureKeyVault` key `customer_managed_key`, hashed as above), a database-level key first, TDE off `unknown`; a flexible server's `dataEncryption` (`SystemManaged` or `AzureKeyVault`); a Synapse workspace's customer key, else the pool's TDE |
@@ -513,10 +552,10 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database), or (1.5) `stepfunctions`, `lambda`, `xray` (one store, `xray-traces`), `codecommit`, `s3_directory`, `msk`, `mq`, `ecr`, `sagemaker` (`feature-group/<name>` or `notebook-instance/<name>`), `neptune_analytics`, `eventbridge_archive`, `glacier`, or (1.6) Azure's `azure_blob` (`account/container`; `account/*` when the account's containers could not be listed), `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql` (`server/database`; `server/*` when a flexible server's databases could not be listed), `synapse_sql` (`workspace/pool`), `cosmosdb` (`account/database/container`, or `account/*` for an account on another API), `cosmosdb_mongo` (`cluster/*`), `azure_table` (`account/table`), `azure_queue` (`account/queue`), `log_analytics` (the workspace), `azure_disk_snapshot` (the disk, or the snapshot whose disk is gone; `resource: snapshot`, `snapshotTime`, `olderSnapshots`) and `key_vault` (the vault); and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database), or (1.5) `stepfunctions`, `lambda`, `xray` (one store, `xray-traces`), `codecommit`, `s3_directory`, `msk`, `mq`, `ecr`, `sagemaker` (`feature-group/<name>` or `notebook-instance/<name>`), `neptune_analytics`, `eventbridge_archive`, `glacier`, or (1.6) Azure's `azure_blob` (`account/container`; `account/*` when the account's containers could not be listed), `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql` (`server/database`; `server/*` when a flexible server's databases could not be listed), `synapse_sql` (`workspace/pool`), `cosmosdb` (`account/database/container`, or `account/*` for an account on another API), `cosmosdb_mongo` (`cluster/*`), `azure_table` (`account/table`), `azure_queue` (`account/queue`), `log_analytics` (the workspace), `azure_disk_snapshot` (the disk, or the snapshot whose disk is gone; `resource: snapshot`, `snapshotTime`, `olderSnapshots`) and `key_vault` (the vault), or (1.7) Google Cloud's `gcs` (the bucket); and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB); (1.4) `db_user_can_write` (the databases runner's user can write, so it was refused; see `writeGrants`), `grants_unverifiable` (the user's privileges could not be read, so it was refused) and `driver_missing` (the image carries no driver for the engine); (1.5) `user_can_write` (a broker user given for reading can change a queue or administer the broker, so it was refused; see `writeGrants`), and `vpc_only` and `no_read_path` also for MSK and Amazon MQ (brokers out of reach; no IAM authentication, or RabbitMQ) and SageMaker (an online-only feature group, a notebook instance), and `archive_retrieval` (an S3 Glacier vault: reading an archive needs a retrieval job, which the scanner never starts); (1.6) `network` (the store admits only selected networks or private endpoints, and the scanner is not among them) and `needs_sas_export` (an Azure disk snapshot: its bytes are reachable only through a SAS export, which changes the snapshot, so it is never started) |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB); (1.4) `db_user_can_write` (the databases runner's user can write, so it was refused; see `writeGrants`), `grants_unverifiable` (the user's privileges could not be read, so it was refused) and `driver_missing` (the image carries no driver for the engine); (1.5) `user_can_write` (a broker user given for reading can change a queue or administer the broker, so it was refused; see `writeGrants`), and `vpc_only` and `no_read_path` also for MSK and Amazon MQ (brokers out of reach; no IAM authentication, or RabbitMQ) and SageMaker (an online-only feature group, a notebook instance), and `archive_retrieval` (an S3 Glacier vault: reading an archive needs a retrieval job, which the scanner never starts); (1.6) `network` (the store admits only selected networks or private endpoints, and the scanner is not among them) and `needs_sas_export` (an Azure disk snapshot: its bytes are reachable only through a SAS export, which changes the snapshot, so it is never started); (1.7) `network` also for a Google Cloud store inside a VPC Service Controls perimeter the scanner is outside of, and `requester_pays` (a Cloud Storage bucket whose reads would be billed to the scanner's project) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -539,6 +578,7 @@ coverage gap is visible rather than silent.
 | `archives` | (1.5) An S3 Glacier vault: its archives, as of its last inventory; its size is `sizeBytes` |
 | `workflowType` | (1.5) Step Functions: `standard` (its history is read) or `express` (reported `unsupported`: an Express workflow keeps no history in the service; its runs are in CloudWatch Logs, read there) |
 | `subscription`, `resourceGroup`, `resourceIdHash` | (1.6) Azure: where the store is, as on its findings |
+| `project`, `resourceNameHash` | (1.7) Google Cloud: where the store is, as on its findings |
 | `hierarchicalNamespace` | (1.6) An Azure storage account with the hierarchical namespace on (ADLS Gen2) |
 | `api` | (1.6) Cosmos DB: the account's API, `sql` (NoSQL), `mongodb`, `cassandra`, `gremlin` or `table`; only NoSQL and a MongoDB vCore cluster are read |
 | `networkRestricted` | (1.6) An Azure store that admits only selected networks or private endpoints; when the scanner is not among them it is the `network` gap |

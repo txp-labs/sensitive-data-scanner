@@ -1,6 +1,6 @@
 # sensitive-data-scanner (Python runner)
 
-Three packages in one uv workspace: the cloud-neutral core in `core/`
+Packages in one uv workspace: the cloud-neutral core in `core/`
 (`sensitive-data-scanner-core`, import `sensitive_data_core`: detection,
 findings, budgets and sampling, the coverage summary, the findings push
 interface, the sampled SQL pass and the adapter interface), and the AWS
@@ -9,8 +9,10 @@ every boto3 adapter, discovery, the runner and the Lambda handler). The
 core imports no cloud SDK, and a test keeps it that way. `db/` is the
 databases-anywhere runner (`sensitive-data-scanner-db`, import
 `sensitive_data_db`), also on the core ([docs/DATABASES.md](../docs/DATABASES.md)),
-and `azure/` the Azure scanner (`sensitive-data-scanner-azure`, import
-`sensitive_data_azure`, [docs/AZURE.md](../docs/AZURE.md)).
+`azure/` the Azure scanner (`sensitive-data-scanner-azure`, import
+`sensitive_data_azure`, [docs/AZURE.md](../docs/AZURE.md)), and `gcp/` the
+Google Cloud scanner (`sensitive-data-scanner-gcp`, import
+`sensitive_data_gcp`, [docs/GCP.md](../docs/GCP.md)).
 
 Detection for the scanner: [Microsoft Presidio](https://github.com/microsoft/presidio)
 Analyzer, with **no NLP model**, and recognizers for the classes in the
