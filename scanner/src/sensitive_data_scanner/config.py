@@ -17,7 +17,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sensitive_data_core.modes import SCANNER, read_mode
-from sensitive_data_core.rules import SamplingRule, StoreRule, sampling_for
+from sensitive_data_core.rules import (
+    KeyFilter,
+    SamplingRule,
+    StoreRule,
+    key_filter_for,
+    sampling_for,
+)
 from sensitive_data_core.rules import parse_rule as _parse_rule
 from sensitive_data_core.rules import sampling_rules as _sampling_rules
 from sensitive_data_core.rules import store_rules as _store_rules
@@ -121,8 +127,9 @@ def dynamodb_targets(raw: str | None) -> list[DynamoTarget]:
         sort_prefix = t.get("sortPrefix")
         if partition is not None and not isinstance(partition, str | int):
             raise ValueError("SCAN_DYNAMODB: partition must be a string or a number")
-        if sort_prefix is not None and (partition is None or not isinstance(sort_prefix, str)):
-            raise ValueError("SCAN_DYNAMODB: sortPrefix needs a partition and must be a string")
+        # Without a partition, a sort-key prefix filters a whole-table Scan (begins_with).
+        if sort_prefix is not None and (not isinstance(sort_prefix, str) or not sort_prefix):
+            raise ValueError("SCAN_DYNAMODB: sortPrefix must be a non-empty string")
         order_by = t.get("orderBy")
         if order_by is not None and (not isinstance(order_by, str) or not order_by.strip()):
             raise ValueError("SCAN_DYNAMODB: orderBy must be an attribute name")
@@ -228,12 +235,13 @@ _KIND_ALIASES = {
 
 
 def discover_kinds(raw: str | None) -> frozenset[str]:
-    """`DISCOVER`: `all`, or a comma-separated list of the kinds in DISCOVER_KINDS (`s3`,
-    `logs`, `dynamodb`, `glue`, `rds`, `redshift`, ...). Empty: off."""
+    """`DISCOVER`: `all` (or `true`), or a comma-separated list of the kinds in
+    DISCOVER_KINDS (`s3`, `logs`, `dynamodb`, `glue`, `rds`, `redshift`, ...). Empty,
+    `none` or `false`: off."""
     names = [n.lower() for n in _list(raw)]
-    if not names or names == ["none"]:
+    if not names or names in (["none"], ["false"]):
         return frozenset()
-    if "all" in names:
+    if "all" in names or names == ["true"]:
         return frozenset(DISCOVER_KINDS.values())
     out = set()
     for n in names:
@@ -531,6 +539,10 @@ class Config:
     ) -> tuple[int | None, int | None]:
         """(samplePercent, maxObjectsPerPrefix) from the first matching sampling rule."""
         return sampling_for(self.sampling, kind, name, tags)
+
+    def key_filter_for(self, kind: str, name: str, tags: dict[str, str] | None) -> KeyFilter:
+        """A bucket's key filter (`keyInclude` / `keyExclude`) from its sampling rules."""
+        return key_filter_for(self.sampling, kind, name, tags)
 
 
 def read_config(env: Mapping[str, str] | None = None) -> Config:

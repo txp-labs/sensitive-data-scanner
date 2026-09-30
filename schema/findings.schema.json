@@ -660,6 +660,12 @@
           "type": "integer",
           "minimum": 0
         },
+        "notAllowed": {
+          "description": "(1.10) Objects listed and not read because the store's own rules do not allow them, by reason: key_filter (the bucket's keyInclude / keyExclude in DISCOVER_SAMPLING). Counted, never read, never a finding.",
+          "type": "object",
+          "propertyNames": { "enum": ["key_filter"] },
+          "additionalProperties": { "type": "integer", "minimum": 1 }
+        },
         "rescanBacklog": {
           "description": "(1.10) Rescans still owed: objects whose recorded components are stale, and objects with no row met and not read. Later runs read them within their capped share.",
           "type": "integer",
@@ -716,7 +722,7 @@
               "maxObjectsPerPrefix": { "type": "integer", "minimum": 1 },
               "gaps": {
                 "type": "object",
-                "propertyNames": { "enum": ["kmsDenied", "unreadable", "unsupportedFormat", "disguised"] },
+                "propertyNames": { "enum": ["kmsDenied", "unreadable", "unsupportedFormat", "disguised", "notAllowed"] },
                 "additionalProperties": { "type": "integer", "minimum": 1 }
               },
               "backlog": { "const": true },

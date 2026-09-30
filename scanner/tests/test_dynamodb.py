@@ -9,6 +9,7 @@ import json
 import time
 from typing import Any
 
+import boto3
 import pytest
 from botocore.stub import ANY
 from jsonschema import Draft202012Validator
@@ -301,6 +302,77 @@ def test_a_sort_prefix_on_a_table_without_a_sort_key_is_an_error() -> None:
     assert result.coverage.error == "ValueError"
 
 
+def test_a_sort_prefix_without_a_partition_filters_a_whole_table_scan() -> None:
+    ddb = Ddb()
+    ddb.describe()
+    ddb.scan(
+        page([load_item("stugum-positive")]),
+        {
+            "TableName": TABLE,
+            "Limit": 100,
+            "FilterExpression": "begins_with(#sk, :sk)",
+            "ExpressionAttributeNames": {"#sk": "sk"},
+            "ExpressionAttributeValues": {":sk": {"S": "RUN#"}},
+        },
+    )
+    t = DynamoTarget(
+        table=TABLE,
+        sort_prefix="RUN#",
+        keypad=("stepResults[].observedDtmf",),
+        prompts=("stepResults[].observedText",),
+    )
+    result, store = run(source(ddb, t))
+    ddb.stub.assert_no_pending_responses()
+    assert result.coverage.error is None
+    assert set(by_path(document(store, result))) == {"stepResults[].observedDtmf"}
+
+
+def test_a_sort_prefix_without_a_partition_needs_a_sort_key() -> None:
+    ddb = Ddb()
+    ddb.describe(sort_key=False)
+    result, _ = run(source(ddb, DynamoTarget(table=TABLE, sort_prefix="RUN#")))
+    assert result.coverage.error == "ValueError"
+
+
+def test_a_scan_filtered_by_sort_prefix_reads_only_matching_items() -> None:
+    """Against moto: an item whose sort key does not begin with the prefix is never read,
+    even when it holds the same sensitive values."""
+    from moto import mock_aws
+
+    with mock_aws():
+        client = boto3.client("dynamodb", region_name="us-west-2")
+        client.create_table(
+            TableName=TABLE,
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        run_item = load_item("stugum-positive")
+        other = load_item("stugum-positive")
+        other["pk"] = {"S": "T#t_0000other"}
+        other["sk"] = {"S": "AUDIT#2026-09-29T15:00:00Z#r_0000positive"}
+        client.put_item(TableName=TABLE, Item=run_item)
+        client.put_item(TableName=TABLE, Item=other)
+        t = DynamoTarget(
+            table=TABLE,
+            sort_prefix="RUN#",
+            keypad=("stepResults[].observedDtmf",),
+            prompts=("stepResults[].observedText",),
+        )
+        src = DynamoDBSource(client, target=t, region="us-west-2", sleep=lambda s: None)
+        result, store = run(src)
+    assert result.coverage.error is None
+    assert (result.coverage.listed, result.coverage.eligible, result.coverage.scanned) == (2, 1, 1)
+    keys = {f["resource"]["key"]["sk"] for f in store.public()}
+    assert keys == {run_item["sk"]["S"]}
+
+
 # ------------------------------------------------------------------ keys
 
 
@@ -442,7 +514,8 @@ def test_config_reads_scan_dynamodb() -> None:
         "{}",
         '[{"table": "x"}]',
         '[{"table": "ok_table", "surprise": 1}]',
-        '[{"table": "ok_table", "sortPrefix": "R#"}]',
+        '[{"table": "ok_table", "sortPrefix": ""}]',
+        '[{"table": "ok_table", "sortPrefix": 3}]',
         '[{"table": "ok_table", "include": ["a[1]"]}]',
         '[{"table": "ok_table", "include": "steps"}]',
         '[{"table": "ok_table", "include": ["steps[kind]"]}]',

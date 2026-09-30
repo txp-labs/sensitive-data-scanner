@@ -860,6 +860,7 @@ One entry per source says what was, and was not, read:
 | `disguised` | Objects and archive entries whose name claims another kind than their bytes are, read by content (1.9; present when not zero). Counted whether or not anything was found in them |
 | `duplicates` | (1.10) Objects not read because their bytes are an indexed object's ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); their findings carry `duplicateOf` |
 | `duplicatesAcross` | (1.11) Of `duplicates`, the objects whose original is in another store of the same account, subscription or project, found by the account's shared fingerprint table ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)) |
+| `notAllowed` | (1.10) Objects listed and not read because the store's own rules do not allow them, by reason: `key_filter` (a bucket's `keyInclude` / `keyExclude`, [ARCHITECTURE.md](ARCHITECTURE.md#discovery)). Present when not zero |
 | `relisted` | (1.11) How this kind of store is listed changed (its `listing:<kind>` component): the run listed it again from the start. Nothing unchanged was read for it ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)) |
 | `indexed`, `rescanned`, `rescanBacklog` | (1.10) Present when the source keeps an object index: the objects the index holds after the run, the objects read again this run though unchanged at their source by `rescanReason`, and the rescans still owed (objects whose recorded components are stale, and objects with no row met and not read). Later runs read the backlog within `RESCAN_PERCENT` of each source's budget |
 
@@ -896,7 +897,7 @@ coverage gap is visible rather than silent.
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
-| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat`; and (1.9) `disguised`, the store's objects and entries named as another kind than they are (read, by content) |
+| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat`; and (1.9) `disguised`, the store's objects and entries named as another kind than they are (read, by content); and (1.10) `notAllowed`, objects a bucket's key filter left out (never read) |
 | `backlog` | More to read on the next run |
 | `logGroupClass`, `tableStatus`, `catalogObject` | Why an `unsupported` store is unsupported (`catalogObject`: `view`, `not_s3`, `resource_link`) |
 | `location` | A Glue table's S3 location, `bucket/prefix`, masked |

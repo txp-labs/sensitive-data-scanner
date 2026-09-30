@@ -132,9 +132,9 @@ One run:
 | `DYNAMODB_MAX_PAGES` | Pages per table per run (the page cap) | 200 |
 | `SCAN_MODE` | Who finds the data (#55): `scanner` (this scanner reads), `vendor` (Amazon Macie's own findings are imported, S3 only; nothing is read), or `both` (findings at the same object and class are linked) ([FINDINGS.md](FINDINGS.md#sources-and-modes-18)) | `scanner` |
 | `MACIE_LOOKBACK_DAYS` | How far back the first Macie import goes | 90 |
-| `DISCOVER` | Kinds of store to discover: `all`, or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)) | off |
+| `DISCOVER` | Kinds of store to discover: `all` (or `true`), or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)); `none` or `false` is off | off |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | Allow and deny rules for discovered stores, comma-separated | none |
-| `DISCOVER_SAMPLING` | Per-store sampling rules, as a JSON list | none |
+| `DISCOVER_SAMPLING` | Per-store sampling rules and a bucket's key filter (`keyInclude`, `keyExclude`), as a JSON list | none |
 | `S3_MAX_OBJECTS_PER_PREFIX` | Objects read per "directory" per pass (0: no cap) | 0 |
 | `DYNAMODB_SAMPLE_PERCENT` | Percent of a scanned table to read (one parallel-scan segment) | 100 |
 | `DYNAMODB_MAX_TABLE_BYTES` | A discovered table larger than this, after sampling, is skipped as `too_large` (0: no cap) | 10 GiB |
@@ -330,8 +330,18 @@ comma-separated rules:
 | `tag:pii` | Stores with that tag, any value |
 | `s3:tag:team=data*` | A tag rule for one kind |
 
-- A deny rule wins over an allow rule. With an allow list, only the stores it
-  matches are read.
+- A deny rule wins over an allow rule.
+- **An allow list restricts per kind.** The allow rules that apply to a store
+  are those of its own kind (`s3:calls-*`) and those of no kind
+  (`tag:pii-scan=yes`, `*-archive`). When any apply, only the stores they
+  match are read, and the rest of that kind are `not_allowed`. A kind that no
+  allow rule applies to is not restricted: `DISCOVER_ALLOW=s3:calls-*` narrows
+  S3 to the `calls-*` buckets and leaves DynamoDB tables, log groups and every
+  other kind as they were. A rule of no kind still applies to every kind, so
+  `tag:pii-scan=yes` alone allows only tagged stores of every kind. (Before
+  this, one allow rule of any kind made every other kind `not_allowed`.) To
+  narrow several kinds, give each its own rule (`s3:calls-*,dynamodb:orders`);
+  to leave a kind out entirely, use `DISCOVER` or a deny rule.
 - Tags are read only when a rule needs them (`s3:GetBucketTagging`,
   `logs:ListTagsForResource`, `dynamodb:ListTagsOfResource`). If a store's
   tags cannot be read and a deny-by-tag rule exists, the store is skipped as
@@ -359,6 +369,31 @@ whose `match` (a rule as above) fits a store sets its sampling:
   A table whose size times its sample is over `DYNAMODB_MAX_TABLE_BYTES` is
   skipped as `too_large`.
 
+**A bucket's key filter.** An entry of `DISCOVER_SAMPLING` can also name which
+object keys of a bucket are read, with `keyInclude` and `keyExclude` (each a
+glob or a list of globs):
+
+```json
+[
+  { "match": "s3:example-call-recordings", "keyInclude": "*transcript.json" },
+  { "match": "s3:media-*", "keyExclude": ["*.wav", "*.mp4"] }
+]
+```
+
+- A key is read when it matches a `keyInclude` glob (every key, when there is
+  none) and no `keyExclude` glob. A glob matches the whole key, and `*` also
+  matches `/`, so `*transcript.json` is "ends with `transcript.json`" anywhere
+  in the bucket.
+- A key the filter does not allow is listed, never read, and never a finding:
+  it is counted in the source's coverage as `notAllowed` by reason
+  (`{"key_filter": n}`), and in the store's `gaps` as `notAllowed`, so the
+  objects left out are visible, never silent.
+- The key filter comes from the first entry whose `match` fits the bucket and
+  that has `keyInclude` or `keyExclude`, independently of sampling (which comes
+  from the first entry that fits, as above). It applies to S3 buckets, named
+  (`SCAN_BUCKETS`, `SCAN_PREFIXES`, within the prefix) or discovered, and to
+  S3 directory buckets; a Glue table reads its own location's files, and the
+  other scanners (Azure, Google Cloud) do not apply it yet.
 **Budget and resume.** The run's budget is `MAX_ITEMS_PER_RUN` and
 `MAX_BYTES_PER_RUN`, with optional per-kind caps (`MAX_OBJECTS_PER_RUN`,
 `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN`) and a wall-time cap
@@ -1587,7 +1622,7 @@ Stugum's call-test runs for one test:
 |---|---|
 | `table` | The table name (required) |
 | `partition` | A partition key value: the read is a `Query` of that partition. Without it, the read is a `Scan` of the table |
-| `sortPrefix` | With `partition`: only items whose sort key begins with this (`begins_with`) |
+| `sortPrefix` | Only items whose sort key begins with this (`begins_with`). With `partition`, it is part of the `Query`'s key condition. Without it, the read is a whole-table `Scan` with `begins_with` as its filter: DynamoDB still reads (and bills for) every item, but returns only the matches, so the others are counted as listed and never scanned. The table needs a string sort key, or the read ends with an error |
 | `include` | Attribute paths to read. The request projects their top-level attributes and the key; the paths then pick the leaves. Empty: every attribute |
 | `exclude` | Attribute paths never read |
 | `keypad` | Paths that hold keypad (DTMF) entries |
@@ -1860,6 +1895,26 @@ management or delegated-admin account
    StackSet. If it holds data, deploy `scanner.yaml` there as an ordinary
    stack.
 
+**The template goes through S3.** `scanner.yaml` is larger than the 51,200
+bytes CloudFormation accepts inline (`--template-body`), so every deploy
+names it in S3: the StackSet by `ScannerTemplateUrl` (`--template-url`), and
+an ordinary stack by uploading it first. `aws cloudformation deploy` does
+the upload when given a bucket:
+
+```sh
+aws cloudformation deploy --stack-name sensitive-data-scanner \
+  --template-file deploy/scanner.yaml \
+  --s3-bucket example-templates-bucket \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides ImageUri=111122223333.dkr.ecr.us-east-1.amazonaws.com/sensitive-data-scanner@sha256:…
+```
+
+Or copy it with `aws s3 cp deploy/scanner.yaml s3://example-templates-bucket/`
+and pass `--template-url https://example-templates-bucket.s3.<region>.amazonaws.com/scanner.yaml`
+to `create-stack`. A test (`scanner/tests/test_iam_limits.py`) keeps the
+template under the 1 MB an S3 template may be, and this step documented while
+it is over 51,200 bytes.
+
 **Per account and region.**
 
 - `ImageUri` must name the region's own registry (`<account>.dkr.ecr.<region>.amazonaws.com/…`).
@@ -1870,8 +1925,14 @@ management or delegated-admin account
   usually set per account. Without it, RDS and Aurora are discovered and
   reported as `export_not_configured`.
 - IAM resources have no fixed names, so one account holds a stack in many
-  regions without collisions. The results bucket is
-  `sds-results-<account>-<region>`, and its policy refuses anything but TLS.
+  regions without collisions. The results bucket has no fixed name either:
+  CloudFormation names it from the stack (the `ResultsBucket` output gives
+  it), and its policy refuses anything but TLS. It is kept when the stack is
+  deleted (`DeletionPolicy: Retain`, the findings history). Because its name
+  is generated, a bucket kept from a failed first create never blocks the
+  next create; delete such a leftover bucket by hand when it is not wanted.
+  (Up to fb9097a the name was fixed, `sds-results-<account>-<region>`, and
+  a failed first create left a bucket that made every later create fail.)
 - There is no reserved concurrency: the results bucket's lock allows one run
   at a time, and reserving concurrency would fail in accounts still at the
   default Lambda quota.
@@ -1879,7 +1940,8 @@ management or delegated-admin account
 ### IAM per source
 
 The scanner's role (`ScannerRole` in `scanner.yaml`) holds exactly this,
-statement by statement. A test (`scanner/tests/test_template.py`) checks
+statement by statement, across its inline policy and the managed policies
+attached to it ([Policy sizes](#policy-sizes)). A test (`scanner/tests/test_template.py`) checks
 several things:
 - every allowed action is a read, or a write aimed at the scanner's own
   bucket, log group, bus or exports;
@@ -1953,7 +2015,7 @@ several things:
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And eight explicit denies, as defense in depth against any other policy the
-role might gain:
+role might gain (managed policies attached to the role, [Policy sizes](#policy-sizes)):
 
 | Deny | What |
 |---|---|
@@ -1981,6 +2043,59 @@ else. The schedule's role can invoke the function, nothing else.
 boundary. To keep the scanner out of a store for certain, add an explicit
 `Deny` for the scanner's role in that bucket's, table's or key's own
 policy; the store is then reported as `access_denied`.
+
+### Policy sizes
+
+IAM allows a role **10,240 characters of inline policy in all** (white space
+not counted), each **managed policy 6,144**, and **10 managed policies** per
+role by default. The role's statements come to about 22,900 characters with
+every opt-in on, and the explicit denies alone to about 7,800
+(`NoDataStoreWrites` about 6,100), so up to fb9097a IAM refused the role
+(`ServiceLimitExceeded`, "Maximum policy size of 10240 bytes exceeded") and
+the template could not deploy. Since then:
+
+| Policy | Kind | Holds |
+|---|---|---|
+| `scanner` | inline | the Allows every deployment has: its own bucket and logs, and discovery and reads of every store |
+| `DataStoreWriteDenyPolicy` | managed | `NoDataStoreWrites`, alone (it is most of a managed policy's 6,144) |
+| `GuardDenyPolicy` | managed | the other seven denies |
+| `StoreReadPolicy` | managed | the opt-in store reads and their keys, the config parameter, the bus and the Macie import, with the Parameter Store listing and `kms:ListAliases`, so it is never empty |
+| `BrokerImageGraphReadPolicy` | managed | brokers, images, graphs and archives: discovery and the opt-in reads |
+| `RdsExportPermissions`, `DynamoDBExportPermissions`, `DataApiPermissions`, `RedshiftReadPermissions` | managed, each only with its parameter | the export and SQL permissions |
+
+The denies are managed policies because they are the bulk; they and the
+opt-in Allows are attached by the role itself (`ManagedPolicyArns`), so the
+role never exists without its denies, and the function also `DependsOn`
+every policy the role always holds. Moving them changed no permission: every
+statement keeps its `Effect`, `Action`, `NotAction`, `Resource`, `Condition`
+and `Sid`, under the same parameter.
+
+`scanner/tests/test_iam_limits.py` holds this:
+- every statement the role can hold, with the conditions it comes under, is
+  exactly the reviewed snapshot (`scanner/tests/fixtures/scanner_role_statements.json`,
+  taken from fb9097a); a change to the role's permissions changes the
+  snapshot in the same pull request;
+- every role in every CloudFormation template (`scanner.yaml`,
+  `estate-stackset.yaml`, which holds none, and `saas/ecs.yaml`) fits the
+  limits with every opt-in on: the longest partition and region, generated
+  names at their longest, and three ARNs of realistic maximum length in each
+  list parameter (`DataApiClusterArns`, `DataApiSecretArns`, `MqSecretArns`).
+  With every opt-in on, the inline policy is about 4,600 characters, the
+  largest managed policy about 6,100, and 8 managed policies are attached;
+- each attached policy keeps a statement whatever the opt-ins are (IAM
+  refuses an empty policy).
+
+Longer lists than three ARNs could pass 6,144 in `DataApiPermissions` or
+`BrokerImageGraphReadPolicy`; the deploy then fails with the same
+`ServiceLimitExceeded`, and the fix is a wildcard ARN in place of the list.
+
+Azure and Google Cloud have no such problem, and tests say so. The Azure
+deployment makes no custom role definition, only built-in role assignments
+(`test_azure_template.py`), so a custom role's limits (5,000 actions, 2 MB)
+do not apply. Google Cloud's custom roles hold up to 3,000 permissions and 64
+KB of title, description and permission names each, and an organization up to
+300 of them; with every opt-in on, the deployment makes 5 roles, the largest
+far under both (`test_gcp_template.py`).
 
 ## Event-driven mode (phase 2, design only)
 
