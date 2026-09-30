@@ -2563,3 +2563,57 @@ def test_no_value_leaves_the_saas_scanner_slack(
         assert leaks(blob) == [], where
         for secret in (SSN_A, SSN_B, CARDS["visa"], BOT, "xoxb-"):
             assert secret not in blob, where
+
+
+def test_no_value_leaves_the_saas_scanner_atlassian(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Values in Jira summaries, descriptions, comments and attachments, Confluence pages,
+    comments and attachments, in project, space and file names and Atlassian's error
+    messages: none of them in the findings, the logs, the state or any repr; never the
+    service account's address or its token."""
+    from atlassian_fakes import API_TOKEN, EMAIL, NOW, Issue, Page, Site, settings
+    from office_fixtures import docx
+    from sensitive_data_core.state import FileState
+    from sensitive_data_saas.runner import run_scan
+
+    st = Site()
+    st.projects["PAY"] = [
+        Issue(
+            "PAY-1",
+            f"refund {CARDS['visa']}",
+            f"my card is {printed(CARDS['visa'])}",
+            comments=[f"ssn {dashed(SSN_B)}"],
+            attachments=[("10001", f"ssn-{SSN_A}.docx", docx([f"card {printed(CARDS['amex'])}"]))],
+        )
+    ]
+    st.projects["HR"] = [Issue("HR-1", "x", "y")]
+    st.forbidden_projects.add("HR")
+    st.spaces["ENG"] = [
+        Page(
+            "20001",
+            f"Runbook {SSN_A}",
+            f"<p>test card <b>{printed(CARDS['mastercard'])}</b></p>",
+            comments=[f"<p>ssn {dashed(SSN_A)}</p>"],
+            attachments=[("att1", f"{CARDS['jcb']}.csv", f"card\n{CARDS['jcb']}\n".encode())],
+        )
+    ]
+    s = settings(tmp_path)
+    state = FileState(str(tmp_path / "state.json"))
+    clients = st.clients(s)
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, _ = run_scan(s, clients, detector=detector, now=lambda: NOW, state=state)
+    out = capsys.readouterr().out
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert {"jira", "confluence"} <= {f["resource"]["service"] for f in doc["findings"]}
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        "state": (tmp_path / "state.json").read_text(),
+        "reprs": repr(s) + repr(clients) + repr(s.atlassian) + repr(clients.atlassian),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        for secret in (SSN_A, SSN_B, CARDS["visa"], EMAIL, API_TOKEN):
+            assert secret not in blob, where

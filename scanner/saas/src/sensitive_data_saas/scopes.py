@@ -39,6 +39,16 @@ SLACK_CHANNELS = ("channels:read", "groups:read", "channels:history", "groups:hi
 SLACK_FILES = ("files:read",)
 SLACK_DISCOVERY = ("discovery:read",)
 
+# Atlassian OAuth 2.0 (3LO) classic scopes (an API token has none: it reads what its
+# read-only service account may browse).
+ATLASSIAN_JIRA = ("read:jira-work",)
+ATLASSIAN_CONFLUENCE = (
+    "read:confluence-content.all",
+    "read:confluence-space.summary",
+    "readonly:content.attachment:confluence",
+)
+ATLASSIAN_OFFLINE = ("offline_access",)
+
 REQUESTED: dict[str, tuple[str, ...]] = {
     "m365": (
         *M365_PEOPLE,
@@ -52,4 +62,5 @@ REQUESTED: dict[str, tuple[str, ...]] = {
     ),
     "google_workspace": (*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE),
     "slack": (*SLACK_CHANNELS, *SLACK_FILES, *SLACK_DISCOVERY),
+    "atlassian": (*ATLASSIAN_JIRA, *ATLASSIAN_CONFLUENCE, *ATLASSIAN_OFFLINE),
 }

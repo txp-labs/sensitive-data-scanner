@@ -94,7 +94,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sensitive_data_scanner", "sensitive_data_core", "sensitive_data_db", "sensitive_data_azure", "sensitive_data_gcp", "sensitive_data_saas", "conftest", "synthetic", "aws_fixtures", "azure_fakes", "gcp_fakes", "saas_fakes", "gws_fakes", "slack_fakes", "office_fixtures"]
+known-first-party = ["sensitive_data_scanner", "sensitive_data_core", "sensitive_data_db", "sensitive_data_azure", "sensitive_data_gcp", "sensitive_data_saas", "conftest", "synthetic", "aws_fixtures", "azure_fakes", "gcp_fakes", "saas_fakes", "gws_fakes", "slack_fakes", "atlassian_fakes", "office_fixtures"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLC0415", "S608"]

@@ -2,7 +2,8 @@
 
 The SaaS scanner runs **in your own environment**: a container you schedule on
 ECS, Azure Container Apps, Cloud Run or Kubernetes, with **read-only** grants
-to your SaaS tenants: Microsoft 365, Google Workspace and Slack. It samples mail, files and messages, and sends **findings
+to your SaaS tenants: Microsoft 365, Google Workspace, Slack, and Atlassian
+(Jira and Confluence). It samples mail, files and messages, and sends **findings
 only, never values** ([FINDINGS.md](FINDINGS.md), schema 1.8). **Mermera's own
 servers never read your SaaS content for this**: they receive findings, the
 same as from the cloud scanners, so they stay out of what your content is in
@@ -356,6 +357,60 @@ say `customer_managed_key`, with its hash. Findings link to the channel in
 Slack (`https://app.slack.com/client/<team>/<channel>`); a direct message has
 no link.
 
+## Atlassian (Jira and Confluence Cloud)
+
+| Kind (`DISCOVER`) | Store | Read with | Default |
+|---|---|---|---|
+| `jira_project` (`jira`) | A Jira project: its issues' summaries, descriptions, comments and attachments | an API token of a read-only account, or OAuth `read:jira-work` | read |
+| `confluence_space` (`confluence`) | A Confluence space: its pages' and blog posts' titles, bodies, footer comments and attachments | an API token of a read-only account, or OAuth `read:confluence-content.all`, `read:confluence-space.summary`, `readonly:content.attachment:confluence` | read |
+
+### Signing in: read-only either way
+
+- **An API token** (the simplest): make a service account (a user) that can
+  only read: in Jira, the *Browse projects* permission (and nothing that
+  creates, edits, transitions or deletes) on the projects to scan; in
+  Confluence, *View* on the spaces to scan. Make an API token for it; put it in
+  a file (`ATLASSIAN_API_TOKEN_FILE`) and its address in `ATLASSIAN_EMAIL`. The
+  scanner sends them only to your site (`ATLASSIAN_SITE`, `acme.atlassian.net`)
+  as HTTP basic authentication. `ATLASSIAN_API_TOKEN` in the environment is
+  refused.
+- **OAuth 2.0 (3LO)**: an app in the Atlassian developer console with exactly
+  the classic scopes `read:jira-work`, `read:confluence-content.all`,
+  `read:confluence-space.summary`, `readonly:content.attachment:confluence` and
+  `offline_access` (for the refresh token), authorized once by a site admin.
+  Set `ATLASSIAN_OAUTH_CLIENT_ID`, `ATLASSIAN_OAUTH_CLIENT_SECRET_FILE` and
+  `ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE`. Calls go through
+  `api.atlassian.com/ex/{jira,confluence}/<cloud id>`. **Atlassian rotates the
+  refresh token on every use**: the scanner writes the new one back to the same
+  file, atomically, so that file must be on a writable volume; if it cannot, the
+  run stops (`RefreshTokenNotSaved`) rather than lose the grant.
+
+`JIRA_PROJECTS` and `CONFLUENCE_SPACES` (keys) narrow the scan; by default,
+every project and space the sign-in can browse. A named one it cannot see is
+`not_provisioned`; one it may not read, `access_denied`.
+
+### What is read
+
+- **Jira**: issues from `GET /rest/api/3/search/jql` in order of last update.
+  An issue's summary, description and comments (Atlassian Document Format,
+  read as text) are read together; each attachment with the core's readers
+  (ranged GETs of `/rest/api/3/attachment/content/<id>`; the redirect to
+  Atlassian's media host goes without the credential).
+- **Confluence**: pages and blog posts from a CQL search
+  (`/rest/api/content/search`, in `lastmodified` order), each with its body
+  (storage format, read as text), its footer comments and its attachments.
+- The first run reads every issue and page; later runs only those updated
+  since the last (less a day, since JQL and CQL dates are in the sign-in's time
+  zone), skipping what was read already. At most `ISSUES_MAX_PER_PROJECT` issues
+  or `PAGES_MAX_PER_SPACE` pages a run. Each run checks up to 50 items it holds
+  findings for and drops those of any that is gone.
+- Links: a Jira issue by its key (`https://<site>/browse/<KEY-1>`), a
+  Confluence page by its id.
+
+Atlassian encrypts its data with its own keys (`service_managed`); with
+**Atlassian Cloud BYOK** (Enterprise), set `ATLASSIAN_BYOK_KEY_ID`: findings
+say `customer_managed_key`, with its hash.
+
 ## Findings
 
 A SaaS document says `"platform": "saas"` and names its `site`
@@ -363,13 +418,13 @@ A SaaS document says `"platform": "saas"` and names its `site`
 
 | Field | What |
 |---|---|
-| `vendor` | `m365`, `google_workspace`, `slack` |
-| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive`; `channel`, `dm` |
-| `tenantHash` | SHA-256 of the tenant id, lower-case (Microsoft 365: the Entra tenant id; Google Workspace: the customer id; Slack: the Enterprise Grid organization's id, else the workspace's) |
+| `vendor` | `m365`, `google_workspace`, `slack`, `atlassian` |
+| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive`; `channel`, `dm`; `jira`, `confluence` |
+| `tenantHash` | SHA-256 of the tenant id, lower-case (Microsoft 365: the Entra tenant id; Google Workspace: the customer id; Slack: the Enterprise Grid organization's id, else the workspace's; Atlassian: the site's cloud id) |
 | `ownerHash` | SHA-256 of the mailbox's, OneDrive's or chat's owner (principal name, lower-case) |
 | `container`, `channel` | The site and library, or the team and channel, masked like keys |
 | `itemId`, `itemHash` | The vendor's id for the item (a message id, `message/attachment`, a drive item id), masked, and its SHA-256 |
-| `part` | `message` (a subject and body), `attachment`, `file`, `reply` |
+| `part` | `message` (a subject and body), `attachment`, `file`, `reply`, `issue` (a Jira issue's text and comments), `page` (a Confluence page's text and comments) |
 | `name` | A file's or attachment's name, masked like a key |
 | `column` | For a table file, the column |
 
@@ -378,7 +433,8 @@ store, `ownerHash`. A finding's `link` opens the item in the vendor's own web
 app, built from ids only, and is `null` when an id it carries had to be
 masked: a message in Outlook on the web (its owner or a delegate opens it), a
 SharePoint or OneDrive file by its unique id, a Teams channel, a Google Drive
-file by its id, a Slack channel.
+file by its id, a Slack channel, a Jira issue by its key, a Confluence page
+by its id.
 
 ## Settings
 
@@ -416,6 +472,12 @@ file by its id, a Slack channel.
 | `SLACK_TOKEN_FILE` | | The Slack app's token, in a file; set to scan Slack |
 | `SLACK_CHANNELS` | every channel the token lists | Channel ids to read |
 | `SLACK_EKM_KEY_ID` | | Your Slack EKM key's id |
+| `ATLASSIAN_SITE` | | Your Cloud site (`acme.atlassian.net`); set to scan Jira and Confluence |
+| `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN_FILE` | | A read-only account's address and API token (file) |
+| `ATLASSIAN_OAUTH_CLIENT_ID`, `ATLASSIAN_OAUTH_CLIENT_SECRET_FILE`, `ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE` | | Or OAuth 2.0 (3LO); the refresh token file must be writable |
+| `JIRA_PROJECTS`, `CONFLUENCE_SPACES` | every one the sign-in can browse | Project and space keys |
+| `ISSUES_MAX_PER_PROJECT`, `PAGES_MAX_PER_SPACE` | 500, 500 | Issues or pages read per project or space per run |
+| `ATLASSIAN_BYOK_KEY_ID` | | Your Atlassian Cloud BYOK key's id |
 
 At least one of `FINDINGS_HTTPS_URL` and `FINDINGS_FILE` is required.
 

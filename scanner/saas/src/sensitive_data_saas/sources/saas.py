@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sensitive_data_core.adapter import Adapter
 
+from .atlassian import ConfluenceAdapter, JiraAdapter
 from .base import Context
 from .gws_drive import DriveAdapter, SharedDriveAdapter
 from .gws_gmail import GmailAdapter
@@ -27,5 +28,7 @@ _ALL: list[Adapter[Context]] = [
     SharedDriveAdapter(),
     ChannelAdapter(),
     DiscoveryAdapter(),
+    JiraAdapter(),
+    ConfluenceAdapter(),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}

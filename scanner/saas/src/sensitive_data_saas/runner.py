@@ -238,6 +238,9 @@ def _scan(
         share = budget.share(len(sources) - i)
         log_event("source.start", source=source.target, kind=source.kind)
         result = source.run(cursors.get(source.id) or {}, share, detector, findings, started)
+        prune = getattr(source, "prune", None)
+        if callable(prune) and result.coverage.error is None:
+            prune(findings, share)
         budget.absorb(share)
         cursors[source.id] = result.cursor
         coverage.append(result.coverage)
