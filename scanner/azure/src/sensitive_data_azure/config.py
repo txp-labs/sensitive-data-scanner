@@ -18,6 +18,8 @@ reported by a fixed code, never by its value.
   for the identity.
 - `TABLE_MAX_ENTITIES`, `COSMOS_MAX_ITEMS`: entities sampled per table, items per
   Cosmos DB container.
+- `LOGS_LOOKBACK_DAYS`, `LOGS_MAX_ROWS_PER_TABLE`: Log Analytics' window and the
+  rows sampled per table.
 - `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
   `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
@@ -72,6 +74,7 @@ KINDS: tuple[str, ...] = (
     "azure_table",
     "azure_queue",
     "cosmosdb",
+    "log_analytics",
     *DATABASE_KINDS,
 )
 DEFAULT_KINDS: tuple[str, ...] = KINDS
@@ -90,6 +93,8 @@ KIND_ALIASES = {
     "queue": "azure_queue",
     "cosmos": "cosmosdb",
     "mongo": "cosmosdb_mongo",
+    "logs": "log_analytics",
+    "monitor": "log_analytics",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -157,6 +162,9 @@ class Settings:
     # Table Storage and Cosmos DB for NoSQL: entities or items sampled per table or container.
     table_max_entities: int = 1000
     cosmos_max_items: int = 1000
+    # Log Analytics: how far back a table's rows are sampled, and how many.
+    logs_lookback_days: int = 1
+    logs_max_rows: int = 500
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -312,4 +320,6 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         db_connect_seconds=_int(e.get("DB_CONNECT_TIMEOUT_SECONDS"), 15, 1, 300),
         table_max_entities=_int(e.get("TABLE_MAX_ENTITIES"), 1000, 1, 100_000),
         cosmos_max_items=_int(e.get("COSMOS_MAX_ITEMS"), 1000, 1, 100_000),
+        logs_lookback_days=_int(e.get("LOGS_LOOKBACK_DAYS"), 1, 1, 730),
+        logs_max_rows=_int(e.get("LOGS_MAX_ROWS_PER_TABLE"), 500, 1, 30_000),
     )

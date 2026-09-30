@@ -13,6 +13,7 @@ connection string or SAS is configured or made. The clients are:
 - `table`, `queue`: a storage account's Table and Queue services, with Storage
   Table Data Reader and Storage Queue Data Reader;
 - `cosmos`: a Cosmos DB for NoSQL account, with its Built-in Data Reader role;
+- `logs`: the Log Analytics query API, with Log Analytics Reader;
 - `driver`: a database driver module, imported only when a database of its
   kind is read.
 
@@ -152,6 +153,10 @@ class Clients:
             from azure.cosmos import CosmosClient  # noqa: PLC0415
 
             return CosmosClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
+        if service == "logs":
+            from azure.monitor.query import LogsQueryClient  # noqa: PLC0415
+
+            return LogsQueryClient(self.credential, user_agent=USER_AGENT)
         if service == "driver":
             # A database driver module (`mssql_python`, `psycopg`, `pymysql`), or None when
             # the image does not carry it (the store's `driver_missing` gap).

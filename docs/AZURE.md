@@ -42,6 +42,7 @@ and its own image (`docker build --target azure`).
 | `cosmosdb_mongo` (`mongo`) | A Cosmos DB for MongoDB vCore cluster, `cluster/*` | Reader; a Microsoft Entra ID user for the identity with a read-only role | discovered; read with `AZURE_DB_READ` |
 | `azure_table` (`table`) | A Table Storage table, `account/table` | Reader (the account's tables) and Storage Table Data Reader | read |
 | `azure_queue` (`queue`) | A Queue Storage queue, `account/queue` | Reader (the account's queues) and Storage Queue Data Reader, **peek only** | read |
+| `log_analytics` (`logs`, `monitor`) | A Log Analytics workspace (Azure Monitor logs) | Log Analytics Reader (KQL queries) and Reader (the tables' plans) | read |
 
 ### Blob Storage and ADLS Gen2
 
@@ -215,6 +216,29 @@ cannot narrow is refused rather than read.
   account's encryption covers that service with it (`keyType: Account`), and
   otherwise under a key Microsoft manages.
 
+### Azure Monitor logs (Log Analytics)
+
+- Every Log Analytics workspace in scope is read by default with **Log
+  Analytics Reader**, as the job's identity, through the Log Analytics query
+  API. Workspace-based Application Insights writes to its workspace, and is
+  read there. Diagnostic settings that archive to a storage account are read
+  as blobs.
+- `Usage` says which tables took data in the window (`LOGS_LOOKBACK_DAYS`,
+  1), so an empty table costs nothing. Each of those is sampled with one
+  query, `['<table>'] | where TimeGenerated > ago(Nd) | take n`
+  (`LOGS_MAX_ROWS_PER_TABLE`, 500). The table name is quoted so that nothing
+  in it is KQL. Rows are read by column, format `kql`.
+- A table on the **Basic or Auxiliary plan** is billed per query, so it is
+  not read. It is counted as skipped `billed_plan`; the plans come from
+  Resource Manager with Reader.
+- A workspace whose tables the budget does not finish resumes at its next
+  table. A workspace with query access from public networks off is
+  `networkRestricted`; when the job is not on its private link, it is
+  `network`.
+- **Encryption.** A workspace linked to a dedicated cluster with a Key Vault
+  key is `customer_managed_key` (hashed); otherwise Azure Monitor's own keys
+  apply, `service_managed`.
+
 ## Findings
 
 An Azure document says `"platform": "azure"` and names its `site`
@@ -258,6 +282,7 @@ to be masked.
 | `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's |
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `TABLE_MAX_ENTITIES`, `COSMOS_MAX_ITEMS` | 1000, 1000 | Entities sampled per table; items per Cosmos DB container |
+| `LOGS_LOOKBACK_DAYS`, `LOGS_MAX_ROWS_PER_TABLE` | 1, 500 | Log Analytics: the window sampled, and rows per table |
 
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
 `FINDINGS_EVENT_GRID_ENDPOINT` and `FINDINGS_FILE` is required.

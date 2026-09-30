@@ -1932,3 +1932,41 @@ def test_no_value_leaves_cosmos_tables_or_queues(capsys: pytest.CaptureFixture[s
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob and CARDS["mir"] not in blob, where
+
+
+def test_no_value_leaves_log_analytics(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in rows, and in workspace, table and column names: none of them leave."""
+    from types import SimpleNamespace
+
+    from azure_fakes import NOW, SUB_A, Graph, Tenant, settings
+    from sensitive_data_azure.runner import run_scan
+
+    ws = f"law-{SSN_A}"
+    table = f"T{CARDS['visa']}_CL"
+    ws_id = f"/subscriptions/{SUB_A}/resourceGroups/rg/providers/Microsoft.OperationalInsights"
+    ws_id += f"/workspaces/{ws}"
+
+    class Logs:
+        def query_workspace(self, workspace_id: str, query: str, **kwargs: Any) -> Any:
+            if query.startswith("Usage"):
+                return SimpleNamespace(
+                    tables=[SimpleNamespace(columns=["DataType"], rows=[[table]])]
+                )
+            cols = [f"ssn_{SSN_B}", "Message"]
+            rows = [[dashed(SSN_B), f"my card is {printed(CARDS['mir'])}"]]
+            return SimpleNamespace(tables=[SimpleNamespace(columns=cols, rows=rows)])
+
+    t = Tenant(
+        Graph({"operationalinsights/workspaces": [{"id": ws_id, "name": ws, "customerId": "x"}]})
+    )
+    clients = t.clients()
+    clients.made[("logs", "")] = Logs()
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(settings(DISCOVER="logs"), clients, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob, where
