@@ -1494,6 +1494,39 @@ def test_no_value_in_the_object_index(env: Env) -> None:
                 assert part not in text
 
 
+def test_no_value_in_the_shared_fingerprint_table(env: Env) -> None:
+    """The same bytes under value-bearing keys in two buckets: the account's shared
+    fingerprint table (#67) points from one to the other, and holds none of the values,
+    nor the account id, in any form."""
+    archive = "example-connect-archive"
+    s3 = env.clients.s3
+    s3.create_bucket(Bucket=archive, CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+    body = f"ssn,card\n{dashed(SSN_A)},{CARDS['visa']}\n".encode()
+    keys = [f"hr/{dashed(SSN_A)}.csv", f"cards/{CARDS['visa']}.csv"]
+    for key in keys:
+        env.put(key, body)
+        s3.put_object(Bucket=archive, Key=f"copy/{key}", Body=body)
+    doc = env.run(config(s3_targets=[("example-connect-data", ""), (archive, "")]))
+    assert doc is not None
+    assert sum(c.get("duplicatesAcross", 0) for c in doc["coverage"]) >= 1
+    listed = env.clients.s3.list_objects_v2(Bucket="example-scanner-results", Prefix="state/index/")
+    files = {
+        o["Key"]: env.clients.s3.get_object(Bucket="example-scanner-results", Key=o["Key"])[
+            "Body"
+        ].read()
+        for o in listed.get("Contents", [])
+    }
+    shared = {k: v for k, v in files.items() if "/fp-" in k}
+    assert any(k.endswith(".db.gz") for k in shared)  # the table is there, and searched
+    text = index_text(files)
+    assert leaks(text) == []
+    assert "123456789012" not in text  # the account is a keyed hash, as a source id is
+    for key in keys:
+        for part in key.replace(".", "/").split("/"):
+            if any(ch.isdigit() for ch in part) and len(part) >= 6:
+                assert part not in text
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

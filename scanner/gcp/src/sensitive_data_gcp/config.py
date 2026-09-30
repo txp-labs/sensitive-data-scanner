@@ -163,6 +163,10 @@ class Settings:
     object_index: bool = True
     index_max_objects: int = 10_000_000
     rescan_percent: int = 25  # the share of each source's budget rescans may use (0: none)
+    # (#67) A store whose last complete pass listed at least this many objects is named in
+    # the run summary as one a Storage Insights inventory report would spare a listing each
+    # pass (0: never).
+    gcs_inventory_min_objects: int = 1_000_000
     max_objects_per_run: int = 0
     state_bucket: str | None = None
     https_url: Secret | None = field(default=None, repr=False)
@@ -374,6 +378,9 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         not in ("off", "false", "0", "no"),
         index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
         rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
+        gcs_inventory_min_objects=_int(
+            e.get("GCS_INVENTORY_MIN_OBJECTS"), 1_000_000, 0, 10_000_000_000
+        ),
         max_objects_per_run=_int(e.get("MAX_OBJECTS_PER_RUN"), 0, 0, 10_000_000),
         state_bucket=state,
         https_url=https_url,

@@ -24,6 +24,14 @@ Each run checks up to 50 of the items it holds findings for, and drops the
 findings of one that is gone. Nothing is changed: no watch, no view, no
 transition.
 
+**Attachments are rescanned** (#67): each is recorded in the project's or
+space's object index by its stable id (`<issue key or page id>/<attachment
+id>`). When a reader that read one changed, a pass lists the attachments
+(Jira: the issues with attachments, `attachments IS NOT EMPTY`, their
+`attachment` field only; Confluence: a CQL search for `type = attachment`) and
+downloads only the stale ones, within `RESCAN_PERCENT`. Issue and page text is
+not read again.
+
 **Gaps.** A project or space the sign-in may not browse is `access_denied`
 (401, 403); one that is gone, `not_provisioned` (404).
 
@@ -34,7 +42,9 @@ BYOK, `ATLASSIAN_BYOK_KEY_ID` makes findings `customer_managed_key`, hashed.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import urllib.parse
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,14 +52,26 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, Link
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
 from ..atlassian import Atlassian
 from ..resources import saas_item, store_fields, tenant_hash
-from .base import Context, ItemReader, call_gap, html_text, parse_time, vendor_facts
+from . import atlassian_read as _read_path
+from .atlassian_read import VENDOR, download_url
+from .base import (
+    Attachment,
+    AttachmentPage,
+    AttachmentRescans,
+    Context,
+    ItemReader,
+    call_gap,
+    html_text,
+    parse_time,
+    vendor_facts,
+)
 
-VENDOR = "atlassian"
 SKEW = _dt.timedelta(days=1)
 PRUNE_LIMIT = 50
 ISSUE_FIELDS = "summary,description,comment,attachment,updated"
@@ -169,6 +191,7 @@ class _Atlassian:
     kind = ""
     service = ""
     id = ""
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(self, ctx: Context, c: Container, store_name: str, sample_percent: int) -> None:
         self.ctx = ctx
@@ -200,11 +223,25 @@ class _Atlassian:
         r = ItemReader(
             detector, self.ctx.settings, cov, now.isoformat(), dict(self.facts or {}), store, budget
         )
-        st: dict[str, Any] = dict(cursor)
+        op = r.index = ObjectPass(
+            self.indexes, self.id, self.kind, columnar=r.columnar, budget=budget
+        )
+        rescans = AttachmentRescans(r, cursor, prefix=f"{self.id}\n")
+        mine = ("indexPass", "indexed", "rescan", "full")
+        st: dict[str, Any] = {k: v for k, v in cursor.items() if k not in mine}
+        # The first pass reads every item, and every attachment of it.
+        first = not st.get("mark") or bool(cursor.get("full"))
         note: str | None = None
         done = False
         try:
             done = self.scan(st, r)
+            if done and first and op.index is not None:
+                rescans.indexed = True
+            if done and rescans.due():
+                # Then the attachments a changed component read, within the share (#67).
+                rescans.run(
+                    lambda at: self.attachment_pages(at, r), sample_percent=self.sample_percent
+                )
         except Exception as err:  # recorded by name on the source
             gap = gap_of(err)
             cov.error = None if gap == "throttled" else error_name(err)
@@ -214,9 +251,17 @@ class _Atlassian:
         cov.pass_complete = done and cov.error is None
         if not done and cov.error is None:
             cov.backlog = True
+        if first and not done:
+            st["full"] = True
+        rescans.save(st)
+        op.settle(cov)
         return SourceRun(cov, st, note=note)
 
     def scan(self, st: dict[str, Any], r: ItemReader) -> bool:
+        raise NotImplementedError
+
+    def attachment_pages(self, at: Any, r: ItemReader) -> Iterator[AttachmentPage]:
+        """The store's attachments, a page at a time, for a rescan pass (#67)."""
         raise NotImplementedError
 
     def room(self, r: ItemReader) -> bool:
@@ -241,45 +286,29 @@ class _Atlassian:
             k: v for k, v in seen.items() if (parse_time(v.split("|", 1)[0]) or mark) >= floor
         }
 
-    def attachments(
+    # The read path (`atlassian_read.py`, the `adapter:<kind>` component, #67).
+    attachments = _read_path.attachments
+    attachment = _read_path.attachment
+
+    def rescan_entry(
         self,
-        items: list[dict[str, Any]],
+        att: dict[str, Any],
         r: ItemReader,
         *,
-        url_of: Any,
+        url_of: Callable[[str], str],
         container_item: str,
         link: str | None,
-    ) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for att in items:
-            aid = str(att.get("id") or "")
-            name = str(att.get("filename") or att.get("title") or "attachment")
-            size = int(att.get("size") or att.get("fileSize") or 0)
-            if not aid:
-                continue
-            url = url_of(aid)
-
-            def fetch(start: int, end: int, url: str = url) -> bytes:
-                return self.api.download(url, start, end)
-
-            def resource_for(column: str | None, aid: str = aid, name: str = name) -> Any:
-                return saas_item(
-                    VENDOR,
-                    self.service,
-                    self.tenant,
-                    f"{container_item}/{aid}",
-                    "attachment",
-                    container=self.c.key,
-                    name=name,
-                    column=column,
-                )
-
-            try:
-                out.extend(r.file(name, size, fetch, resource_for=resource_for, link=link))
-            except Exception as err:  # one attachment must not stop the item
-                r.cov.unreadable += 1
-                log_event("item.unreadable", source=self.target, error=error_name(err))
-        return out
+    ) -> Attachment:
+        """An attachment met by a rescan pass (#67): sampled by its item, as it was read."""
+        return Attachment(
+            key=f"{container_item}/{att.get('id')}",
+            size=int(att.get("size") or att.get("fileSize") or 0),
+            sample=container_item,
+            location=f"{self.id}\n{container_item}",
+            read=functools.partial(
+                self.attachment, att, r, url_of=url_of, container_item=container_item, link=link
+            ),
+        )
 
     def prune(self, store: FindingStore, budget: Budget) -> int:
         """Drop the findings of items that are gone (a few a run)."""
@@ -364,9 +393,7 @@ class JiraSource(_Atlassian):
             ]
         )
         r.budget.take(len(text))
-        link = Link(
-            f"https://{self.api.site}/browse/{urllib.parse.quote(key)}", (self.api.site, key)
-        )
+        link = self.issue_link(key)
         resource = saas_item(VENDOR, self.service, self.tenant, key, "issue", container=self.c.key)
         findings = r.text(text, resource, link)
         base = self.api.base("jira")
@@ -380,6 +407,45 @@ class JiraSource(_Atlassian):
             )
         )
         r.store.replace_location(f"{self.id}\n{key}", findings)
+
+    def issue_link(self, key: str) -> Link:
+        return Link(
+            f"https://{self.api.site}/browse/{urllib.parse.quote(key)}", (self.api.site, key)
+        )
+
+    def attachment_pages(self, at: Any, r: ItemReader) -> Iterator[AttachmentPage]:
+        """The project's issues with attachments, their `attachment` field only (#67); `at`
+        is the page token where a pass stopped."""
+        base = self.api.base("jira")
+        jql = f'project = "{self.c.key}" AND attachments IS NOT EMPTY ORDER BY key ASC'
+        token = str(at) if isinstance(at, str) and at else None
+        while True:
+            params: dict[str, Any] = {"jql": jql, "fields": "attachment", "maxResults": "50"}
+            if token:
+                params["nextPageToken"] = token
+            page = self.api.get(f"{base}/rest/api/3/search/jql", params)
+            items: list[Attachment] = []
+            for issue in page.get("issues") or []:
+                key = str(issue.get("key") or "") if isinstance(issue, dict) else ""
+                fields = (
+                    issue.get("fields") if key and isinstance(issue.get("fields"), dict) else {}
+                )
+                for a in (fields or {}).get("attachment") or []:
+                    if isinstance(a, dict) and a.get("id"):
+                        items.append(
+                            self.rescan_entry(
+                                a,
+                                r,
+                                url_of=lambda aid: f"{base}/rest/api/3/attachment/content/{aid}",
+                                container_item=key,
+                                link=self.issue_link(key),
+                            )
+                        )
+            yield items, token
+            nxt = str(page.get("nextPageToken") or "") or None
+            if not nxt or page.get("isLast"):
+                return
+            token = nxt
 
 
 class ConfluenceAdapter:
@@ -515,3 +581,52 @@ class ConfluenceSource(_Atlassian):
             )
         )
         r.store.replace_location(f"{self.id}\n{pid}", findings)
+
+    def attachment_pages(self, at: Any, r: ItemReader) -> Iterator[AttachmentPage]:
+        """The space's attachments, from a CQL search (#67), each with its page; `at` is the
+        URL of the page of results where a pass stopped."""
+        base = self.api.base("confluence")
+        resume = str(at) if isinstance(at, str) and at else None
+        url: str | None = resume or f"{base}/rest/api/content/search"
+        params: dict[str, Any] | None = (
+            None
+            if resume
+            else {
+                "cql": f'space = "{self.c.key}" and type = attachment',
+                "limit": "100",
+                "expand": "container,extensions",
+            }
+        )
+        while url:
+            here = url if params is None else None  # the first page is asked for by its query
+            page = self.api.get(url, params)
+            items: list[Attachment] = []
+            for a in page.get("results") or []:
+                if not isinstance(a, dict) or not a.get("id"):
+                    continue
+                pid = str((a.get("container") or {}).get("id") or "")
+                if not pid:
+                    continue
+                ext = a.get("extensions") if isinstance(a.get("extensions"), dict) else {}
+                att = {
+                    "id": a.get("id"),
+                    "title": a.get("title"),
+                    "size": (ext or {}).get("fileSize"),
+                }
+                q = urllib.parse.urlencode({"pageId": pid})
+                link = Link(
+                    f"https://{self.api.site}/wiki/pages/viewpage.action?{q}", (self.api.site, pid)
+                )
+                items.append(
+                    self.rescan_entry(
+                        att,
+                        r,
+                        url_of=functools.partial(download_url, base, pid),
+                        container_item=pid,
+                        link=link,
+                    )
+                )
+            yield items, here
+            nxt = (page.get("_links") or {}).get("next")
+            url = next_url(self.api, str(nxt)) if nxt else None
+            params = None

@@ -678,6 +678,44 @@ bumps the minor version. Spec changes are listed under **Spec**.
   With `partition`, the read is still a `Query`.
 
 ### Changed
+- **SaaS attachments and files are rescanned when their reader changes**
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements): Exchange Online and Gmail
+  attachments, Slack channel files, and Jira and Confluence attachments are
+  recorded in their source's object index by stable ids. When a component
+  that read one changes (a reader, the spec), a pass lists the items with
+  attachments, metadata only, and downloads just the stale ones within
+  `RESCAN_PERCENT`, marking their findings `rescanReason`. Message bodies and
+  issue and page text are not read again. Teams file attachments are
+  SharePoint and OneDrive files, rescanned there. Slack calls `files.list`
+  (`files:read`, already granted) for it.
+- **A copy in another store of the same account is read once** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
+  each AWS account, Azure subscription and Google Cloud project keeps a shared
+  fingerprint table beside the object indexes (`fp-<hash>/`, HMACs only,
+  sharded, bounded by `INDEX_MAX_OBJECTS`). An object whose bytes are those of
+  an object in another store of the run, under a name of the same kind and
+  read with current components, is not read: its findings are that object's,
+  with `duplicateOf` naming the other store's finding. Coverage counts them in
+  `duplicatesAcross`. The original is always checked in its own index, so a
+  changed or deleted original is no original.
+- **Big DynamoDB tables with PITR are read by export, then only what changed**
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements): with `DYNAMODB_EXPORT`, a table below
+  `DYNAMODB_MAX_TABLE_BYTES` whose point-in-time recovery is on and that holds
+  at least `DYNAMODB_EXPORT_MIN_BYTES` (1 GiB) or `DYNAMODB_EXPORT_MIN_ITEMS`
+  (1,000,000) is read by a full export and then by incremental exports,
+  instead of a sampled `Scan` every pass. Smaller tables, and big ones without
+  PITR, keep the sampled `Scan` (never skipped for it). Exports stay within
+  `MAX_EXPORTS_PER_RUN`.
+- **The run summary names what an inventory would help, and recommends daily
+  S3 Inventory** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 4 and 9):
+  - A bucket read from a weekly S3 Inventory configuration says
+    `recommendation: s3_inventory_daily`, since a change can wait a week to
+    be seen. `s3_inventory` (no configuration) now means a daily one.
+  - Azure Blob Inventory and Cloud Storage's Storage Insights reports stay
+    designed and built on demand. A container whose last complete pass listed
+    at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000) says
+    `recommendation: blob_inventory`, and a bucket past
+    `GCS_INVENTORY_MIN_OBJECTS` says `recommendation: storage_insights`. The
+    scanner never configures one.
 - **Stored text: context goes to the value it labels, and no further**
   ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the
   benchmark). Four fixes to the readers; the spec is unchanged:
@@ -848,7 +886,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
-  `relisted` in coverage.
+  `relisted` and `duplicatesAcross` in coverage; `duplicateOf` may name a
+  finding of another store of the same account, subscription or project; the
+  store recommendations `s3_inventory_daily`, `blob_inventory` and
+  `storage_insights`.
 - Version **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
@@ -926,6 +967,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
     the EventBridge envelope, never from the body;
   - the residual risks: unsigned releases, GHCR hosting, no replay nonce, the
     ingest's rules outside this repository, and findings as a map.
+- Rescans ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 1, 7 and 8): `docs/ARCHITECTURE.md` says
+  why the one-time `unindexed` read after an upgrade is kept (within 25% of
+  the budget; it is how objects read before the index get the improved
+  detection), and that stores with no cheap change marker (OpenSearch,
+  Firestore, Cosmos DB, Bigtable, Redshift, Spanner, MongoDB, small DynamoDB
+  tables) keep sampling each pass, as accepted. `docs/DATABASES.md` and
+  `docs/AZURE.md` add `VIEW DATABASE STATE` (`VIEW DATABASE PERFORMANCE STATE`
+  on Azure SQL) to the SQL Server read-only user, so tables unchanged since
+  their last read are skipped; the user check already counts it as a read,
+  and a test now says so.
 - `README.md` rewritten to say what the scanner does, accurately: a capability
   matrix by platform (read by default, opt-in, reported as a gap), what it
   detects, scanner, vendor or both, how it stays safe, efficiency, how to

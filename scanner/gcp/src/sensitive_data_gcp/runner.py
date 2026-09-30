@@ -221,6 +221,8 @@ def _scan(
     for source in sources:
         if hasattr(source, "indexes"):
             source.indexes = indexes
+            if indexes is not None:
+                indexes.register(source.id)
     mode = settings.scan_mode
     importer = SdpImporter(ctx, mode) if mode != SCANNER else None
     if mode == VENDOR:

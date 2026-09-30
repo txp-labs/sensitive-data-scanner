@@ -90,6 +90,9 @@ class Found:
     report: Report | None = None
     configured: bool = False  # some configuration exists (usable or not)
     reason: str | None = None  # none | unreadable | stale | format | fields
+    # The report's configuration runs weekly: up to a week before a change is seen. The run
+    # summary recommends daily (#67).
+    weekly: bool = False
 
 
 def _configurations(s3: Any, bucket: str) -> list[dict[str, Any]]:
@@ -147,7 +150,8 @@ def find(s3: Any, bucket: str, prefix: str, now: _dt.datetime, *, columnar: bool
             continue
         if report is None or now - report.created > MAX_AGE:
             continue
-        return Found(report=report, configured=True)
+        weekly = str((c.get("Schedule") or {}).get("Frequency") or "") == "Weekly"
+        return Found(report=report, configured=True, weekly=weekly)
     return best
 
 

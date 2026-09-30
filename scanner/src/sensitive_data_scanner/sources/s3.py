@@ -110,6 +110,7 @@ class S3Source:
     use_inventory: bool = True
     inventory_min_objects: int = 1_000_000
     _recommend: bool = False
+    _weekly: bool | None = None  # the inventory read runs weekly (None: not asked this run)
     _idle: bool = False
     # The run's object indexes (#67), set by the runner; None records nothing.
     # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
@@ -237,7 +238,14 @@ class S3Source:
             # The latest report was read in full: nothing is listed until the next one.
             cov.pass_complete = True
             op.settle(cov)
-            return SourceRun(cov, dict(cursor), extra={"listedBy": "inventory"})
+            idle = dict(cursor)
+            extra_idle: dict[str, Any] = {"listedBy": "inventory"}
+            if self._weekly or (self._weekly is None and cursor.get("inventoryWeekly")):
+                extra_idle["recommendation"] = "s3_inventory_daily"
+                idle["inventoryWeekly"] = True
+            else:
+                idle.pop("inventoryWeekly", None)
+            return SourceRun(cov, idle, extra=extra_idle)
         try:
             if report is not None:
                 # A large bucket's objects from its inventory report (#67), not a listing.
@@ -316,7 +324,12 @@ class S3Source:
                 new_cursor["report"] = {**report.cursor(), "file": w.file, "row": w.row}
         if report is not None:
             extra["listedBy"] = "inventory"
-        if self._recommend or cursor.get("recommend"):
+            # A weekly inventory leaves changes unseen for up to a week: daily is recommended.
+            weekly = self._weekly if self._weekly is not None else cursor.get("inventoryWeekly")
+            if weekly:
+                extra["recommendation"] = "s3_inventory_daily"
+                new_cursor["inventoryWeekly"] = True
+        if report is None and (self._recommend or cursor.get("recommend")):
             extra["recommendation"] = "s3_inventory"
             new_cursor["recommend"] = True
         if self.max_per_prefix:
@@ -334,6 +347,7 @@ class S3Source:
         the latest was already read, the run is idle (`_idle`): no listing, no report."""
         self._recommend = False
         self._idle = False
+        self._weekly = None
         if isinstance(cursor.get("report"), dict):
             try:
                 return inventory.Report.of(cursor["report"])
@@ -344,6 +358,8 @@ class S3Source:
         if cursor.get("passStartedAt") or not (big and plain and self.use_inventory):
             return None
         found = inventory.find(self.client, self.bucket, self.prefix, now, columnar=self.columnar)
+        if found.report is not None:
+            self._weekly = found.weekly
         if found.report is None:
             # A bucket this large with no inventory to read: named, never configured here.
             self._recommend = found.reason == "none"

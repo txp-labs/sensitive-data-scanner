@@ -575,7 +575,7 @@
           "$ref": "#/$defs/rescanReason"
         },
         "duplicateOf": {
-          "description": "(1.10, #67) This object was not read: its bytes are those of another object of the same store (the same content fingerprint), read with the same components. This finding is that object's finding, as this object's own; duplicateOf is the other's finding id.",
+          "description": "(1.10, #67) This object was not read: its bytes are those of another object of the same store, or (1.11) of another store of the same account, subscription or project (the same content fingerprint), read with the same components. This finding is that object's finding, as this object's own; duplicateOf is the other's finding id.",
           "type": "string",
           "pattern": "^[0-9a-f]{32}$"
         },
@@ -671,6 +671,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "duplicatesAcross": {
+          "description": "(1.11, #67) Of duplicates, the objects whose bytes are an object of another store of the same account, subscription or project (found by the account's shared fingerprint table); their findings' duplicateOf names that store's finding.",
+          "type": "integer",
+          "minimum": 1
+        },
         "relisted": {
           "description": "(1.11, #67) How this kind of store is listed changed (its listing:<kind> component): this run listed it again from the start and read only what changed at the source or needed a rescan.",
           "const": true
@@ -742,8 +747,8 @@
               "const": "inventory"
             },
             "recommendation": {
-              "description": "(1.10, #67) A bucket large enough that an S3 Inventory configuration would spare it a listing each pass. The scanner never creates one (a write).",
-              "const": "s3_inventory"
+              "description": "(1.10, #67) s3_inventory: an S3 bucket large enough that a daily S3 Inventory configuration would spare it a listing each pass. (1.11) s3_inventory_daily: a bucket read from a weekly inventory, whose changes can wait a week to be seen; blob_inventory: an Azure container large enough that a Blob Inventory policy would spare it a listing; storage_insights: a Cloud Storage bucket large enough that a Storage Insights inventory report would. The scanner never creates or changes one (a write), and reads only S3's.",
+              "enum": ["s3_inventory", "s3_inventory_daily", "blob_inventory", "storage_insights"]
             },
               "pitr": { "const": false },
               "deployment": {

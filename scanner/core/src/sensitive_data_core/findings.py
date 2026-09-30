@@ -305,6 +305,9 @@ class Coverage:
     # (1.11, #67) How the store is listed changed: this run listed it again from the start,
     # reading only what changed.
     relisted: bool = False
+    # (1.11, #67) Of `duplicates`, the copies of an object in another store of the same
+    # account, subscription or project.
+    duplicates_across: int = 0
 
     def as_json(self) -> dict[str, Any]:
         d = asdict(self)
@@ -339,6 +342,8 @@ class Coverage:
             out["rescanned"] = dict(sorted(self.rescanned.items()))
             out["rescanBacklog"] = self.rescan_backlog
             out["duplicates"] = self.duplicates
+            if self.duplicates_across:
+                out["duplicatesAcross"] = self.duplicates_across
         if self.relisted:
             out["relisted"] = True
         return out
