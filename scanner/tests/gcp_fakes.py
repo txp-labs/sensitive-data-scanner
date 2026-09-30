@@ -121,7 +121,19 @@ def project_row(project: str, number: str) -> dict[str, Any]:
     }
 
 
-Handler = Callable[[str, str, dict[str, Any], Any, bytes | None, dict[str, str]], Resp]
+@dataclass
+class Req:
+    """One call the scanner made: what a route's handler is given."""
+
+    method: str
+    url: str
+    query: dict[str, Any]
+    body: Any = None
+    data: bytes | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+Handler = Callable[[Req], Resp]
 
 
 class Cloud:
@@ -171,7 +183,7 @@ class Cloud:
         self.requests.append((method, url, query))
         for m, pattern, handler in self.routes:
             if m == method and pattern.search(url):
-                return handler(method, url, query, json, data, headers or {})
+                return handler(Req(method, url, query, json, data, headers or {}))
         parts = urllib.parse.urlsplit(url)
         path = parts.path
         if parts.hostname == "cloudasset.googleapis.com":
@@ -293,3 +305,101 @@ def settings(**env: str) -> Settings:
         "STATE_BUCKET": f"gs://{STATE_BUCKET}",
     }
     return read_settings({**base, **env})
+
+
+# ------------------------------------------------------------------ BigQuery
+
+
+def dataset_row(project: str, dataset: str, number: str = PROJECT_NUMBER) -> dict[str, Any]:
+    return {
+        "name": f"//bigquery.googleapis.com/projects/{project}/datasets/{dataset}",
+        "assetType": "bigquery.googleapis.com/Dataset",
+        "project": f"projects/{number}",
+        "displayName": dataset,
+    }
+
+
+def bq_cells(fields: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any]:
+    """A row as tabledata.list sends it: `{"f": [{"v": ...}]}`, strings for scalars."""
+
+    def one(f: dict[str, Any], v: Any) -> Any:
+        if v is None:
+            return None
+        if f.get("mode") == "REPEATED":
+            return [{"v": one({**f, "mode": "NULLABLE"}, x)} for x in v]
+        if f.get("type") == "RECORD":
+            return bq_cells(f["fields"], v)
+        return str(v)
+
+    return {"f": [{"v": one(f, row.get(f["name"]))} for f in fields]}
+
+
+@dataclass
+class BqTable:
+    fields: list[dict[str, Any]]
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    type: str = "TABLE"
+    kms: str | None = None
+    policies: list[dict[str, Any]] = field(default_factory=list)
+    modified: str = "1759100000000"
+    fail: Resp | None = None
+
+
+@dataclass
+class BqDataset:
+    tables: dict[str, BqTable] = field(default_factory=dict)
+    access: list[dict[str, Any]] = field(default_factory=list)
+    kms: str | None = None
+    fail: Resp | None = None
+
+
+class BigQuery:
+    """BigQuery's REST API for `Cloud`: datasets, tables, row access policies, tabledata."""
+
+    def __init__(self, cloud: Cloud) -> None:
+        self.datasets: dict[tuple[str, str], BqDataset] = {}
+        self.data_calls: list[dict[str, Any]] = []
+        cloud.route("GET", r"^https://bigquery\.googleapis\.com/", self.answer)
+
+    def answer(self, req: Req) -> Resp:
+        query = req.query
+        path = urllib.parse.urlsplit(req.url).path.removeprefix("/bigquery/v2/")
+        parts = [urllib.parse.unquote(p) for p in path.split("/")]
+        ds = self.datasets.get((parts[1], parts[3])) if len(parts) >= 4 else None
+        if ds is None:
+            return error(404, reason="notFound", message=f"Not found: {path}")
+        if ds.fail is not None:
+            return ds.fail
+        if len(parts) == 4:
+            meta: dict[str, Any] = {"access": ds.access}
+            if ds.kms:
+                meta["defaultEncryptionConfiguration"] = {"kmsKeyName": ds.kms}
+            return Resp(200, meta)
+        if len(parts) == 5:
+            tables = [
+                {"tableReference": {"tableId": t}, "type": tb.type}
+                for t, tb in sorted(ds.tables.items())
+            ]
+            return Resp(200, {"tables": tables})
+        tb = ds.tables.get(parts[5])
+        if tb is None:
+            return error(404, reason="notFound", message=f"Not found: {parts[5]}")
+        if tb.fail is not None:
+            return tb.fail
+        if len(parts) == 6:
+            meta = {
+                "schema": {"fields": tb.fields},
+                "type": tb.type,
+                "lastModifiedTime": tb.modified,
+                "numBytes": "2048",
+            }
+            if tb.kms:
+                meta["encryptionConfiguration"] = {"kmsKeyName": tb.kms}
+            return Resp(200, meta)
+        if parts[6] == "rowAccessPolicies":
+            return Resp(200, {"rowAccessPolicies": tb.policies} if tb.policies else {})
+        self.data_calls.append(query)
+        selected = str(query.get("selectedFields") or "")
+        fields = [f for f in tb.fields if not selected or f["name"] in selected.split(",")]
+        n = int(query.get("maxResults") or 100)
+        return Resp(200, {"rows": [bq_cells(fields, r) for r in tb.rows[:n]]})

@@ -122,6 +122,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
     lock is created only if absent), the core's signed HTTPS sink, Pub/Sub
     as the service account (optional), or a file.
     `python -m sensitive_data_gcp check` lists without reading or sending.
+- **Google Cloud, step 2: BigQuery** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 5):
+  every table of every dataset (`bigquery`, `project.dataset.table`), read by
+  default with `tabledata.list`: the first `BIGQUERY_MAX_ROWS` rows, by column,
+  with no query and no bytes billed (preferred over `TABLESAMPLE`, which bills
+  bytes and needs `bigquery.jobs.create`); a table unchanged since its last
+  read is not read again. Never escalating: views are never read
+  (`unsupported` with `tableType`), authorized views are `authorized_view`
+  (new reason), tables with row-level access policies are `row_level_policy`
+  (new reason), policy-tagged columns are left out (`protectedColumns`), and
+  external tables are `unsupported`. `atRestEncryption` from the table's or
+  its dataset's Cloud KMS key.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -307,8 +318,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `schemaVersion` is now **1.7**, additive: the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and
   `resourceNameHash` (the SHA-256 of the store's full resource name) on
-  Google Cloud findings and stores, the `gcs` kind, the `requester_pays`
-  reason and Google Cloud console links.
+  Google Cloud findings and stores, the `gcs` and `bigquery` kinds, the
+  `requester_pays`, `row_level_policy` and `authorized_view` reasons, the
+  store fields `tableType` and `protectedColumns`, and Google Cloud console
+  links.
 - Version **1.6**, additive: the Azure scanner's
   `platform: azure`, the `blob_object` resource, `subscription`,
   `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
