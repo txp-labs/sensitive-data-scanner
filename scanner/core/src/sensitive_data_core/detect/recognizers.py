@@ -96,6 +96,7 @@ def card_grouping(raw: str) -> str:
     return "odd"
 
 
+CARD_ENTITY = CLASS_TO_ENTITY["card"]
 _RUN_BEFORE = re.compile(r"[0-9][ -]?\Z")
 _RUN_AFTER = re.compile(r"^[ -]?[0-9]{4}")
 
@@ -131,6 +132,27 @@ class SpecCreditCardRecognizer(CreditCardRecognizer):
         # Judged in analyze(), which sees the span; None keeps the pattern's score.
         return None  # type: ignore[return-value]
 
+    def _card_head(
+        self, text: str, start: int, end: int
+    ) -> tuple[RecognizerResult, str, str] | None:
+        """The match if it is a card, or else its longest head, cut at a separator, that
+        is (#75). Like the spec's shorter heads: in "4539 1488 0343 6467 04/29" the weak
+        pattern takes the expiry's month as two more digits, and Presidio has already
+        dropped the 16-digit match inside it, so the head is the card."""
+        raw = text[start:end]
+        cuts = [len(raw), *(m.start() for m in reversed(list(re.finditer(r"[ -]", raw))))]
+        for cut in cuts:
+            part = raw[:cut]
+            digits = _digits(part)
+            if len(digits) < 13:
+                return None
+            grouping = card_grouping(part)
+            if grouping == "odd":
+                continue
+            if luhn_valid(digits) and card_brand(digits, self.spec.brands):
+                return RecognizerResult(CARD_ENTITY, start, start + cut, 0.0), digits, grouping
+        return None
+
     def analyze(
         self,
         text: str,
@@ -140,16 +162,13 @@ class SpecCreditCardRecognizer(CreditCardRecognizer):
     ) -> list[RecognizerResult]:
         card = self.spec.classes["card"]
         out: list[RecognizerResult] = []
-        for r in super().analyze(text, entities, nlp_artifacts, regex_flags):
-            if in_digit_run(text, r.start, r.end):
+        for found in super().analyze(text, entities, nlp_artifacts, regex_flags):
+            if in_digit_run(text, found.start, found.end):
                 continue
-            raw = text[r.start : r.end]
-            grouping = card_grouping(raw)
-            if grouping == "odd":
+            head = self._card_head(text, found.start, found.end)
+            if head is None:
                 continue
-            digits = _digits(raw)
-            if not (luhn_valid(digits) and card_brand(digits, self.spec.brands)):
-                continue
+            r, digits, grouping = head
             key = value_key(digits)
             if is_test_card(digits, card):
                 out.append(
