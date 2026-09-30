@@ -655,6 +655,22 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). The store now says its weakest parameter's
   encryption. A `String` or `StringList` parameter, and its findings, are
   `none` (they were `unknown`). A `SecureString` goes by its KMS key.
+- **Large stores starved when many stores share a run**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
+  account). Each of about 750 sources got an even share of what was left,
+  once: about a second and 26 items. The biggest DynamoDB table read 34 items
+  a run, and 139 of 276 log groups were complete after 3 runs. The budget is
+  now served by a work-conserving round robin (`sensitive_data_core.schedule`),
+  in rotation order:
+  - Each slice is at least a fiftieth of the run's items, bytes and time.
+  - Small stores finish, and their unused time goes back to the pool.
+  - A store that spent its slice and still has more is served again in the
+    next round.
+  - What a run cannot reach, or leaves behind, is where the next run starts.
+  The AWS, Azure, Google Cloud and SaaS runners all use it (the databases
+  runner, with few stores, keeps its even share). The run summary's new
+  `backlogByKind` counts the stores still behind, by kind. New log event
+  `run.scheduled`.
 - **A source dropped for a run lost its findings for good when it came back**
   ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), found in the rescan refinements). A source
   missing from one run (taken out of the configuration, not discovered, or
@@ -960,7 +976,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
-  `relisted` and `duplicatesAcross` in coverage; `duplicateOf` may name a
+  `relisted` and `duplicatesAcross` in coverage; (#94) `backlogByKind` in the
+  run summary; `duplicateOf` may name a
   finding of another store of the same account, subscription or project; the
   store recommendations `s3_inventory_daily`, `blob_inventory` and
   `storage_insights`.

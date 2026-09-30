@@ -46,6 +46,7 @@ from sensitive_data_core.index import (
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
+from sensitive_data_core.schedule import run_sources
 
 from . import __version__
 from .clients import Clients
@@ -261,39 +262,17 @@ def _scan(
             cursors.get(importer.id) or {}, budget, findings, started
         )
         vendor_coverage.append(imported)
-    left = sum(1 for s in sources if s.kind in OBJECT_KINDS)
-    coverage: list[Coverage] = []
-    by_source: dict[str, Coverage] = {}
-    notes: dict[str, str | None] = {}
-    extras: dict[str, dict[str, Any]] = {}
-    deferred: str | None = None
-    for i, source in enumerate(sources):
-        capped = objects if source.kind in OBJECT_KINDS else None
-        ways = left
-        if source.kind in OBJECT_KINDS:
-            left = max(0, left - 1)
-        if budget.exhausted() or (capped is not None and capped.exhausted()):
-            deferred = deferred or source.id
-            log_event("source.deferred", source=source.target, kind=source.kind)
-            continue
-        share = budget.share(len(sources) - i)
-        if capped is not None:
-            share.max_items = min(share.max_items, capped.share(ways).max_items)
+    caps = dict.fromkeys(OBJECT_KINDS, objects) if objects is not None else {}
+
+    def serve(source: Any, share: Budget) -> SourceRun:
         log_event("source.start", source=source.target, kind=source.kind)
         cursor = relist(source, cursors.get(source.id) or {}, indexes)
-        result = source.run(cursor, share, detector, findings, started)
+        result: SourceRun = source.run(cursor, share, detector, findings, started)
         listed_with(source, result, indexes, cursor)
         prune = getattr(source, "prune", None)
         if callable(prune) and result.coverage.error is None:
             prune(findings, share)
-        budget.absorb(share)
-        if capped is not None:
-            capped.absorb(share)
         cursors[source.id] = result.cursor
-        coverage.append(result.coverage)
-        by_source[source.id] = result.coverage
-        notes[source.id] = result.note
-        extras[source.id] = result.extra
         log_event(
             "source.done",
             source=source.target,
@@ -301,6 +280,16 @@ def _scan(
             passComplete=result.coverage.pass_complete,
             error=result.coverage.error,
         )
+        return result
+
+    # A work-conserving round robin over the sources, in rotation order (#94).
+    served = run_sources(sources, budget, serve, caps=caps)
+    coverage: list[Coverage] = [r.coverage for r in served.results.values()]
+    by_source: dict[str, Coverage] = {i: r.coverage for i, r in served.results.items()}
+    notes: dict[str, str | None] = {i: r.note for i, r in served.results.items()}
+    extras: dict[str, dict[str, Any]] = {i: r.extra for i, r in served.results.items()}
+    deferred = served.rotation
+    log_event("run.scheduled", rounds=served.rounds, served=served.served)
     for st in stores:
         covs = [by_source[i] for i in st.source_ids if i in by_source]
         if covs:

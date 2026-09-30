@@ -12,7 +12,8 @@ kinds that discovery lists and the allow and deny lists let through
 - `state/lock.json`: one run at a time.
 
 The run's budget (items, bytes, wall time, and optional per-kind caps on S3
-objects, log events and table items) is shared among the sources. Stores
+objects, log events and table items) is served to the sources by a
+work-conserving round robin (`sensitive_data_core.schedule`, #94). Stores
 the budget does not reach are reported as deferred, and the next run starts
 with them.
 
@@ -46,6 +47,7 @@ from sensitive_data_core.index import (
 )
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
+from sensitive_data_core.schedule import run_sources
 
 from .config import Config, DynamoTarget
 from .discovery import discover
@@ -548,35 +550,15 @@ def run_scan(
         kinds = {
             k: Budget(n, config.max_bytes_per_run, deadline, clock) for k, n in caps.items() if n
         }
-        left = {k: sum(1 for s in sources if s.kind == k) for k in caps}
-        coverage: list[Coverage] = []
-        by_source: dict[str, Coverage] = {}
-        notes: dict[str, tuple[str | None, dict[str, Any]]] = {}
-        deferred: str | None = None
-        for i, source in enumerate(sources):
-            kind_budget = kinds.get(source.kind)
-            ways = left.get(source.kind, 1)
-            left[source.kind] = max(0, ways - 1)
-            if budget.exhausted() or (kind_budget is not None and kind_budget.exhausted()):
-                deferred = deferred or source.id
-                log_event("source.deferred", source=source.target, kind=source.kind)
-                continue
-            share = budget.share(len(sources) - i)
-            if kind_budget is not None:
-                share.max_items = min(share.max_items, kind_budget.share(ways).max_items)
+
+        def serve(source: Any, share: Budget) -> SourceRun:
             log_event("source.start", source=source.target, kind=source.kind)
             cursor = relist(source, cursors.get(source.id) or {}, indexes)
-            result = source.run(cursor, share, detector, store, started)
+            result: SourceRun = source.run(cursor, share, detector, store, started)
             listed_with(source, result, indexes, cursor)
             if isinstance(source, S3Source) and result.coverage.error is None:
                 source.prune(store, share)
-            budget.absorb(share)
-            if kind_budget is not None:
-                kind_budget.absorb(share)
             cursors[source.id] = result.cursor
-            coverage.append(result.coverage)
-            by_source[source.id] = result.coverage
-            notes[source.id] = (result.note, result.extra)
             log_event(
                 "source.done",
                 source=source.target,
@@ -584,6 +566,16 @@ def run_scan(
                 passComplete=result.coverage.pass_complete,
                 error=result.coverage.error,
             )
+            return result
+
+        # A work-conserving round robin over the sources, in rotation order (#94).
+        plan_run = run_sources(sources, budget, serve, caps=kinds)
+        coverage: list[Coverage] = [r.coverage for r in plan_run.results.values()]
+        by_source: dict[str, Coverage] = {i: r.coverage for i, r in plan_run.results.items()}
+        notes: dict[str, tuple[str | None, dict[str, Any]]] = {
+            i: (r.note, r.extra) for i, r in plan_run.results.items()
+        }
+        log_event("run.scheduled", rounds=plan_run.rounds, served=plan_run.served)
         for st in stores:
             covs = [by_source[i] for i in st.source_ids if i in by_source]
             if covs:
@@ -619,7 +611,7 @@ def run_scan(
             "cursors": cursors,
             "findings": list(store.items.values()),
             "lastRunAt": started.isoformat(),
-            "rotation": deferred,
+            "rotation": plan_run.rotation,
         }
         if indexes is not None:
             indexes.save()
