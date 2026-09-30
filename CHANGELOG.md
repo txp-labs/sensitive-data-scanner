@@ -545,6 +545,32 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - ECR does not download a layer it has read again for a newer image.
   - A head or image already read is read again only for the files or layers
     a changed component could read differently.
+- **Tables unchanged since their last read are skipped; DynamoDB reads only
+  what changed** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 3):
+  - From the second pass on, the core's sampled SQL pass asks each engine
+    what changed, with one catalog query and never data. A table whose marker
+    has not moved is not sampled, and its findings stay. The markers:
+    - PostgreSQL: `pg_stat_user_tables`, on a primary only;
+    - MySQL and MariaDB: `UPDATE_TIME`;
+    - SQL Server: `sys.dm_db_index_usage_stats.last_user_update`;
+    - Oracle: `ALL_TAB_MODIFICATIONS` and `LAST_ANALYZED`;
+    - Snowflake and Databricks: `last_altered`;
+    - Redshift, Spanner and MongoDB have none and are sampled as before.
+  - Every table is sampled at least every 7 days. A catalog the user may not
+    read means no markers.
+  - This covers the databases runner, the RDS Data API, and Azure's and Google
+    Cloud's databases. The databases runner now carries findings between runs
+    beside its `STATE_LOCATION` (`findings.json.gz`), and its state document
+    gains `indexSalt`.
+  - The rescan rules apply to tables (the `sql` reader, the adapter, the
+    spec), and to BigQuery tables, which were already skipped when
+    unchanged.
+  - DynamoDB tables read by export use incremental exports after the first
+    full one (`DYNAMODB_INCREMENTAL`, on: `INCREMENTAL_EXPORT`, `NEW_IMAGE`,
+    at most 24 hours a window). They read only the items written since, and
+    drop the findings of deleted items. A full export comes again only as a
+    rescan, or after the point-in-time recovery window. The run summary
+    names an incremental export (`exportType`).
 
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
@@ -671,7 +697,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `schemaVersion` is now **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
-  a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage.
+  a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage; the
+  store field `exportType`.
 - Version **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
   `declaredType` and `detectedType` on a finding; `archivePath`,
   `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,
@@ -730,6 +757,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/DATABASES.md` (Tables unchanged since the last read), `docs/ARCHITECTURE.md`
+  (DynamoDB incremental exports, tables in How rescans are chosen), `docs/AZURE.md`
+  and `docs/GCP.md` ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 3).
 - `docs/ARCHITECTURE.md` (How rescans are chosen), `docs/FINDINGS.md`
   (Rescans, schema 1.10), and `RESCAN_PERCENT` in `docs/AZURE.md`,
   `docs/GCP.md` and `docs/SAAS.md` ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).

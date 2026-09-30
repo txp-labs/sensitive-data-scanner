@@ -5,10 +5,12 @@ Without it, each run samples afresh in the configured order, and a database the 
 never reaches is `deferred` every time. With it, the runner reads, before the run, and
 writes, after it, a small JSON document:
 
-    {"version": 1, "site": "dc-1", "rotation": "<the first database deferred>"}
+    {"version": 1, "site": "dc-1", "rotation": "<the first database deferred>",
+     "indexSalt": "<random hex>"}
 
 It holds no value, no connection string and no finding: only the name the customer gave
-a database. It can live in three places:
+a database, and the salt of the table index (#67), which lives beside it with the
+findings carried between runs (`<location>.index/`). It can live in three places:
 
 - **a local path** (`/state/sds-state.json`, or `file:///state/sds-state.json`), on a
   mounted volume, written atomically;
@@ -46,6 +48,7 @@ __all__ = [
     "S3State",
     "StateStore",
     "load_rotation",
+    "load_state",
     "save_rotation",
     "state_for",
 ]
@@ -94,25 +97,35 @@ def state_for(settings: Settings) -> StateStore | None:
     return FileState(urllib.parse.urlsplit(raw).path if raw.startswith("file://") else raw)
 
 
-def load_rotation(store: StateStore | None, site: str) -> str | None:
-    """The database the previous run deferred first, if the state is this site's."""
+def load_state(store: StateStore | None, site: str) -> dict[str, Any]:
+    """The previous run's document, if it is this site's; else an empty one."""
     if store is None:
-        return None
+        return {}
     try:
         state = store.load()
     except Exception as err:  # no state: the run goes on from the start
         log_event("source.failed", source="state", error=error_name(err))
-        return None
+        return {}
     if not state or state.get("version") != STATE_VERSION or state.get("site") != site:
-        return None
-    rotation = state.get("rotation")
+        return {}
+    return state
+
+
+def load_rotation(store: StateStore | None, site: str) -> str | None:
+    """The database the previous run deferred first, if the state is this site's."""
+    rotation = load_state(store, site).get("rotation")
     return rotation if isinstance(rotation, str) else None
 
 
-def save_rotation(store: StateStore | None, site: str, rotation: str | None) -> None:
+def save_rotation(
+    store: StateStore | None, site: str, rotation: str | None, salt: str | None = None
+) -> None:
     if store is None:
         return
+    doc: dict[str, Any] = {"version": STATE_VERSION, "site": site, "rotation": rotation}
+    if salt is not None:
+        doc["indexSalt"] = salt
     try:
-        store.save({"version": STATE_VERSION, "site": site, "rotation": rotation})
+        store.save(doc)
     except Exception as err:  # the findings still go out; the next run starts from the top
         log_event("source.failed", source="state", error=error_name(err))

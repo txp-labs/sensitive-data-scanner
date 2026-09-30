@@ -407,12 +407,15 @@ def test_no_value_leaves_the_exports_or_the_data_api(
     stub.add_response("start_export_task", {"ExportTaskIdentifier": "t"})
 
     # The Data API reads a table named by a card, with values in its rows.
-    def for_data_api(dstub: Any) -> None:
+    def for_data_api(dstub: Any, markers: bool = False) -> None:
         dstub.add_response("begin_transaction", {"transactionId": "tx"})
         dstub.add_response("execute_statement", {})
         dstub.add_response("execute_statement", {"formattedRecords": json.dumps([READ_ONLY_PG])})
         listed = [{"table_schema": "public", "table_name": f"t_{CARDS['visa']}"}]
         dstub.add_response("execute_statement", {"formattedRecords": json.dumps(listed)})
+        if markers:  # the table index's change markers (#67), from the second pass on
+            changed = [{**listed[0], "n_tup_ins": 3, "n_tup_upd": 0, "n_tup_del": 0}]
+            dstub.add_response("execute_statement", {"formattedRecords": json.dumps(changed)})
         rows = [{f"c_{CARDS['jcb']}": CARDS["amex"], "ssn": dashed(SSN_B)}]
         dstub.add_response("execute_statement", {"formattedRecords": json.dumps(rows)})
         dstub.add_response("rollback_transaction", {})
@@ -444,7 +447,7 @@ def test_no_value_leaves_the_exports_or_the_data_api(
         {"ExportTasks": [{"Status": "COMPLETE"}]},
         {"ExportTaskIdentifier": ANY},
     )
-    for_data_api(dstub)
+    for_data_api(dstub, markers=True)
     sent: list[dict[str, Any]] = []
 
     class Bus:

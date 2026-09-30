@@ -85,6 +85,9 @@ class TableResult:
     redaction_markers: int = 0
     test_values: int = 0
     suppressed: int = 0
+    # (1.10, #67) Set when the table was read again though unchanged: what its findings say
+    # about why (`rescanReason`, `rescanClasses`).
+    rescan: dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:
         # Column names come from the account and may hold a value: counts only.

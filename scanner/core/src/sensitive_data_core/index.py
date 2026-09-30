@@ -71,6 +71,9 @@ SHARD_ROWS = 250_000
 MAX_SHARDS = 256
 DEFAULT_MAX_ROWS = 10_000_000
 DEFAULT_RESCAN_PERCENT = 25
+# A table whose change marker has not moved is still sampled after this many days: a
+# marker that misses a change (a statistics setting, a restart) costs a week, not forever.
+TABLE_RESAMPLE_DAYS = 7
 KEY_BYTES = 12
 MARKER_BYTES = 8
 FINGERPRINT_BYTES = 12
@@ -1140,6 +1143,21 @@ class ObjectPass:
         why = stale(row.profile, row.flags, self.manifest, columnar=self.columnar)
         return Decision("rescan", why) if why is not None else SKIP
 
+    def table(self, key: str, marker: str, *, resample_days: int = TABLE_RESAMPLE_DAYS) -> Decision:
+        """A table with an engine's change marker (#67 part 3): skipped when the marker is the
+        one recorded, it was read in the last `resample_days` (this pass's generation is the
+        day), and read with what could still give the same result; a rescan when a component
+        is stale; else read."""
+        if self.index is None:
+            return READ
+        row = self.index.get(key)
+        if row is None or row.flags & UNREADABLE or row.marker != self.index.hasher.marker(marker):
+            return READ
+        if self.generation - row.generation >= resample_days:
+            return READ
+        why = stale(row.profile, row.flags, self.manifest, columnar=self.columnar)
+        return Decision("rescan", why) if why is not None else SKIP
+
     def offer(self, candidate: Any, decision: Decision) -> None:
         """A rescan candidate (`decide` said `rescan`), read after the changes if it fits."""
         if decision.why is not None:
@@ -1177,7 +1195,7 @@ class ObjectPass:
         """What the run rescanned, by reason, and the backlog left (1.10), into coverage."""
         if self.index is None:
             return
-        cov.indexed = self.index.rows
+        cov.indexed = (cov.indexed or 0) + self.index.rows
         for reason, n in self.rescans.done.items():
             cov.rescanned[reason] = cov.rescanned.get(reason, 0) + n
         # Rows still stale, and candidates with no row met and not read.

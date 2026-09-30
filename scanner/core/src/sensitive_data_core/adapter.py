@@ -145,7 +145,9 @@ def column_findings(
         resource = resource_for(column)
         for cf in item.findings.values():
             cf.offsets = []
-            out.append(finding_json(resource, link, table.format, cf, seen_at, facts=facts))
+            f = finding_json(resource, link, table.format, cf, seen_at, facts=facts)
+            f.update(table.rescan)
+            out.append(f)
     return out
 
 

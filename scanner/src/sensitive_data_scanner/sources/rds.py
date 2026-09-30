@@ -47,6 +47,7 @@ from sensitive_data_core.findings import (
     encryption_facts,
     finding_json,
 )
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.columnar import TableResult, scan_parquet
 from sensitive_data_core.scan.sql import (
@@ -382,6 +383,7 @@ class RdsDataApiSource:
     facts: dict[str, Any] | None = None
     rds: Any = None
     keys: Any = None
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(self, client: RDSDataServiceClient, *, target: DataApiTarget, region: str) -> None:
         self.client = client
@@ -431,6 +433,8 @@ class RdsDataApiSource:
         pass_id = cursor.get("passId") or secrets.token_hex(8)
         after = cursor.get("after")
         seen_at = now.isoformat()
+        today = (now.date() - _dt.date(1970, 1, 1)).days
+        op = ObjectPass(self.indexes, self.id, self.kind, generation=today, budget=budget)
         engine = "aurora-postgresql" if self.t.engine == "postgresql" else "aurora-mysql"
         link = rds_link(self.region, self.identifier, "cluster")
         extra: dict[str, Any] = {"engine": engine, "dbType": "cluster", "readBy": "data_api"}
@@ -461,6 +465,7 @@ class RdsDataApiSource:
             )
             for f in findings:
                 f["_pass"] = pass_id
+                f.update(table.rescan)
             store.replace_location(f"{self.id}\n{schema}.{name}", findings)
 
         try:
@@ -496,6 +501,9 @@ class RdsDataApiSource:
                 max_rows=self.t.max_rows_per_table,
                 max_tables=self.t.max_tables,
                 source=self.target,
+                index=op,
+                # A table skipped as unchanged keeps its findings in this pass.
+                on_skip=lambda sch, n: op.carry(store, f"{self.id}\n{sch}.{n}", pass_id),
             )
             cov.listed, cov.eligible, cov.scanned = res.listed, res.eligible, res.scanned
             cov.unreadable, cov.partial, cov.bytes_scanned = res.unreadable, res.partial, res.bytes
@@ -518,6 +526,7 @@ class RdsDataApiSource:
                     )
                 except Exception as err:  # the transaction times out by itself
                     log_event("source.failed", source=self.target, error=error_name(err))
+        op.settle(cov)
         if done:
             cov.pass_complete = True
             drop_other_passes(store, self.id, pass_id)

@@ -308,6 +308,13 @@ For a customer who wants dead-letter topics read:
   database). A finding is a `store_field` with the kind as `service`, the
   instance or cluster as `store`, then `database`, `schema.table` and the
   column, `readBy: sample`, format `sql`.
+- **Unchanged tables** are not sampled again
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+  from the second pass on, the engine's own change markers are read
+  (PostgreSQL's `pg_stat_user_tables`, MySQL's `UPDATE_TIME`, SQL Server's
+  index usage stats), and a table whose marker has not moved keeps its
+  findings. Every table is still sampled at least weekly, and the rescan
+  rules apply ([DATABASES.md](DATABASES.md#tables-unchanged-since-the-last-read)).
 - **Gaps:**
   - `network`: the job cannot reach the instance. A Cloud Run job reaches a
     private IP through Direct VPC egress (or a Serverless VPC Access

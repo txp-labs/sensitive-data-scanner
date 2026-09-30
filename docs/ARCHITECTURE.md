@@ -147,6 +147,7 @@ One run:
 | `EXPORT_MIN_INTERVAL_DAYS` | Days before a store is exported again | 7 |
 | `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR) | off |
 | `DYNAMODB_EXPORT_KMS_KEY_ARN` | Encrypt DynamoDB exports with this key (`SSE-KMS`) | SSE-S3 |
+| `DYNAMODB_INCREMENTAL` | After a table's full export, read only what changed, with incremental exports ([below](#dynamodb-export-to-s3-large-tables)) | on |
 | `RDS_DATA_API` | Opt-in: Aurora clusters to read with read-only SQL through the Data API, as a JSON list | none (off) |
 | `GLUE_LAKE_FORMATION` | For Glue tables registered with Lake Formation: `read` (with the scanner's own IAM; a denial is a gap) or `skip` (report them, read nothing) | `read` |
 | `REDSHIFT_READ` | Read Redshift clusters and Serverless workgroups through the Data API: `off`, `iam` or `db_user` ([below](#redshift-and-redshift-serverless)) | `off`: discovered and reported `read_not_configured` |
@@ -629,9 +630,27 @@ backlog is still reported.
   - A head or image already read in full is read again only for the files or
     layers a changed component could read differently.
 
+**Tables.** A database table is skipped when the engine's change marker is
+the one recorded at its last read. PostgreSQL's `pg_stat_user_tables`,
+MySQL's `UPDATE_TIME`, SQL Server's index usage stats, Oracle's
+`ALL_TAB_MODIFICATIONS`, and Snowflake's and Databricks' `last_altered` are
+used ([DATABASES.md](DATABASES.md#tables-unchanged-since-the-last-read)).
+Redshift and Spanner keep no such marker, so their tables are sampled on
+every pass.
+
+- A table is sampled whatever its marker says once 7 days have passed, in
+  case a marker missed a change.
+- The same rules apply to tables, with the `sql` reader in their vector. This
+  covers the databases runner, the RDS Data API, and Azure's and Google Cloud's
+  databases.
+- BigQuery already skipped tables unchanged since their last read
+  (`lastModifiedTime`), and now rescans them by the same rules.
+- DynamoDB tables read by export use incremental exports
+  ([above](#dynamodb-export-to-s3-large-tables)), and a stale table gets a full
+  export as its rescan.
+
 Logs, X-Ray traces and streams are read forward from their position, so their
-history is not re-read. Tables (databases and DynamoDB) have their own change
-markers (#67 part 3).
+history is not re-read.
 
 ### Glue Data Catalog and Lake Formation
 
@@ -1313,6 +1332,23 @@ recovery (PITR) on the table. A large table without PITR is reported as
 `exports/dynamodb/…`, SSE-S3 or `DYNAMODB_EXPORT_KMS_KEY_ARN`) is started
 within `MAX_EXPORTS_PER_RUN`, read item by item exactly like the DynamoDB
 source (the same `dynamodb_item` findings), and deleted afterwards.
+
+**Then only what changed**
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
+
+- With `DYNAMODB_INCREMENTAL` (on), each later export is an incremental one
+  (`ExportType=INCREMENTAL_EXPORT`, `NEW_IMAGE`). It holds the items written
+  since the last export's point in time, at most 24 hours of them (AWS's limit
+  for one export), one window a run within `MAX_EXPORTS_PER_RUN` until the
+  export catches up.
+- A changed item's findings are replaced, and a deleted item's are dropped.
+- The run summary names such an export `exportType: incremental`.
+- A full export comes again only in two cases:
+  - the table's recorded components are stale (the attribute reader, the
+    adapter or the spec changed): a rescan within the rescan share;
+  - the last export is older than point-in-time recovery keeps (35 days).
+- A table read by `Scan` (below the size cap) is sampled on every pass as
+  before: DynamoDB keeps no cheap marker of change.
 
 ### The DynamoDB source
 

@@ -515,6 +515,8 @@ class Config:
     index_max_objects: int = 10_000_000
     # The share of each source's budget that rescans may use (#67 part 2; 0: none).
     rescan_percent: int = 25
+    # #67 part 3: after a table's full export, incremental exports of what changed.
+    dynamodb_incremental: bool = True
 
     @property
     def exports_prefix(self) -> str:
@@ -626,6 +628,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         object_index=_bool(e.get("OBJECT_INDEX", "true")),
         index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
         rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
+        dynamodb_incremental=_bool(e.get("DYNAMODB_INCREMENTAL", "true")),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn

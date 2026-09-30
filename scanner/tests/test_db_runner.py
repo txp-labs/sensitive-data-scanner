@@ -695,6 +695,8 @@ def test_a_deferred_database_goes_first_next_run(tmp_path: Path) -> None:
     assert first["a"]["status"] == "scanned"
     assert (first["b"]["status"], first["c"]["status"]) == ("deferred", "deferred")
     saved = json.loads((tmp_path / "state.json").read_text())
+    # The document holds the rotation and the table index's salt (#67), nothing else.
+    assert len(saved.pop("indexSalt")) == 32
     assert saved == {"version": 1, "site": "dc-1", "rotation": "b"}
     second = once()
     assert (second["b"]["status"], second["c"]["status"]) == ("scanned", "deferred")
