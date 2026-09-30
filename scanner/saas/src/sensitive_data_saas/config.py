@@ -83,6 +83,16 @@ wrong setting is reported by a fixed code, never by its value.
   organization uses EKM: findings then say `customer_managed_key`, hashed.
 - `slack_dm` (direct and group messages, through the Discovery API on
   Enterprise Grid) is opt-in: name it in `DISCOVER`.
+- `SLACK_AUDIT_TOKEN_FILE`, `SLACK_DLP_AUDIT_ACTIONS` (#55): an org-level token
+  with `auditlogs:read`, and the audit actions Slack's DLP records; needed for
+  `SCAN_MODE_SLACK` `vendor` or `both`.
+
+**Modes** (#55): `SCAN_MODE_M365`, `SCAN_MODE_GOOGLE_WORKSPACE`,
+`SCAN_MODE_SLACK` (each defaults to `SCAN_MODE`, which defaults to
+`scanner`): `vendor` imports Purview DLP's alerts, the Workspace Alert
+Center's DLP alerts or Slack's DLP audit events and reads nothing of that
+vendor; `both` reads and imports. Atlassian has no detection of its own:
+`scanner` only.
 
 **Atlassian** (on when `ATLASSIAN_SITE` is set)
 
@@ -109,6 +119,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sensitive_data_core.modes import SCANNER, ModeError, read_mode
 from sensitive_data_core.rules import (
     SamplingRule,
     StoreRule,
@@ -154,6 +165,9 @@ KIND_ALIASES = {
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+# Slack's audit actions for DLP (#55): what its native DLP records; SLACK_DLP_AUDIT_ACTIONS
+# names others (a partner's, or what the organization's own log shows).
+DLP_ACTIONS: tuple[str, ...] = ("native_dlp_rule_matched",)
 _GUID = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 _UPN = re.compile(r"^[^@\s,]{1,113}@[A-Za-z0-9.-]{1,255}$")
 _SP_SITE = re.compile(
@@ -218,6 +232,9 @@ class SlackSettings:
     token: Secret = field(repr=False)
     channels: tuple[str, ...] = ()
     ekm_key_id: str | None = field(default=None, repr=False)
+    # #55: the Audit Logs API's org token, and the DLP actions read from it.
+    audit_token: Secret | None = field(default=None, repr=False)
+    dlp_actions: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         return f"SlackSettings(channels={len(self.channels)})"
@@ -271,6 +288,8 @@ class Settings:
     # Every kind the configured vendors have (an opt-in kind left out of `discover` is
     # reported `read_not_configured`).
     configured: tuple[str, ...] = ()
+    # #55: each configured vendor's mode (the core's `scanner`, `vendor` or `both`).
+    modes: tuple[tuple[str, str], ...] = ()
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -482,7 +501,17 @@ def _slack(e: Mapping[str, str]) -> SlackSettings | None:
     ekm = (e.get("SLACK_EKM_KEY_ID") or "").strip() or None
     if ekm is not None and not re.match(r"^[A-Za-z0-9._:/-]{1,300}$", ekm):
         raise ConfigError("slack_ekm_key_id")
-    return SlackSettings(Secret(token), channels, ekm)
+    audit: Secret | None = None
+    audit_file = _file(e.get("SLACK_AUDIT_TOKEN_FILE"), "slack_audit_token_file")
+    if audit_file is not None:
+        raw = read_secret(Path(audit_file))
+        if not re.match(r"^xox[pe]-[A-Za-z0-9-]{10,400}$", raw):
+            raise ConfigError("slack_audit_token")
+        audit = Secret(raw)
+    actions = _list(e.get("SLACK_DLP_AUDIT_ACTIONS")) or DLP_ACTIONS
+    if any(not re.match(r"^[a-z][a-z0-9_]{2,80}$", a) for a in actions):
+        raise ConfigError("slack_dlp_audit_actions")
+    return SlackSettings(Secret(token), channels, ekm, audit, actions)
 
 
 def _atlassian(e: Mapping[str, str]) -> AtlassianSettings | None:
@@ -540,6 +569,38 @@ def _atlassian(e: Mapping[str, str]) -> AtlassianSettings | None:
         pages_max=_int(e.get("PAGES_MAX_PER_SPACE"), 500, 1, 100_000),
         byok_key_id=byok,
     )
+
+
+def _modes(
+    e: Mapping[str, str],
+    m365: M365Settings | None,
+    gws: GwsSettings | None,
+    slack: SlackSettings | None,
+    atlassian: AtlassianSettings | None,
+) -> tuple[tuple[str, str], ...]:
+    """Each configured vendor's mode: `SCAN_MODE_<VENDOR>`, else `SCAN_MODE`, else `scanner`.
+    Atlassian has no detection of its own to import: only `scanner`."""
+    default = e.get("SCAN_MODE")
+    out: list[tuple[str, str]] = []
+    for vendor, on in (
+        ("m365", m365 is not None),
+        ("google_workspace", gws is not None),
+        ("slack", slack is not None),
+        ("atlassian", atlassian is not None),
+    ):
+        if not on:
+            continue
+        raw = e.get(f"SCAN_MODE_{vendor.upper()}") or (default if vendor != "atlassian" else None)
+        try:
+            mode = read_mode(raw)
+        except ModeError:
+            raise ConfigError("scan_mode") from None
+        if vendor == "atlassian" and mode != SCANNER:
+            raise ConfigError("scan_mode_atlassian")
+        if vendor == "slack" and mode != SCANNER and (slack is None or slack.audit_token is None):
+            raise ConfigError("slack_audit_token_file")
+        out.append((vendor, mode))
+    return tuple(out)
 
 
 def default_kinds(configured: tuple[str, ...]) -> tuple[str, ...]:
@@ -641,4 +702,5 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack=slack,
         atlassian=atlassian,
         configured=configured,
+        modes=_modes(e, m365, gws, slack, atlassian),
     )

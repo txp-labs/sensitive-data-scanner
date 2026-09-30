@@ -411,6 +411,43 @@ Atlassian encrypts its data with its own keys (`service_managed`); with
 **Atlassian Cloud BYOK** (Enterprise), set `ATLASSIAN_BYOK_KEY_ID`: findings
 say `customer_managed_key`, with its hash.
 
+## Vendor detection: scanner, vendor or both (#55)
+
+Each vendor's mode is `SCAN_MODE_M365`, `SCAN_MODE_GOOGLE_WORKSPACE` or
+`SCAN_MODE_SLACK` (each defaults to `SCAN_MODE`, which defaults to
+`scanner`). In `vendor` mode the scanner reads nothing of that vendor and
+imports what the vendor's own DLP found; in `both` it reads and imports, and a
+finding of one at the same item and class as the other's is linked
+([FINDINGS.md](FINDINGS.md#sources-and-modes-18)). Atlassian has no detection
+of its own to import: `scanner` only. An importer keeps a vendor's detector
+type, counts and ids (hashed); never a title, a description, a subject, a
+file name, an address or matched text.
+
+| Vendor | What is imported | Grant | Links to the scanner's | Limits |
+|---|---|---|---|---|
+| Microsoft Purview DLP (`vendor:purview`) | Graph security alerts from DLP (`GET /security/alerts_v2`, `serviceSource eq 'microsoftDataLossPrevention'`), updated since the last run | `SecurityAlert.Read.All` (application) | no: an alert names no Graph item, and no kind of data | `alerts_only`, `policy_matches_only`, `item_not_linkable`, `no_data_class` |
+| Google Workspace DLP (`vendor:google_workspace_dlp`) | The Alert Center's `DlpRuleViolation` alerts, created since the last run, one finding per detector | domain-wide delegation of `https://www.googleapis.com/auth/apps.alerts`, as `GWS_ADMIN_USER` | yes, for Drive: the document id is the same `itemHash`, and a predefined detector the same class | `alerts_only`, `policy_matches_only` |
+| Slack DLP (`vendor:slack_dlp`) | Audit Logs API events (`GET https://api.slack.com/audit/v1/logs`) for `SLACK_DLP_AUDIT_ACTIONS` (default `native_dlp_rule_matched`) | an org-level token with `auditlogs:read` (Enterprise Grid), in `SLACK_AUDIT_TOKEN_FILE` | the same `itemHash` for a message or file, but not linked: an event names no kind of data | `enterprise_grid_only`, `policy_matches_only`, `no_data_class` |
+
+**Why Purview is imported here, not by the Azure scanner.** Purview DLP
+watches Microsoft 365 content; its alerts are read through Microsoft Graph with
+the same Entra app and sign-in as the Microsoft 365 scanner, and name the same
+people and services. The Azure package reads Azure resources through Azure
+Resource Manager and has no Graph client.
+
+**The Alert Center's scope is not read-only by its name**: `apps.alerts` also
+lets its holder change an alert's feedback, delete or undelete it, and Google
+offers no read-only scope for it. The scanner only lists alerts, and the
+delegated administrator must hold an admin role whose Alert Center privilege
+is **View** only (Admin console > Account > Admin roles > a custom role >
+Security > Alert Center > View access): Google refuses any change whatever the
+scope. The strict test names it as its one exception, with this reason.
+
+**Content Explorer** counts (Purview) are not in Graph, only in its
+PowerShell export, so they are not imported. Slack's DLP action names are the
+ones its audit log records for native DLP; set `SLACK_DLP_AUDIT_ACTIONS` to
+what your organization's log shows (a DLP partner's actions, say).
+
 ## Findings
 
 A SaaS document says `"platform": "saas"` and names its `site`
@@ -478,6 +515,8 @@ by its id.
 | `JIRA_PROJECTS`, `CONFLUENCE_SPACES` | every one the sign-in can browse | Project and space keys |
 | `ISSUES_MAX_PER_PROJECT`, `PAGES_MAX_PER_SPACE` | 500, 500 | Issues or pages read per project or space per run |
 | `ATLASSIAN_BYOK_KEY_ID` | | Your Atlassian Cloud BYOK key's id |
+| `SCAN_MODE`, `SCAN_MODE_M365`, `SCAN_MODE_GOOGLE_WORKSPACE`, `SCAN_MODE_SLACK` | `scanner` | Each vendor's mode ([Vendor detection](#vendor-detection-scanner-vendor-or-both-55)); Atlassian is `scanner` only |
+| `SLACK_AUDIT_TOKEN_FILE`, `SLACK_DLP_AUDIT_ACTIONS` | , `native_dlp_rule_matched` | Slack's org-level audit token (a file), and the DLP actions read |
 
 At least one of `FINDINGS_HTTPS_URL` and `FINDINGS_FILE` is required.
 
@@ -517,9 +556,9 @@ template's roles hold only their own actions.
 
 | Vendor | Read-only scopes and permissions (the complete list) |
 |---|---|
-| Microsoft 365 (Graph, application) | `User.Read.All`, `GroupMember.Read.All`, `Mail.Read` (scoped by Exchange), `Files.Read.All`, `Sites.Selected`, `Sites.Read.All`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read.All` |
-| Google Workspace (domain-wide delegation) | `https://www.googleapis.com/auth/gmail.readonly`, `https://www.googleapis.com/auth/drive.readonly`, `https://www.googleapis.com/auth/admin.directory.user.readonly`, `https://www.googleapis.com/auth/admin.directory.group.member.readonly`; and the keyless signer's own token, `https://www.googleapis.com/auth/iam` (IAM Credentials' `signJwt` only) |
-| Slack (the app's bot) | `channels:read`, `groups:read`, `channels:history`, `groups:history`, `files:read`; `discovery:read` (Enterprise Grid, opt-in) |
+| Microsoft 365 (Graph, application) | `User.Read.All`, `GroupMember.Read.All`, `Mail.Read` (scoped by Exchange), `Files.Read.All`, `Sites.Selected`, `Sites.Read.All`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read.All`; `SecurityAlert.Read.All` (Purview DLP's alerts, `vendor` or `both` only) |
+| Google Workspace (domain-wide delegation) | `https://www.googleapis.com/auth/gmail.readonly`, `https://www.googleapis.com/auth/drive.readonly`, `https://www.googleapis.com/auth/admin.directory.user.readonly`, `https://www.googleapis.com/auth/admin.directory.group.member.readonly`; and the keyless signer's own token, `https://www.googleapis.com/auth/iam` (IAM Credentials' `signJwt` only); `https://www.googleapis.com/auth/apps.alerts` (the Alert Center, `vendor` or `both` only; held to View by the administrator's role) |
+| Slack (the app's bot) | `channels:read`, `groups:read`, `channels:history`, `groups:history`, `files:read`; `discovery:read` (Enterprise Grid, opt-in); `auditlogs:read` (an org token, `vendor` or `both` only) |
 | Atlassian (OAuth 2.0 3LO) | `read:jira-work`, `read:confluence-content.all`, `read:confluence-space.summary`, `readonly:content.attachment:confluence`, `offline_access`; or an API token of an account with *Browse projects* and *View* only |
 
 ## Running it

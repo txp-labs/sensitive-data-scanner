@@ -2700,3 +2700,103 @@ def test_no_vendor_snippet_or_matched_text_passes_through_sdp(
         assert leaks(blob) == [], where
         for value in (CARDS["amex"], CARDS["jcb"], CARDS["visa"], CARDS["mir"], SSN_A, SSN_B):
             assert value not in blob, where
+
+
+def test_no_vendor_snippet_or_matched_text_passes_through_the_saas_importers(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Purview's alerts (titles, descriptions, message subjects, addresses), the Workspace
+    Alert Center's violations (document titles, recipients, rule names, the user's address)
+    and Slack's DLP audit events (the matched text, rule names, file names, the actor's
+    address): none of it reaches the findings, the logs or the state, in vendor mode."""
+    from gws_fakes import Workspace
+    from gws_fakes import settings as gws_settings
+    from saas_fakes import M365, NOW
+    from saas_fakes import settings as m365_settings
+    from sensitive_data_core.state import FileState
+    from sensitive_data_saas.runner import run_scan
+    from slack_fakes import AUDIT, SlackOrg
+    from slack_fakes import settings as slack_settings
+
+    secret_texts = (
+        CARDS["visa"],
+        CARDS["amex"],
+        SSN_A,
+        SSN_B,
+        "alice@contoso.example",
+        "ana@acme.example",
+        "bob@acme.example",
+    )
+    detector = __import__("aws_fixtures").shared_detector()
+    m = M365()
+    m.user("alice@contoso.example", "u-a")
+    m.alerts = [
+        {
+            "id": f"a-{SSN_A}",
+            "title": f"DLP matched {CARDS['visa']}",
+            "description": f"ssn {dashed(SSN_B)}",
+            "lastUpdateDateTime": "2026-09-28T10:00:00Z",
+            "evidence": [
+                {
+                    "@odata.type": "#microsoft.graph.security.analyzedMessageEvidence",
+                    "subject": f"card {printed(CARDS['amex'])}",
+                    "p1Sender": {"emailAddress": "alice@contoso.example"},
+                },
+                {
+                    "@odata.type": "#microsoft.graph.security.userEvidence",
+                    "userAccount": {"userPrincipalName": "alice@contoso.example"},
+                },
+            ],
+        }
+    ]
+    w = Workspace()
+    w.user("ana@acme.example")
+    w.alerts = [
+        {
+            "alertId": f"al-{SSN_A}",
+            "createTime": "2026-09-28T10:00:00Z",
+            "data": {
+                "ruleViolationInfo": {
+                    "dataSource": "GMAIL",
+                    "resourceInfo": {"resourceTitle": f"card {CARDS['visa']}"},
+                    "matchInfo": [{"userDefinedDetector": {"displayName": f"id {SSN_B}"}}],
+                    "triggeringUserEmail": "ana@acme.example",
+                    "recipients": [f"x{SSN_A}@acme.example"],
+                    "ruleInfo": {"displayName": f"rule {CARDS['amex']}"},
+                }
+            },
+        }
+    ]
+    o = SlackOrg()
+    o.audit = [
+        {
+            "id": f"ev-{SSN_A}",
+            "date_create": int(NOW.timestamp()) - 60,
+            "action": "native_dlp_rule_matched",
+            "actor": {"user": {"email": "bob@acme.example"}},
+            "entity": {"type": "file", "file": {"id": "F0X", "name": f"{CARDS['visa']}.csv"}},
+            "details": {"text": printed(CARDS["amex"]), "rule": f"ssn {dashed(SSN_B)}"},
+        }
+    ]
+    audit = tmp_path / "audit"
+    audit.write_text(AUDIT)
+    runs: tuple[tuple[Any, Any], ...] = (
+        (m, m365_settings(tmp_path, M365_USERS="alice@contoso.example", SCAN_MODE="vendor")),
+        (w, gws_settings(tmp_path, GWS_USERS="ana@acme.example", SCAN_MODE="vendor")),
+        (o, slack_settings(tmp_path, SCAN_MODE="vendor", SLACK_AUDIT_TOKEN_FILE=str(audit))),
+    )
+    for i, (session, s) in enumerate(runs):
+        state = FileState(str(tmp_path / f"state-{i}.json"))
+        capsys.readouterr()
+        doc, _ = run_scan(s, session.clients(s), detector=detector, now=lambda: NOW, state=state)
+        out = capsys.readouterr().out
+        assert doc["findings"] and all(f["source"].startswith("vendor:") for f in doc["findings"])
+        blobs = {
+            "document": json.dumps(doc),
+            "logs": out,
+            "state": (tmp_path / f"state-{i}.json").read_text(),
+        }
+        for where, blob in blobs.items():
+            assert leaks(blob) == [], (i, where)
+            for text in secret_texts:
+                assert text not in blob, (i, where, text)

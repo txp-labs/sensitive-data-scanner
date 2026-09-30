@@ -24,6 +24,7 @@ NOW = dt.datetime(2026, 9, 29, 12, 0, 0, tzinfo=dt.UTC)
 TEAM = "T0ACMEHQ1"
 ORG = "E0ACMEORG"
 BOT = "xoxb-made-up-bot-token-0000000000"
+AUDIT = "xoxp-made-up-audit-token-000000000"
 READ_METHODS = frozenset(
     {
         "auth.test",
@@ -62,6 +63,9 @@ class SlackOrg:
         self.calls: list[tuple[str, str, Any, dict[str, str]]] = []
         self.fail: dict[str, str] = {}
         self.throttle: dict[str, int] = {}
+        # #55: the Audit Logs API's entries.
+        self.audit: list[dict[str, Any]] = []
+        self.audit_queries: list[dict[str, Any]] = []
 
     def __repr__(self) -> str:
         return "SlackOrg()"
@@ -84,8 +88,19 @@ class SlackOrg:
         headers = headers or {}
         self.calls.append((method, url, params, headers))
         assert method == "GET", "the scanner never writes"
-        assert headers.get("Authorization") == f"Bearer {BOT}"
         parts = urllib.parse.urlsplit(url)
+        if parts.hostname == "api.slack.com":
+            assert headers.get("Authorization") == f"Bearer {AUDIT}"
+            assert parts.path == "/audit/v1/logs"
+            q = dict(params or {})
+            self.audit_queries.append(q)
+            rows = [
+                e
+                for e in self.audit
+                if e["action"] == q["action"] and e["date_create"] >= int(q["oldest"])
+            ]
+            return Resp(200, {"entries": rows, "response_metadata": {"next_cursor": ""}})
+        assert headers.get("Authorization") == f"Bearer {BOT}"
         if parts.hostname == "files.slack.com":
             data_ = self.files[parts.path]
             rng = re.fullmatch(r"bytes=(\d+)-(\d+)", headers.get("Range", ""))

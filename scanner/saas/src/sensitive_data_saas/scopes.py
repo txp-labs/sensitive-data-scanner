@@ -25,6 +25,8 @@ M365_SITES_SELECTED = ("Sites.Selected",)
 M365_SITES_ALL = ("Sites.Read.All",)
 M365_TEAMS_CHANNELS = ("Team.ReadBasic.All", "Channel.ReadBasic.All", "ChannelMessage.Read.All")
 M365_TEAMS_CHATS = ("Chat.Read.All",)
+# #55, SCAN_MODE_M365 vendor or both: Purview DLP's alerts.
+M365_ALERTS = ("SecurityAlert.Read.All",)
 
 # Google Workspace OAuth scopes (domain-wide delegation).
 GWS_DIRECTORY = (
@@ -33,11 +35,17 @@ GWS_DIRECTORY = (
 )
 GWS_GMAIL = ("https://www.googleapis.com/auth/gmail.readonly",)
 GWS_DRIVE = ("https://www.googleapis.com/auth/drive.readonly",)
+# #55, SCAN_MODE_GOOGLE_WORKSPACE vendor or both: the Alert Center's DLP alerts. Not
+# read-only by its name (it can also change an alert's feedback or delete it): held to
+# listing by the delegated administrator's role, Alert Center View only (docs/SAAS.md).
+GWS_ALERTS = ("https://www.googleapis.com/auth/apps.alerts",)
 
 # Slack: the app's bot token scopes, and the org-level Discovery API's (opt-in).
 SLACK_CHANNELS = ("channels:read", "groups:read", "channels:history", "groups:history")
 SLACK_FILES = ("files:read",)
 SLACK_DISCOVERY = ("discovery:read",)
+# #55, SCAN_MODE_SLACK vendor or both: the Audit Logs API's DLP events (an org token).
+SLACK_AUDIT = ("auditlogs:read",)
 
 # Atlassian OAuth 2.0 (3LO) classic scopes (an API token has none: it reads what its
 # read-only service account may browse).
@@ -62,9 +70,10 @@ REQUESTED: dict[str, tuple[str, ...]] = {
         *M365_SITES_ALL,
         *M365_TEAMS_CHANNELS,
         *M365_TEAMS_CHATS,
+        *M365_ALERTS,
     ),
-    "google_workspace": (*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE),
+    "google_workspace": (*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE, *GWS_ALERTS),
     "google_signer": GOOGLE_SIGNER,
-    "slack": (*SLACK_CHANNELS, *SLACK_FILES, *SLACK_DISCOVERY),
+    "slack": (*SLACK_CHANNELS, *SLACK_FILES, *SLACK_DISCOVERY, *SLACK_AUDIT),
     "atlassian": (*ATLASSIAN_JIRA, *ATLASSIAN_CONFLUENCE, *ATLASSIAN_OFFLINE),
 }

@@ -54,7 +54,14 @@ METADATA_TOKEN = (
 # The federated signer's token: IAM Credentials only (what it may do is its one role).
 IAM_SCOPE = "https://www.googleapis.com/auth/iam"
 JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer"
-GOOGLE_HOSTS = frozenset({"gmail.googleapis.com", "www.googleapis.com", "admin.googleapis.com"})
+GOOGLE_HOSTS = frozenset(
+    {
+        "gmail.googleapis.com",
+        "www.googleapis.com",
+        "admin.googleapis.com",
+        "alertcenter.googleapis.com",
+    }
+)
 RATE_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"})
 REFRESH_SECONDS = 300
 MAX_KEY_BYTES = 64 * 1024

@@ -26,7 +26,7 @@ from typing import Any
 from saas_fakes import Resp
 from sensitive_data_saas.clients import Clients
 from sensitive_data_saas.config import Settings, read_settings
-from sensitive_data_saas.scopes import GWS_DIRECTORY, GWS_DRIVE, GWS_GMAIL
+from sensitive_data_saas.scopes import GWS_ALERTS, GWS_DIRECTORY, GWS_DRIVE, GWS_GMAIL
 
 NOW = dt.datetime(2026, 9, 29, 12, 0, 0, tzinfo=dt.UTC)
 CUSTOMER = "C01abc234"
@@ -83,7 +83,9 @@ class Workspace:
         self.users: dict[str, GUser] = {}
         self.groups: dict[str, list[str]] = {}
         self.org_units: dict[str, list[str]] = {}
-        self.delegated: set[str] = {*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE}
+        self.delegated: set[str] = {*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE, *GWS_ALERTS}
+        # #55: the Alert Center's DLP alerts.
+        self.alerts: list[dict[str, Any]] = []
         self.history_id = 1000
         self.drives: dict[str, list[DFile]] = {"my": []}
         self.drive_names: dict[str, str] = {}
@@ -182,6 +184,12 @@ class Workspace:
         for prefix, resp in self.fail.items():
             if path.startswith(prefix):
                 return resp
+        if host == "alertcenter.googleapis.com":
+            assert scope == set(GWS_ALERTS) and who == ADMIN
+            assert path == "/v1beta1/alerts" and 'type="DlpRuleViolation"' in query["filter"]
+            floor = re.search(r'createTime >= "([^"]+)"', query["filter"])
+            rows = [a for a in self.alerts if not floor or a["createTime"] >= floor[1]]
+            return self._page("alerts", rows, query)
         if host == "admin.googleapis.com":
             assert scope <= set(GWS_DIRECTORY) and who == ADMIN
             return self._directory(path, query)

@@ -166,11 +166,16 @@ the state or an event.
 alone), `profiled_stores_only`, `sampled_by_vendor`, `profiles_not_items`,
 `policy_matches_only`, `alerts_only`, `item_not_linkable` (the vendor names no
 item this scanner can link to), `counts_not_distinct` (the vendor's counts are
-occurrences) and `enterprise_grid_only`.
+occurrences), `enterprise_grid_only` and `no_data_class` (the vendor names the
+rule that matched, not the kind of data: class `other`, never linked, since a
+link needs the same class).
 
 | Platform | Vendor | Importer | Covers | Limits |
 |---|---|---|---|---|
 | AWS | Amazon Macie | `macie2:ListFindings` and `GetFindings`, category `CLASSIFICATION`, updated since the last run (`MACIE_LOOKBACK_DAYS` first) | `s3` | `s3_only`, `sampled_by_vendor`, `counts_not_distinct` |
+| Microsoft 365 | Microsoft Purview DLP | Graph security alerts (`alerts_v2`) from DLP, as class `other` (`DLP_POLICY_MATCH`) on the service its evidence names | the Microsoft 365 kinds | `alerts_only`, `policy_matches_only`, `item_not_linkable`, `no_data_class` |
+| Google Workspace | Workspace DLP | the Alert Center's `DlpRuleViolation` alerts, a finding per detector, a Drive document on the same `itemHash` as this scanner's | `gws_gmail`, `gws_drive`, `gws_shared_drive` | `alerts_only`, `policy_matches_only` |
+| Slack | Slack DLP | the Audit Logs API's DLP events, as class `other` (the action) on the message or file they name | `slack_channel`, `slack_dm` | `enterprise_grid_only`, `policy_matches_only`, `no_data_class` |
 | Google Cloud | Sensitive Data Protection | its discovery's data profiles: `columnDataProfiles` (a BigQuery column's predicted info type, on the same `store_field` as this scanner's BigQuery findings) and `fileStoreDataProfiles` (the info types found in a Cloud Storage bucket, on the bucket), in each of `SDP_LOCATIONS`; never its inspection results, which can quote matched text | `bigquery`, `gcs` | `profiled_stores_only`, `profiles_not_items`, `sampled_by_vendor` |
 
 Macie's managed data identifiers map to the spec's classes:
