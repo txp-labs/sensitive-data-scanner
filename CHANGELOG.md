@@ -678,6 +678,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
   With `partition`, the read is still a `Query`.
 
 ### Changed
+- **The run summary names what an inventory would help, and recommends daily
+  S3 Inventory** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 4 and 9):
+  - A bucket read from a weekly S3 Inventory configuration says
+    `recommendation: s3_inventory_daily`, since a change can wait a week to
+    be seen. `s3_inventory` (no configuration) now means a daily one.
+  - Azure Blob Inventory and Cloud Storage's Storage Insights reports stay
+    designed and built on demand. A container whose last complete pass listed
+    at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000) says
+    `recommendation: blob_inventory`, and a bucket past
+    `GCS_INVENTORY_MIN_OBJECTS` says `recommendation: storage_insights`. The
+    scanner never configures one.
 - **Stored text: context goes to the value it labels, and no further**
   ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the
   benchmark). Four fixes to the readers; the spec is unchanged:
@@ -848,7 +859,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
-  `relisted` in coverage.
+  `relisted` in coverage; the store recommendations `s3_inventory_daily`,
+  `blob_inventory` and `storage_insights`.
 - Version **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
@@ -914,6 +926,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- Rescans ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 1, 7 and 8): `docs/ARCHITECTURE.md` says
+  why the one-time `unindexed` read after an upgrade is kept (within 25% of
+  the budget; it is how objects read before the index get the improved
+  detection), and that stores with no cheap change marker (OpenSearch,
+  Firestore, Cosmos DB, Bigtable, Redshift, Spanner, MongoDB, small DynamoDB
+  tables) keep sampling each pass, as accepted. `docs/DATABASES.md` and
+  `docs/AZURE.md` add `VIEW DATABASE STATE` (`VIEW DATABASE PERFORMANCE STATE`
+  on Azure SQL) to the SQL Server read-only user, so tables unchanged since
+  their last read are skipped; the user check already counts it as a read,
+  and a test now says so.
 - `README.md` rewritten to say what the scanner does, accurately: a capability
   matrix by platform (read by default, opt-in, reported as a gap), what it
   detects, scanner, vendor or both, how it stays safe, efficiency, how to

@@ -187,6 +187,7 @@ Azure SQL database and Synapse dedicated SQL pool, in each database or pool:
 ```sql
 CREATE USER [sds-scanner-job] FROM EXTERNAL PROVIDER;
 ALTER ROLE db_datareader ADD MEMBER [sds-scanner-job];  -- Synapse: EXEC sp_addrolemember 'db_datareader', 'sds-scanner-job';
+GRANT VIEW DATABASE PERFORMANCE STATE TO [sds-scanner-job];  -- optional: tables' change markers (#67)
 ```
 
 SQL Managed Instance, in each database (or `CREATE LOGIN ... FROM EXTERNAL
@@ -195,7 +196,13 @@ PROVIDER` once, then `CREATE USER ... FROM LOGIN`):
 ```sql
 CREATE USER [sds-scanner-job] FROM EXTERNAL PROVIDER;
 ALTER ROLE db_datareader ADD MEMBER [sds-scanner-job];
+GRANT VIEW DATABASE STATE TO [sds-scanner-job];  -- optional: tables' change markers (#67)
 ```
+
+The optional grant lets the job skip a table unchanged since its last read
+(`sys.dm_db_index_usage_stats`, [DATABASES.md](DATABASES.md#tables-unchanged-since-the-last-read)).
+It is a read, and the user check allows it. Without it, every table is sampled
+on every pass.
 
 PostgreSQL flexible server (Entra authentication on), in the `postgres`
 database, then in each database to read:
@@ -387,6 +394,7 @@ to be masked.
 | `COLUMNAR_MAX_ROWS` | 10000 | Rows read from one table file |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
 | `OBJECT_INDEX`, `INDEX_MAX_OBJECTS` | on, 10,000,000 | The per-object index in the state container (`state/index/`, [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)): what each blob and file was read with, as keyed hashes; and the most objects one source indexes ([ARCHITECTURE.md](ARCHITECTURE.md#the-object-index-and-component-versions)) |
+| `AZURE_BLOB_INVENTORY_MIN_OBJECTS` | 1,000,000 | A container whose last complete pass listed at least this many blobs is named in the run summary (`recommendation: blob_inventory`): a Blob Inventory policy would spare it a listing each pass. Reading one is designed, not built ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)); 0: never named |
 | `RESCAN_PERCENT` | 25 | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change what they give changed, such as a reader or the spec ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); 0 turns rescans off |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on blobs per run |
 | `STATE_CONTAINER_URL` | | The job's own container, `https://<account>.blob.core.windows.net/<container>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |

@@ -681,6 +681,17 @@ makes a million objects stale costs each run a quarter of its budget, never
 more. `RESCAN_PERCENT=0` turns rescans off: only changes are read, and the
 backlog is still reported.
 
+**The one-time `unindexed` read after an upgrade is kept on purpose**
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), decided 30 Sep 2026). On an existing deployment, the first
+runs read every unchanged object once, because it was read before any vector
+existed. That read is how those objects get the improved detection (the
+archives and PDFs counted, not read, before #66 are the example) and how the
+index learns which readers read them. The alternative, seeding rows without
+reading, would record a vector the object was never read with, so a later
+reader change would never reach it. The read stays within the same
+`RESCAN_PERCENT` (25%) share of each run's budget, after the run's changes,
+so it is spread over runs and never a spike.
+
 **By kind of source:**
 
 - **Listings** (S3, Azure Blob Storage and Files, Cloud Storage) meet their
@@ -730,6 +741,15 @@ MySQL's `UPDATE_TIME`, SQL Server's index usage stats, Oracle's
 used ([DATABASES.md](DATABASES.md#tables-unchanged-since-the-last-read)).
 Redshift and Spanner keep no such marker, so their tables are sampled on
 every pass.
+
+**Stores with no cheap change marker keep sampling, by decision**
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), 30 Sep 2026). OpenSearch, Firestore and Datastore,
+Cosmos DB, Bigtable, Redshift, Spanner, MongoDB and small DynamoDB tables
+(read by `Scan`) offer no marker of change that costs less than the sample it
+would spare. They are sampled on every pass, within their budget share, as
+before. This is accepted. Candidates for a later change are OpenSearch's
+`_stats` indexing counters, Redshift's `svv_table_info` and Spanner's
+commit-timestamp columns where a schema has them.
 
 - A table is sampled whatever its marker says once 7 days have passed, in
   case a marker missed a change.
@@ -848,19 +868,26 @@ index, sampling and rescans. It resumes at a file and row. Its watermark is the
 report's own time, because a report says nothing of objects written after it:
 they are in the next one. Until the next report arrives, a run lists nothing
 for that bucket. So on an inventory the change latency is the inventory's
-schedule, which should be daily. The run summary says `listedBy: inventory`.
+schedule. **Daily is the recommended schedule** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)): a weekly
+report leaves a change unseen for up to a week. The run summary says
+`listedBy: inventory`, and a bucket read from a weekly configuration also says
+`recommendation: s3_inventory_daily`. Listing the keys modified since the
+report as well was considered and not taken: it would cost the listing an
+inventory is there to spare.
 
 The scanner **never creates or changes an inventory configuration**, because
 that is a write. A large bucket with no configuration is named in the run
-summary as `recommendation: s3_inventory` and listed as before. A
+summary as `recommendation: s3_inventory` (a daily configuration, with `Size`,
+`LastModifiedDate` and `ETag`) and listed as before. A
 configuration without the needed fields, a destination the scanner may not
 read, a Parquet or ORC report in the Lambda zip, or a report older than eight
 days also means a listing. A bucket read with `S3_MAX_OBJECTS_PER_PREFIX`
 (which needs key order), a directory bucket and a Glue table's location are
 always listed.
 
-**Azure Blob Inventory and Cloud Storage inventory reports (not built).** Both
-work the same way, and the design is the same:
+**Azure Blob Inventory and Cloud Storage inventory reports (designed, built on
+demand).** Both work the same way, and the design is the same. They are built
+when a customer needs them ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), decided 30 Sep 2026):
 
 - **Azure:** a storage account's blob inventory policy
   (`blobServices/default/inventoryPolicies`, readable with Reader) writes CSV
@@ -872,7 +899,11 @@ work the same way, and the design is the same:
   bucket.
 
 Neither is built yet. Their large containers and buckets are listed, as S3's
-were before.
+were before, and **the run summary names them**. A container whose last
+complete pass listed at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000)
+says `recommendation: blob_inventory`. A bucket past `GCS_INVENTORY_MIN_OBJECTS`
+(1,000,000) says `recommendation: storage_insights`. So a customer can see
+which stores would benefit before asking for the reader.
 
 ### Glue Data Catalog and Lake Formation
 
