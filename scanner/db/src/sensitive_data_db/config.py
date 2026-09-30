@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sensitive_data_core.rules import StoreRule, store_rules
-from sensitive_data_core.safety import redact_digits
+from sensitive_data_core.safety import Secret, redact_digits
 
 # URL schemes, by engine (the store kind in findings).
 SCHEMES = {
@@ -57,6 +57,8 @@ _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 _ARN = re.compile(r"^arn:aws[a-z-]*:events:[a-z0-9-]+:[0-9]{12}:event-bus/[A-Za-z0-9._/-]{1,256}$")
 MAX_SECRET_BYTES = 64 * 1024
 
+__all__ = ["ConfigError", "Database", "Secret", "Settings", "read_settings"]
+
 
 class ConfigError(ValueError):
     """A setting is wrong. `code` says which, and is safe to log; nothing else is kept."""
@@ -67,29 +69,6 @@ class ConfigError(ValueError):
 
     def __repr__(self) -> str:
         return f"ConfigError({self.code!r})"
-
-
-class Secret:
-    """A connection string or a key: never shown by repr or str."""
-
-    __slots__ = ("_value",)
-
-    def __init__(self, value: str) -> None:
-        self._value = value
-
-    def reveal(self) -> str:
-        return self._value
-
-    def __repr__(self) -> str:
-        return "Secret(***)"
-
-    __str__ = __repr__
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Secret) and other._value == self._value
-
-    def __hash__(self) -> int:
-        return hash(self._value)
 
 
 @dataclass(frozen=True, repr=False)

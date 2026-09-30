@@ -1701,3 +1701,98 @@ def test_no_value_leaves_the_databases_runner(
     # The names that held values are masked, and say so.
     masked = [f["resource"] for f in doc["findings"] if f["resource"].get("keyMasked")]
     assert masked and all("#" in (r.get("table", "") + r.get("field", "")) for r in masked)
+
+
+# ------------------------------------------------------------ the Azure scanner
+
+
+def test_no_value_leaves_the_azure_scanner(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in blob contents, and in account, container, resource group, blob and column
+    names, a key's name, a tag and an Azure error's message: none of them in the findings,
+    the logs, the documents the job writes or any repr."""
+    import io as _io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from azure_fakes import (
+        NOW,
+        SUB_A,
+        Arm,
+        AzureError,
+        Blob,
+        Graph,
+        Tenant,
+        account_id,
+        account_row,
+        settings,
+    )
+    from sensitive_data_azure.runner import run_scan
+
+    account = f"st{CARDS['visa']}"
+    group = f"rg-{dashed(SSN_B)}"
+    container = f"c-{SSN_A}"
+    rid = account_id(SUB_A, group, account)
+    buf = _io.BytesIO()
+    pq.write_table(pa.table({f"ssn_{SSN_A}": [dashed(SSN_B)], "card": [CARDS["jcb"]]}), buf)
+    t = Tenant(
+        Graph(
+            {
+                "storageaccounts": [
+                    account_row(
+                        account,
+                        group=group,
+                        key_source="Microsoft.Keyvault",
+                        vault="https://kv.vault.azure.net/",
+                        key_name=f"key-{CARDS['amex']}",
+                        tags={"owner": CARDS["mir"]},
+                    )
+                ]
+            }
+        ),
+        Arm(
+            {
+                f"{rid}/blobServices/default/containers": [
+                    {"name": container, "properties": {}},
+                    {"name": f"broken-{SSN_B}", "properties": {}},
+                ],
+            }
+        ),
+    )
+    box = t.container(account, container)
+    box.blobs.update(
+        {
+            f"exports/{CARDS['discover']}.csv": Blob(
+                f"name,card_{CARDS['unionpay']}\nA,{CARDS['mastercard']}\n".encode()
+            ),
+            f"lake/{SSN_A}/part-0.parquet": Blob(buf.getvalue()),
+            "notes.txt": Blob(f"call me, my card is {printed(CARDS['visa'])}".encode()),
+            "bad.txt": Blob(b"x", fail=AzureError("InternalError", f"failed on {CARDS['visa']}")),
+        }
+    )
+    t.container(account, f"broken-{SSN_B}").list_fail = AzureError(
+        "AuthorizationFailure", f"denied reading {account}/{SSN_A}"
+    )
+    s = settings()
+    clients = t.clients()
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, clients, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    reasons = {x.get("reason") for x in doc["discovery"]["stores"]}
+    assert "network" in reasons
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        # The findings documents in the job's own container. Its cursors (state/) keep real
+        # names, like the AWS scanner's, to resume a listing; they never leave the tenant.
+        "written": "\n".join(
+            v.decode() for k, v in t.state.written.items() if k.startswith("findings/")
+        ),
+        "reprs": repr(s) + repr(clients) + repr(doc.get("discovery")),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        assert CARDS["amex"] not in blob and SSN_B not in blob, where

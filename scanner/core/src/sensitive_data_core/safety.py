@@ -94,11 +94,15 @@ def log_event(event: str, **fields: LogValue) -> None:
 
 
 def error_name(err: BaseException) -> str:
-    """The AWS error code or the exception class: never the message."""
+    """The cloud's error code (AWS's `Error.Code`, Azure's `error_code`) or the exception
+    class: never the message."""
     code = None
     response = getattr(err, "response", None)
     if isinstance(response, dict):
         code = (response.get("Error") or {}).get("Code")
+    if not code:
+        azure = getattr(err, "error_code", None)
+        code = azure if isinstance(azure, str) else None
     raw = str(code) if code else type(err).__name__
     return re.sub(r"[^A-Za-z0-9._:-]", "", raw)[:80] or "Error"
 
@@ -145,3 +149,26 @@ class ScanError(Exception):
 
     def __repr__(self) -> str:
         return f"ScanError({self.error!r})"
+
+
+class Secret:
+    """A connection string, a URL with a token in it, or a key: never shown by repr or str."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    def reveal(self) -> str:
+        return self._value
+
+    def __repr__(self) -> str:
+        return "Secret(***)"
+
+    __str__ = __repr__
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Secret) and other._value == self._value
+
+    def __hash__(self) -> int:
+        return hash(self._value)

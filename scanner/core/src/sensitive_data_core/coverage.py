@@ -20,7 +20,16 @@ from .rules import StoreRule
 from .safety import redact_digits
 
 ACCESS_DENIED = frozenset(
-    {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "AllAccessDisabled"}
+    {
+        "AccessDenied",
+        "AccessDeniedException",
+        "UnauthorizedOperation",
+        "AllAccessDisabled",
+        # Azure (1.6): a role the identity lacks, on the management or the data plane.
+        "AuthorizationFailed",
+        "AuthorizationPermissionMismatch",
+        "Forbidden",
+    }
 )
 MAX_STORES_IN_SUMMARY = 5000
 
@@ -154,6 +163,8 @@ NOTES = {
     "user_can_write": ("skipped", "user_can_write"),
     "db_user_can_write": ("skipped", "db_user_can_write"),
     "grants_unverifiable": ("skipped", "grants_unverifiable"),
+    # (1.6) The store's network rules keep the scanner out (a firewall, private access only).
+    "network": ("skipped", "network"),
 }
 
 

@@ -1,4 +1,4 @@
-# Findings, schema version 1.5
+# Findings, schema version 1.6
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.5"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.6"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -54,6 +54,15 @@ value shows up in findings, events, logs, exception messages or object reprs.
   `archive_retrieval`, the store fields `workflowType`, `eventCount`,
   `retentionDays` and `archives`, and `feature_group` and
   `notebook_instance` as a store's `resource`. All additive.
+- Version 1.6 adds the Azure scanner ([AZURE.md](AZURE.md)): `platform:
+  azure` (the document names its `site`), the `blob_object` resource (a blob
+  of a Blob Storage or ADLS Gen2 container), `subscription`, `resourceGroup`
+  and `resourceIdHash` on a `blob_object` or `store_field` resource and on a
+  store in the run summary, the `azure_blob` kind, the store reason `network`
+  (the store's firewall or private endpoint keeps the scanner out), the store
+  fields `hierarchicalNamespace` and `networkRestricted`, the skip kind
+  `archive_tier`, and Azure portal links. All additive: an AWS document is
+  1.5's with a new version.
 
 ## Where findings go
 
@@ -274,6 +283,39 @@ the database (or catalog) connected to, `table` as `schema.table` (for
 MongoDB, `database.collection`), `readBy: sample`, format `sql` (MongoDB:
 `json`) and no `link`.
 
+### An Azure blob (1.6)
+
+A blob of a Blob Storage or ADLS Gen2 container, read like an S3 object
+(text, JSON, CSV, and a table file by column):
+
+```json
+{
+  "resource": {
+    "type": "blob_object",
+    "account": "contosolake",
+    "container": "raw",
+    "blob": "exports/cards.csv",
+    "versionId": "null",
+    "subscription": "11111111-2222-3333-4444-555555555555",
+    "resourceGroup": "rg-data",
+    "resourceIdHash": "9a1f…(64 hex)"
+  },
+  "format": "csv",
+  "class": "card",
+  "atRestEncryption": "service_managed",
+  "link": "https://portal.azure.com/#resource/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/contosolake/containersList"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `account`, `container`, `blob` | The storage account, the container and the blob's name (an ADLS Gen2 path), masked like a key |
+| `versionId` | The blob version read, `"null"` when versioning is off |
+| `column` | For a Parquet, ORC or Avro file, the column, as for S3 |
+| `subscription`, `resourceGroup` | Where the storage account is; the group masked like a key. Every Azure store's finding (a `store_field` too) carries them |
+| `resourceIdHash` | The SHA-256 of the store's Azure resource ID in lower case (for a blob, the storage account's). The ID is never written: it names the group and the resource |
+| `link` | The storage account's page in the Azure portal; `null` when the subscription, group or account name had to be masked |
+
 ### A DynamoDB finding
 
 One class of data in one attribute path of one item:
@@ -331,6 +373,7 @@ would carry that name unmasked. Each link names only some of the resource:
 | `dynamodb_item` | the table only (the item explorer); never a key | table drops it; a masked key or attribute path does not |
 | `rds_column` | the cluster or instance | identifier drops it; a masked database, table or column does not |
 | `store_field` (Redshift, OpenSearch) | the cluster, workgroup, domain or collection | store drops it; a masked database, table, index or field does not |
+| `blob_object` and Azure's `store_field` (1.6) | the subscription, resource group and resource (the storage account, server, ...) | any of them drops it; a masked container, blob, table or column does not |
 
 So a DynamoDB item keyed by a tenant id with a bare nine-digit run, such as
 `T#t_#########`, keeps its link to the table. The reviewer opens the table
@@ -378,6 +421,7 @@ Where each store's value comes from:
 | Parameter Store | Per parameter: a `SecureString`'s `KeyId` (`alias/aws/ssm` by default); a `String` or `StringList` is `unknown` (AWS documents no key for them) |
 | Secrets Manager | Per secret: its `KmsKeyId`, else `aws/secretsmanager` (`service_managed`) |
 | Timestream, Keyspaces | The database's `KmsKeyId`; the table's `encryptionSpecification` |
+| Azure Blob Storage and ADLS Gen2 (1.6) | The blob's encryption scope (from the listing), else its container's default scope, else the account's encryption: `Microsoft.Storage` is `service_managed`; `Microsoft.Keyvault` is `customer_managed_key`, hashed from the key's versionless identifier in lower case (`https://<vault>.vault.azure.net/keys/<name>`). Azure Storage always encrypts, so never `none`. The run summary gives the container's default |
 | The databases runner | SQL Server: TDE on (`sys.databases.is_encrypted`) is `customer_managed_key` (a certificate in the customer's own master database, or an asymmetric key in Key Vault or an EKM provider), except Azure SQL's service-managed certificate (`service_managed`). MySQL and MariaDB: every base table created encrypted is `customer_managed_key`. Snowflake and MongoDB Atlas: `service_managed`. Everything else, TDE off included, is `unknown`: a database cannot see the disk under it. A database names no key, so no hash |
 
 A KMS key named by its id or ARN is told apart with one `kms:ListAliases`
@@ -408,7 +452,7 @@ One entry per source says what was, and was not, read:
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
 | `unreadable` | Listed but could not be read (a KMS key the scanner may not use, or an object deleted mid-run) |
 | `bytesScanned` | Bytes read |
-| `skipped` | Not read, by kind: audio, video, image, document, archive, binary, or (1.2) `columnar`: a Parquet, ORC, zstd or snappy/zstandard Avro file this build cannot read (the Lambda zip; the container image reads them), or one whose byte cap fell before its first rows |
+| `skipped` | Not read, by kind: audio, video, image, document, archive, binary, or (1.2) `columnar`: a Parquet, ORC, zstd or snappy/zstandard Avro file this build cannot read (the Lambda zip; the container image reads them), or one whose byte cap fell before its first rows, or (1.6) `archive_tier`: an Azure blob in the Archive tier, which only a rehydration (a write) could read |
 | `formats` | Items by format |
 | `testValues` | Published test card numbers and sample SSNs, set apart and never findings |
 | `suppressed` | Numbers next to a word like "order" or "phone", with no card word |
@@ -443,10 +487,10 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database), or (1.5) `stepfunctions`, `lambda`, `xray` (one store, `xray-traces`), `codecommit`, `s3_directory`, `msk`, `mq`, `ecr`, `sagemaker` (`feature-group/<name>` or `notebook-instance/<name>`), `neptune_analytics`, `eventbridge_archive`, `glacier`; and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database), or (1.5) `stepfunctions`, `lambda`, `xray` (one store, `xray-traces`), `codecommit`, `s3_directory`, `msk`, `mq`, `ecr`, `sagemaker` (`feature-group/<name>` or `notebook-instance/<name>`), `neptune_analytics`, `eventbridge_archive`, `glacier`, or (1.6) Azure's `azure_blob` (`account/container`; `account/*` when the account's containers could not be listed); and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB); (1.4) `db_user_can_write` (the databases runner's user can write, so it was refused; see `writeGrants`), `grants_unverifiable` (the user's privileges could not be read, so it was refused) and `driver_missing` (the image carries no driver for the engine); (1.5) `user_can_write` (a broker user given for reading can change a queue or administer the broker, so it was refused; see `writeGrants`), and `vpc_only` and `no_read_path` also for MSK and Amazon MQ (brokers out of reach; no IAM authentication, or RabbitMQ) and SageMaker (an online-only feature group, a notebook instance), and `archive_retrieval` (an S3 Glacier vault: reading an archive needs a retrieval job, which the scanner never starts) |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB); (1.4) `db_user_can_write` (the databases runner's user can write, so it was refused; see `writeGrants`), `grants_unverifiable` (the user's privileges could not be read, so it was refused) and `driver_missing` (the image carries no driver for the engine); (1.5) `user_can_write` (a broker user given for reading can change a queue or administer the broker, so it was refused; see `writeGrants`), and `vpc_only` and `no_read_path` also for MSK and Amazon MQ (brokers out of reach; no IAM authentication, or RabbitMQ) and SageMaker (an online-only feature group, a notebook instance), and `archive_retrieval` (an S3 Glacier vault: reading an archive needs a retrieval job, which the scanner never starts); (1.6) `network` (the store admits only selected networks or private endpoints, and the scanner is not among them) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -468,6 +512,9 @@ coverage gap is visible rather than silent.
 | `eventCount`, `retentionDays` | (1.5) An EventBridge archive: its events, and how long it keeps them (0: indefinitely); its size is `sizeBytes` |
 | `archives` | (1.5) An S3 Glacier vault: its archives, as of its last inventory; its size is `sizeBytes` |
 | `workflowType` | (1.5) Step Functions: `standard` (its history is read) or `express` (reported `unsupported`: an Express workflow keeps no history in the service; its runs are in CloudWatch Logs, read there) |
+| `subscription`, `resourceGroup`, `resourceIdHash` | (1.6) Azure: where the store is, as on its findings |
+| `hierarchicalNamespace` | (1.6) An Azure storage account with the hierarchical namespace on (ADLS Gen2) |
+| `networkRestricted` | (1.6) An Azure store that admits only selected networks or private endpoints; when the scanner is not among them it is the `network` gap |
 | `writeGrants` | (1.4) The databases runner: the write privileges the database user holds, by name (`superuser`, `table_write`, `INSERT`, `db_datawriter`, `MODIFY`, ...), when the store is refused as `db_user_can_write`; (1.5) for Amazon MQ, `console_access`, `queue_write`, `queue_admin`, `no_authorization_map` or `configuration_unreadable`, when refused as `user_can_write` |
 | `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`) |
 

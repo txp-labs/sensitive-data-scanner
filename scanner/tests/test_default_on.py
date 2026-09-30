@@ -374,7 +374,7 @@ def test_codecommit_samples_files_at_head_and_skips_binaries(env: Env) -> None:
         "fixtures/users.csv": f"name,ssn,card\nA,{dashed(SSN_B)},{CARDS['discover']}\n".encode(),
     }
     # The sample's order is a hash of the path: stubs answer by what is asked.
-    from sensitive_data_scanner.sources.s3 import sample_point
+    from sensitive_data_core.scan.objects import sample_point
 
     for path in sorted(files, key=lambda p: (sample_point(p), p)):
         blob(cc, "c1", path, files[path])

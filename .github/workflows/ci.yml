@@ -233,3 +233,36 @@ jobs:
           assert "made-up" not in json.dumps(doc)
           print("ok")
           '
+
+      - name: Build the Azure scanner image
+        run: |
+          set -euo pipefail
+          docker build --target azure -t sensitive-data-scanner-azure:ci .
+          docker image ls sensitive-data-scanner-azure:ci --format 'azure image size: {{.Size}}'
+
+      - name: Smoke test the Azure scanner image (no network)
+        run: |
+          set -euo pipefail
+          # A wrong setting is reported by its code, and nothing else is printed.
+          out=$(docker run --rm --network none -e SCANNER_SITE=ci -e AZURE_MANAGEMENT_GROUP=mg-ci \
+            -e FINDINGS_HTTPS_URL='http://collector.invalid/made-up-token' \
+            sensitive-data-scanner-azure:ci scan || true)
+          echo "${out}"
+          echo "${out}" | grep -q '"error":"findings_url_not_https"'
+          if echo "${out}" | grep -q made-up; then echo "the push URL was printed"; exit 1; fi
+          # With no network there is no token: discovery names the listing error, exit 2.
+          set +e
+          out=$(docker run --rm --network none -e SCANNER_SITE=ci -e AZURE_MANAGEMENT_GROUP=mg-ci \
+            -e FINDINGS_FILE=/tmp/f.json sensitive-data-scanner-azure:ci check)
+          code=$?
+          set -e
+          echo "${out}"
+          test "${code}" = 2
+          echo "${out}" | grep -q '"event":"discovery.failed"'
+          docker run --rm --network none --entrypoint python sensitive-data-scanner-azure:ci -c '
+          import azure.identity, azure.storage.blob, azure.mgmt.resourcegraph, azure.eventgrid
+          from sensitive_data_core.scan.columnar import pyarrow_available
+          assert pyarrow_available()
+          import sensitive_data_azure.runner
+          print("ok")
+          '

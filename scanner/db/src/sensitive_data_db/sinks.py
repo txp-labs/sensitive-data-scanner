@@ -1,7 +1,7 @@
 """Where the databases runner's findings go: the core's `FindingsSink`, three ways.
 
-- **HTTPS, signed** (`FINDINGS_HTTPS_URL`): each part of the document is
-  POSTed as JSON with `X-SDS-Signature: t=<unix time>,v1=<hex>`, where `v1`
+- **HTTPS, signed** (`FINDINGS_HTTPS_URL`, the core's `push.HttpsSink`): each
+  part of the document is POSTed as JSON with `X-SDS-Signature: t=<unix time>,v1=<hex>`, where `v1`
   is HMAC-SHA256 under the shared key of `<t>.` followed by the exact body.
   The receiver recomputes it, compares in constant time and rejects a `t`
   more than five minutes old (docs/DATABASES.md, Verifying a push).
@@ -15,111 +15,46 @@ Only findings leave, never a value. Neither the URL nor the key is logged.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
-import time
-import urllib.request
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from sensitive_data_core import push as core_push
 from sensitive_data_core.findings import EVENT_DETAIL_TYPE, EVENT_SOURCE
-from sensitive_data_core.push import FindingsSink, event_details
+from sensitive_data_core.push import (
+    SIGNATURE_HEADER,
+    FindingsSink,
+    PushRejected,
+    event_details,
+    sign,
+    verify,
+)
 from sensitive_data_core.safety import error_name, log_event
 
 from . import __version__
 from .config import Secret, Settings
 
-SIGNATURE_HEADER = "X-SDS-Signature"
-RETRIES = 3
 MAX_ENTRIES_PER_CALL = 10
 
-
-def sign(key: bytes, timestamp: str, body: bytes) -> str:
-    """The signature header's value for one body."""
-    mac = hmac.new(key, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
-    return f"t={timestamp},v1={mac}"
-
-
-def verify(key: bytes, header: str, body: bytes, now: float, tolerance: int = 300) -> bool:
-    """What a receiver does: the signature matches and the timestamp is recent."""
-    fields = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
-    t, v1 = fields.get("t", ""), fields.get("v1", "")
-    if not t.isdigit() or abs(now - int(t)) > tolerance:
-        return False
-    return hmac.compare_digest(sign(key, t, body), f"t={t},v1={v1}")
+__all__ = [
+    "SIGNATURE_HEADER",
+    "EventBridgeSink",
+    "FileSink",
+    "HttpsSink",
+    "PushRejected",
+    "sign",
+    "sinks_for",
+    "verify",
+]
 
 
-class PushRejected(Exception):
-    """The endpoint answered with a status that is not a success; `code` is the status."""
+class HttpsSink(core_push.HttpsSink):
+    """The core's signed HTTPS sink, named as the databases runner."""
 
-    code = 0
-
-
-class HttpsSink:
-    """POST each part of the document to the customer's (or Mermera's) HTTPS endpoint."""
-
-    def __init__(
-        self,
-        url: Secret,
-        key: Secret,
-        *,
-        opener: Callable[..., Any] = urllib.request.urlopen,
-        sleep: Callable[[float], None] = time.sleep,
-        clock: Callable[[], float] = time.time,
-    ) -> None:
-        self._url = url
-        self._key = key
-        self._open = opener
-        self._sleep = sleep
-        self._clock = clock
-
-    def __repr__(self) -> str:
-        return "HttpsSink(***)"
-
-    def _post(self, body: bytes, part: int, parts: int) -> None:
-        ts = str(int(self._clock()))
-        req = urllib.request.Request(  # noqa: S310 - https only (config.py)
-            self._url.reveal(),
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": f"sensitive-data-scanner-db/{__version__}",
-                SIGNATURE_HEADER: sign(self._key.reveal().encode(), ts, body),
-                "X-SDS-Part": f"{part}/{parts}",
-            },
-        )
-        with self._open(req, timeout=30) as resp:
-            status = int(getattr(resp, "status", 200))
-            if status >= 300:
-                rejected = PushRejected()
-                rejected.code = status
-                raise rejected
-
-    def push(self, document: dict[str, Any]) -> int:
-        details = event_details(document)
-        sent = 0
-        for detail in details:
-            body = json.dumps(detail, separators=(",", ":")).encode()
-            for attempt in range(RETRIES):
-                try:
-                    self._post(body, int(detail["part"]), int(detail["parts"]))
-                    sent += 1
-                    break
-                except Exception as err:  # retried, then reported by name only
-                    code = getattr(err, "code", None)
-                    final = attempt == RETRIES - 1 or (
-                        isinstance(code, int) and 400 <= code < 500 and code != 429
-                    )
-                    if final:
-                        log_event("events.failed", count=1, error=error_name(err))
-                        break
-                    self._sleep(2**attempt)
-        log_event("events.sent", count=sent)
-        return sent
+    def __init__(self, url: Secret, key: Secret, **kwargs: Any) -> None:
+        kwargs.setdefault("user_agent", f"sensitive-data-scanner-db/{__version__}")
+        super().__init__(url, key, **kwargs)
 
 
 class EventBridgeSink:
