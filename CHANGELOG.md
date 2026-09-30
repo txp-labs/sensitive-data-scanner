@@ -824,6 +824,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- **An accuracy benchmark** ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75),
+  [docs/BENCHMARK.md](docs/BENCHMARK.md)): 367 realistic, made-up documents
+  from a seeded generator (`scanner/tests/bench_corpus.py`), with ground
+  truth. They cover statements, CRM and HR exports, tickets and emails, voice
+  and chat transcripts, prompted keypad entry, PDFs, Office files, logs,
+  archives, Parquet rows and 17 kinds of hard negative. Precision, recall and
+  F1 per class and confidence are measured through `read_object` and through
+  the conversation engine (`scanner/tests/bench_score.py`). The baseline is
+  `benchmark/baseline.json`; CI fails on a drop of more than 0.01, or on any
+  planted value in an output.
 - CI checks that the component manifest is current (`scripts/components.py
   --check`, [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)); the no-leak suite
   plants values in object keys and archive entries' names and searches every
