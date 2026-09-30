@@ -723,6 +723,15 @@ bumps the minor version. Spec changes are listed under **Spec**.
   action not conditioned on `kms:ViaService`, and the template test holds it
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
+### Fixed
+- **DynamoDB: `sortPrefix` without `partition`.** A `SCAN_DYNAMODB` entry
+  with `sortPrefix` and no `partition` was refused ("sortPrefix needs a
+  partition"). It now reads the whole table with a `Scan` filtered on the
+  sort key (`begins_with`), so only items whose sort key begins with the
+  prefix are read; the others are counted as listed and never scanned. A
+  table without a string sort key is reported as an error on the read.
+  With `partition`, the read is still a `Query`.
+
 ### Findings schema
 - `schemaVersion` is now **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,

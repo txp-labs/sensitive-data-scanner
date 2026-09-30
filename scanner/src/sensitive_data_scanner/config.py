@@ -121,8 +121,9 @@ def dynamodb_targets(raw: str | None) -> list[DynamoTarget]:
         sort_prefix = t.get("sortPrefix")
         if partition is not None and not isinstance(partition, str | int):
             raise ValueError("SCAN_DYNAMODB: partition must be a string or a number")
-        if sort_prefix is not None and (partition is None or not isinstance(sort_prefix, str)):
-            raise ValueError("SCAN_DYNAMODB: sortPrefix needs a partition and must be a string")
+        # Without a partition, a sort-key prefix filters a whole-table Scan (begins_with).
+        if sort_prefix is not None and (not isinstance(sort_prefix, str) or not sort_prefix):
+            raise ValueError("SCAN_DYNAMODB: sortPrefix must be a non-empty string")
         order_by = t.get("orderBy")
         if order_by is not None and (not isinstance(order_by, str) or not order_by.strip()):
             raise ValueError("SCAN_DYNAMODB: orderBy must be an attribute name")
