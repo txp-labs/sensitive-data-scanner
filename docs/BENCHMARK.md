@@ -110,42 +110,43 @@ Spec 0.4. `medium` is omitted where it equals `low`. The full table is in
 
 | Class | P @low | R @low | F1 @low | P @high | R @high | F1 @high |
 |---|---:|---:|---:|---:|---:|---:|
-| `card` | 0.856 | 0.999 | 0.922 | 0.991 | 0.806 | 0.889 |
-| `us_ssn` | 0.565 | 1.000 | 0.722 | 0.519 | 0.831 | 0.639 |
-| `us_itin` | 0.866 | 1.000 | 0.928 | 0.866 | 1.000 | 0.928 |
-| `dob` | 0.600 | 1.000 | 0.750 | 0.608 | 1.000 | 0.756 |
+| `card` | 0.851 | 0.985 | 0.913 | 0.992 | 0.800 | 0.886 |
+| `us_ssn` | 0.567 | 1.000 | 0.724 | 0.523 | 0.837 | 0.643 |
+| `us_itin` | 0.883 | 1.000 | 0.938 | 0.883 | 1.000 | 0.938 |
+| `dob` | 0.605 | 1.000 | 0.754 | 0.613 | 1.000 | 0.760 |
 | `cvv`, `pin`, `account_number`, `us_ssn_last4` | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
 
 **conversation** (the spec's engine):
 
 | Class | P @low | R @low | F1 @low | P @high | R @high | F1 @high |
 |---|---:|---:|---:|---:|---:|---:|
-| `card` | 0.848 | 0.987 | 0.912 | 1.000 | 0.608 | 0.756 |
-| `dob` | 0.779 | 1.000 | 0.876 | 1.000 | 1.000 | 1.000 |
+| `card` | 0.787 | 0.974 | 0.871 | 1.000 | 0.632 | 0.774 |
+| `dob` | 0.768 | 1.000 | 0.869 | 1.000 | 1.000 | 1.000 |
 | `us_ssn`, `us_itin`, `cvv`, `pin`, `account_number`, `us_ssn_last4` | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
 
 ## Findings
 
-**Weak classes.** In stored text, `us_ssn` (precision 0.57) and `dob` (0.60)
-are the weakest, followed by `card` (0.86). Recall is near 1.0 everywhere, so
-the problem is false positives, and nearly all of them are high confidence.
-In conversations, the engine is precise at `high` and `medium`. Its weak spot
-is `card` recall at `high`, 0.61: a card that comes a turn late, or is read
-back, has no card word within two turns and is reported at `medium`.
+**Weak classes.** In stored text, `us_ssn` (precision 0.57) and `dob` (0.61)
+are the weakest, followed by `card` (0.85). Recall is near 1.0 for every class
+but `card` (0.985), so the problem is mostly false positives, nearly all of
+them high confidence. In conversations, the engine is precise at `high` and
+`medium`. Its weak spot is `card` recall at `high`, 0.63: a card that comes a
+turn late, or is read back, has no card word within two turns and is reported
+at `medium`.
 
 **Top false-positive sources, stored text:**
 
-1. **A CSV's header was context for every cell** (283 `us_ssn`, 240 `dob`, 2
-   `us_itin` in HR exports). With `ssn` and `date_of_birth` columns in the
+1. **A CSV's header was context for every cell** (283 `us_ssn`, 240 `dob` and
+   2 `us_itin` in HR exports). With `ssn` and `date_of_birth` columns in the
    header, every routing number became a high-confidence SSN, and every hire
    date a date of birth. A table read by a catalog (`scan/columnar.py`)
    already gives each column only its own name.
-2. **A JSON document's keys were context for every value in it** (188 `dob`
-   in Lambda logs, 26 more in archived logs). One `dateOfBirth` key anywhere
+2. **A JSON document's keys were context for every value in it** (156 `dob`
+   in Lambda logs, 34 more in archived logs). One `dateOfBirth` key anywhere
    in a log record made the record's `timestamp`, and a sibling `createdAt`, a
    date of birth.
 3. **"social media" is SSN context** (59 `us_ssn` and 4 `us_itin` in the
-   `social_media` negatives, 66 and 4 in app logs, 15 in tickets). The spec's
+   `social_media` negatives, 65 and 2 in app logs, 13 in tickets). The spec's
    context word `social` matches "social media", although spec 0.4 already
    keeps "nine digit social media account number" from arming an SSN prompt.
 4. **Luhn-valid numbers that are not cards** (124 in a Parquet
@@ -158,11 +159,11 @@ back, has no card word within two turns and is reported at `medium`.
    (`9400 1111 4539 1488 0343 6467 00`), or of an IBAN, could pass Luhn and
    the IIN table. The spec's own pattern, and the conversation engine, never
    start a card inside a digit run.
-6. **A date near a date of birth** (13 in tickets, 2 in emails): "my date of
+6. **A date near a date of birth** (17 in tickets, 4 in emails): "my date of
    birth is 03/14/1985, charged on 09/03/2026". Any date within 64 characters
    after a DOB word takes the context, even with the birth date between them.
 
-**Conversation false positives** (14 `card`, 17 `dob`, all `low`):
+**Conversation false positives** (20 `card`, 16 `dob`, all `low`):
 
 - "the Visa ending in 1784" after a card prompt;
 - "born in 1985" after a date-of-birth prompt.
@@ -172,5 +173,11 @@ class at `low` confidence. The benchmark keeps it visible. The rule is not a
 bug: a consumer that filters to `medium` and above loses none of the
 conversation positives.
 
-**Misses:** one card pasted in chat, suppressed by "invoice" in the previous
-turn.
+**Misses:**
+
+- **A card followed by its expiry was not found** (10 in tickets, 2 in
+  emails): "4539 1488 0343 6467 04/29". The spec's weak pattern takes the
+  expiry's month as a 17th and 18th digit. Presidio drops the 16-digit match
+  inside that longer one before any Luhn check. The longer one then fails
+  Luhn, and nothing is left.
+- Two cards pasted in chat, suppressed by "invoice" in the previous turn.

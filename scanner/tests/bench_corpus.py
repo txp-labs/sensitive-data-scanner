@@ -624,8 +624,15 @@ def ticket_text(g: Gen) -> str:
     name = g.name()
     parts = [f"Hi, this is {name}."]
     order = g.neg("order", g.order_number())
-    kind = g.r.randrange(7)
-    if kind == 6:
+    kind = g.r.randrange(8)
+    if kind == 7:
+        # A card with its expiry right after it, as people type them.
+        parts.append(
+            "Please use my other card "
+            + g.pos("card", g.printed_card(g.card()))
+            + f" {g.r.randint(1, 12):02d}/{g.r.randint(27, 31)} for the renewal."
+        )
+    elif kind == 6:
         parts.append(
             "I don't have an SSN, my ITIN is "
             + g.pos("us_itin", g.dashed(g.itin()) if g.r.random() < 0.7 else g.itin())
