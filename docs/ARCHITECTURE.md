@@ -238,7 +238,7 @@ region, and a bucket in another region is left to that region's scanner.
 |---|---|---|
 | `s3` | `ListBuckets` with `BucketRegion` set to the run's region | the whole bucket, by the S3 source |
 | `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
-| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT` |
+| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT`; a table over `DYNAMODB_MAX_TABLE_BYTES` is read by export with `DYNAMODB_EXPORT`, and is otherwise `too_large` (`pitr_off` when export is on and point-in-time recovery is off) |
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 | `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
@@ -264,8 +264,8 @@ region, and a bucket in another region is left to that region's scanner.
 | `mq` | `ListBrokers`, `DescribeBroker` | an ActiveMQ broker's named queues browsed (never consumed) by a checked read-only user, opt-in; RabbitMQ reported |
 | `ecr` | `DescribeRepositories` | files sampled from the latest image's top layers, opt-in ([below](#ecr-sagemaker-and-neptune-analytics)) |
 | `sagemaker` | `ListFeatureGroups`, `DescribeFeatureGroup`, `ListNotebookInstances` | each feature group's offline store, by the S3 source, opt-in; the rest reported |
-| `neptune-analytics` | `ListGraphs` | each graph by an export to CSV in the results bucket, read by column and deleted |
-| `eventbridge` | `ListArchives`, `DescribeArchive` | reported with size and retention; opt-in, a replay to the scanner's own rule and queue ([below](#eventbridge-archives-and-glacier-vaults)) |
+| `neptune-analytics` | `ListGraphs` | each graph by an export to CSV in the results bucket, read by column and deleted, with the export role and key (`NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN`, `NEPTUNE_ANALYTICS_EXPORT_KMS_KEY_ARN`); without them, `export_not_configured` |
+| `eventbridge` | `ListArchives`, `DescribeArchive` | reported with size and retention; opt-in (`EVENTBRIDGE_REPLAY` and `EVENTBRIDGE_REPLAY_QUEUE_URL`, which the template sets), a replay to the scanner's own rule and queue ([below](#eventbridge-archives-and-glacier-vaults)) |
 | `glacier` | `ListVaults` | reported (`archive_retrieval`) |
 
 #### Coverage by store
@@ -277,10 +277,10 @@ reason.
 | Store | Read | How | Otherwise reported as |
 |---|---|---|---|
 | S3, CloudWatch Logs, DynamoDB, Glue tables | **Scanned** | objects, events, items, columns | `denied`, `kms_access`, `too_large`, ... |
-| RDS and Aurora | **Scanned** with the export role and key | snapshot export to Parquet | `export_not_configured`, `no_snapshot` |
+| RDS and Aurora | **Scanned** with the export role and key | snapshot export to Parquet | `export_not_configured`, `no_snapshot`, `export_pending`, `export_failed`; Oracle, SQL Server and Db2 `unsupported` (no snapshot export) |
 | Aurora (small databases) | **Opt-in** (`RDS_DATA_API`) | sampled read-only SQL | |
 | Redshift, Redshift Serverless | **Opt-in** (`REDSHIFT_READ`) | sampled read-only SQL (Data API) | `read_not_configured`, `paused`, `no_grant` |
-| OpenSearch domains | **Scanned** | sampled `_search` per index, GETs only | `vpc_only`, `access_denied` |
+| OpenSearch domains | **Scanned** | sampled `_search` per index, GETs only | `vpc_only`, `access_denied`; `unsupported` while being created or deleted |
 | OpenSearch Serverless | **Opt-in** (`OPENSEARCH_SERVERLESS_READ`) | the same | `read_not_configured` |
 | EBS volumes and snapshots | **Opt-in** (`EBS_DIRECT_READ`) | sampled blocks' text, EBS direct APIs | `read_not_configured`, `no_snapshot`, `archived` |
 | Kinesis Data Streams | **Scanned** | sampled from `TRIM_HORIZON`, never checkpointed | `unsupported` |
@@ -302,13 +302,13 @@ reason.
 | CodeCommit | **Scanned** | a sample of the default branch's files at its head | `unsupported` (`state: empty`) |
 | S3 directory buckets | **Scanned** | the S3 source, read-only S3 Express sessions | `self` |
 | MSK, provisioned and Serverless | **Opt-in** (`MSK_READ`) | sampled from the earliest offset, IAM authentication, a throwaway group id, never committed | `read_not_configured`, `vpc_only`, `no_read_path` (no IAM authentication), `unsupported` |
-| Amazon MQ for ActiveMQ | **Opt-in** (`MQ_READ`, `MQ_BROKERS`) | named queues browsed over STOMP (`browser:true`) by a checked read-only user | `read_not_configured`, `user_can_write`, `vpc_only` |
+| Amazon MQ for ActiveMQ | **Opt-in** (`MQ_READ`, `MQ_BROKERS`) | named queues browsed over STOMP (`browser:true`) by a checked read-only user | `read_not_configured` (also a broker with no entry in `MQ_BROKERS`), `user_can_write`, `vpc_only` |
 | Amazon MQ for RabbitMQ | Coverage only | | `no_read_path` |
 | ECR images | **Opt-in** (`ECR_READ`) | files sampled from the latest image's top layers | `read_not_configured` |
 | SageMaker Feature Store (offline) | **Opt-in** (`SAGEMAKER_READ`) | its S3 objects, by the S3 source | `read_not_configured`; an online-only group `no_read_path` |
 | SageMaker notebook instances | Coverage only | | `no_read_path` |
 | Neptune Analytics | **Scanned** with the export role and key | export to CSV, read by column, deleted | `export_not_configured`, `export_pending` |
-| EventBridge archives | Coverage only; **opt-in** replay (`EVENTBRIDGE_REPLAY`) | a replay to the scanner's own rule and queue | `read_not_configured` |
+| EventBridge archives | Coverage only; **opt-in** replay (`EVENTBRIDGE_REPLAY`, with `EVENTBRIDGE_REPLAY_QUEUE_URL`) | a replay to the scanner's own rule and queue | `read_not_configured` |
 | S3 Glacier vaults | Coverage only | | `archive_retrieval` |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
@@ -414,14 +414,14 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `denied`, `not_allowed` | The deny list, or not on the allow list |
 | `skipped` | `self` | The scanner's own bucket or log group |
 | `skipped` | `too_large` | Over the size cap, after sampling |
-| `skipped` | `unsupported` | A log group of the `DELIVERY` class, or a table not `ACTIVE` |
+| `skipped` | `unsupported` | A store in a state or form the scanner cannot read: a log group of the `DELIVERY` class, a table not `ACTIVE`, a Glue view or resource link, an RDS engine with no snapshot export, an Express state machine, an empty repository, or a stream, cluster, broker or domain that is not active |
 | `skipped` | `kms_access` | A table whose KMS key is out of reach |
 | `skipped` | `tags_unreadable` | Tags could not be read while a deny-by-tag rule exists |
 | `error` | `kms_access`, `access_denied`, `error` | The store could not be read; `error` names the AWS error |
-| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift) |
+| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift, OpenSearch Serverless, EBS, SQS, Secrets Manager, MSK, MQ, ECR, SageMaker, EventBridge) |
 | `skipped` | `paused` | A paused Redshift cluster: a query would not resume it |
 | `skipped` | `no_grant` | Signed in, but the database user can see no table: grant it `SELECT` |
-| `skipped` | `vpc_only` | An OpenSearch domain reachable only inside its VPC, which the scanner's Lambda is not in |
+| `skipped` | `vpc_only` | An OpenSearch domain, MSK cluster or MQ broker reachable only inside its VPC, which the scanner's Lambda is not in |
 | `skipped` | `no_snapshot_export` | DocumentDB or Neptune: no snapshot export to S3 exists, and the scanner holds no database credentials |
 | `skipped` | `needs_task` | EFS or FSx: read only by mounting it inside its VPC (the opt-in file-system task) |
 | `skipped` | `archived` | An EBS snapshot in the archive tier, which the EBS direct APIs cannot read |
@@ -431,7 +431,15 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `redrive_would_change` | A dead-letter queue with its own redrive policy: a receive raises the receive count, which could move messages on |
 | `skipped` | `no_s3_destination` | A Firehose stream with no S3 location (its destination's own kind reads it, or it is outside AWS) |
 | `skipped` | `in_memory` | ElastiCache or MemoryDB: data in memory, inside the VPC, behind the cache's own credentials; exported snapshots in S3 are read there |
-| `skipped` | `no_read_path` | Timestream for InfluxDB: reached inside a VPC with an InfluxDB token |
+| `skipped` | `no_read_path` | No read-only path the scanner can take: Timestream for InfluxDB (a VPC and an InfluxDB token), MSK without IAM authentication, Amazon MQ for RabbitMQ, an online-only SageMaker feature group, a SageMaker notebook instance |
+| `skipped` | `pitr_off` | A DynamoDB table too large to Scan, whose export needs point-in-time recovery, which is off |
+| `skipped` | `lake_formation` | A Glue table Lake Formation governs, with no grant to the scanner's role |
+| `skipped` | `export_not_configured` | RDS, Aurora or Neptune Analytics without the export role and key |
+| `deferred` | `export_pending` | An export started and not finished; the next run reads it |
+| `error` | `export_failed` | An export that failed |
+| `skipped` | `archive_retrieval` | An S3 Glacier vault: reading needs a retrieval job |
+| `skipped` | `user_can_write` | An Amazon MQ user that can do more than read: nothing is read |
+| `skipped` | `vendor_mode`, `vendor_not_covered` | `SCAN_MODE=vendor`: S3 is left to Amazon Macie's imported findings, and every other kind is not covered by it |
 
 Each store's `gaps` counts what was listed but not read: `kmsDenied`
 (objects under a KMS key the scanner may not use), `unreadable` and
@@ -1749,7 +1757,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
-| KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
+| KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3`, `dynamodb`, `kinesis`, `states`, `lambda`, `xray` or `codecommit` `.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
 | Encryption facts (1.5) | `kms:ListAliases`, once per run: which key ids are AWS managed (`alias/aws/*`), so each store's key is told apart ([At-rest encryption](#at-rest-encryption-on-every-finding)). No key is described or used | `*` |
 
 A deny list in configuration is not an IAM boundary. To keep the scanner

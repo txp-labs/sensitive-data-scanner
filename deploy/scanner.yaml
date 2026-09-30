@@ -96,7 +96,8 @@ Parameters:
     AllowedValues: ["true", "false"]
     Default: "true"
     Description: >-
-      Allow kms:Decrypt through S3 and DynamoDB only (kms:ViaService), so the
+      Allow kms:Decrypt only through S3, DynamoDB, Kinesis, Step Functions,
+      Lambda, X-Ray and CodeCommit (kms:ViaService), so the
       scanner can read stores encrypted with customer managed keys whose key
       policy allows the account. Without it, those stores are reported as
       kms_access.
