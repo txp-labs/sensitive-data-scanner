@@ -173,6 +173,12 @@ DISCOVER_KINDS = {
     "s3_directory": "s3_directory",
     "msk": "msk",
     "mq": "mq",
+    "ecr": "ecr",
+    "sagemaker": "sagemaker",
+    "neptune_analytics": "neptune_analytics",
+    "neptune-analytics": "neptune_analytics",
+    "eventbridge": "eventbridge_archive",
+    "glacier": "glacier",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -210,6 +216,13 @@ _KIND_ALIASES = {
     "msk": "msk",
     "kafka": "msk",
     "mq": "mq",
+    "ecr": "ecr",
+    "sagemaker": "sagemaker",
+    "neptune_analytics": "neptune_analytics",
+    "neptune-analytics": "neptune_analytics",
+    "eventbridge": "eventbridge_archive",
+    "eventbridge_archive": "eventbridge_archive",
+    "glacier": "glacier",
 }
 
 
@@ -358,6 +371,18 @@ def _arn(v: str | None) -> str | None:
     return t
 
 
+_QUEUE_URL = re.compile(r"^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]{12}/[A-Za-z0-9_-]{1,80}$")
+
+
+def _queue_url(v: str | None) -> str | None:
+    t = (v or "").strip()
+    if not t:
+        return None
+    if not _QUEUE_URL.match(t):
+        raise ValueError("EVENTBRIDGE_REPLAY_QUEUE_URL is not an SQS queue URL")
+    return t
+
+
 _DB_USER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,126}$")
 
 
@@ -465,6 +490,20 @@ class Config:
     mq_read: bool = False
     mq_brokers: list[MqTarget] = field(default_factory=list)
     mq_messages_per_queue: int = 100
+    # Group 7, opt-in by size or cost (#35): ECR layers, SageMaker's offline stores, Neptune
+    # Analytics by export, EventBridge archives by a replay to the scanner's own queue.
+    ecr_read: bool = False
+    ecr_max_layers: int = 5
+    ecr_max_layer_bytes: int = 256 * 1024**2
+    ecr_max_files_per_layer: int = 200
+    sagemaker_read: bool = False
+    neptune_analytics_export_role_arn: str | None = None
+    neptune_analytics_export_kms_key_arn: str | None = None
+    eventbridge_replay: bool = False
+    eventbridge_replay_queue_url: str | None = None
+    eventbridge_replay_queue_arn: str | None = None
+    eventbridge_replay_hours: int = 24
+    eventbridge_replay_max_events: int = 1000
 
     @property
     def exports_prefix(self) -> str:
@@ -555,7 +594,27 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         mq_read=_bool(e.get("MQ_READ")),
         mq_brokers=mq_brokers(e.get("MQ_BROKERS")),
         mq_messages_per_queue=_int(e.get("MQ_MESSAGES_PER_QUEUE"), 100, 1, 10_000),
+        ecr_read=_bool(e.get("ECR_READ")),
+        ecr_max_layers=_int(e.get("ECR_MAX_LAYERS"), 5, 1, 200),
+        ecr_max_layer_bytes=_int(
+            e.get("ECR_MAX_LAYER_BYTES"), 256 * 1024**2, 1024**2, 10 * 1024**3
+        ),
+        ecr_max_files_per_layer=_int(e.get("ECR_MAX_FILES_PER_LAYER"), 200, 1, 100_000),
+        sagemaker_read=_bool(e.get("SAGEMAKER_READ")),
+        neptune_analytics_export_role_arn=_arn(e.get("NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN")),
+        neptune_analytics_export_kms_key_arn=_arn(e.get("NEPTUNE_ANALYTICS_EXPORT_KMS_KEY_ARN")),
+        eventbridge_replay=_bool(e.get("EVENTBRIDGE_REPLAY")),
+        eventbridge_replay_queue_url=_queue_url(e.get("EVENTBRIDGE_REPLAY_QUEUE_URL")),
+        eventbridge_replay_queue_arn=_arn(e.get("EVENTBRIDGE_REPLAY_QUEUE_ARN")),
+        eventbridge_replay_hours=_int(e.get("EVENTBRIDGE_REPLAY_HOURS"), 24, 1, 24 * 30),
+        eventbridge_replay_max_events=_int(
+            e.get("EVENTBRIDGE_REPLAY_MAX_EVENTS"), 1000, 1, 100_000
+        ),
     )
+    if config.eventbridge_replay and not (
+        config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn
+    ):
+        raise ValueError("EVENTBRIDGE_REPLAY needs the scanner's own replay queue")
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
     return config

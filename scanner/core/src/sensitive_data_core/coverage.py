@@ -37,6 +37,7 @@ _INTERNAL = frozenset(
         "itemFacts",
         "arn",
         "branch",
+        "bus",
     }
 )
 

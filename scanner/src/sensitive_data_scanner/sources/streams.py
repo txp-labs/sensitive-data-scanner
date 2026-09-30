@@ -58,7 +58,7 @@ AWS_SERVICES = ("kinesis", "firehose", "sqs")
 GET_RECORDS_CALLS = 3  # per shard per pass: an empty first batch is common at TRIM_HORIZON
 MAX_RECORD_BYTES = 1024 * 1024
 # A prefix ends where Firehose's expressions begin (`!{timestamp:yyyy}`, `!{partitionKey...}`).
-_EXPRESSION = re.compile(r"!?\{")
+_EXPRESSION = re.compile(r"^(.*?)!?\{")
 
 
 def _decode(data: bytes) -> str | None:
@@ -289,8 +289,8 @@ DESTINATION = {
 def _prefix(p: Any) -> str:
     """The literal head of a Firehose prefix, before its first expression."""
     text = str(p or "")
-    m = _EXPRESSION.search(text)
-    return text[: m.start()] if m else text
+    m = _EXPRESSION.match(text)
+    return m[1] if m else text
 
 
 def s3_locations(destination: dict[str, Any]) -> list[tuple[str, str]]:

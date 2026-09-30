@@ -98,7 +98,40 @@ bumps the minor version. Spec changes are listed under **Spec**.
     map, or when its groups may write to or administer queues. RabbitMQ has no
     safe peek and is reported `no_read_path`.
 
+- **ECR, SageMaker, Neptune Analytics, EventBridge archives and Glacier** ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35), step 4):
+  - **ECR** (`ecr`, opt-in `ECR_READ`): files sampled from each repository's
+    latest image's top layers (`ECR_MAX_LAYERS`, 5; `ECR_MAX_LAYER_BYTES`,
+    256 MiB; `ECR_MAX_FILES_PER_LAYER`, 200), streamed from the layer URL ECR
+    signs, gzip or plain tar, the operating system's own directories left
+    out. An image is read once per push.
+  - **SageMaker** (`sagemaker`, opt-in `SAGEMAKER_READ`): each feature group's
+    offline store read as S3. Online-only groups (no API lists their records)
+    and notebook instances (their volume is in SageMaker's own account) are
+    `no_read_path`.
+  - **Neptune Analytics** (`neptune-analytics`): graphs read by an export to
+    CSV in the results bucket, with its own role and key
+    (`NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN`, `NEPTUNE_ANALYTICS_EXPORT_KMS_KEY_ARN`;
+    the template's `NeptuneAnalyticsExportKmsKeyArn`), within the export quota,
+    read by column and deleted; `export_not_configured` without them.
+  - **EventBridge archives** (`eventbridge`): reported with `sizeBytes`,
+    `eventCount` and `retentionDays`. Opt-in (`EVENTBRIDGE_REPLAY`): a replay of
+    the last day to a rule of the scanner's own on the archive's bus, sent
+    only to that rule (`FilterArns`) and on to the scanner's own queue
+    (created by the template), read and emptied, then the rule removed.
+  - **S3 Glacier vaults** (`glacier`): reported as `archive_retrieval` (new
+    reason) with their archives (`archives`) and size; no retrieval job is
+    ever started.
+
 ### Security
+- Step 4's IAM: listing for ECR, SageMaker, Neptune Analytics, EventBridge
+  archives and Glacier; opt-in ECR pulls (`BatchGetImage`,
+  `GetDownloadUrlForLayer`); the graph export (`StartExportTask` on graphs,
+  its own role, `kms:Decrypt` through S3); and for replays, rule changes only on
+  `sensitive-data-scanner-replay-*`, replays only named `sds-*`, and message
+  deletes only on the scanner's own queue, each with a Deny for everything
+  else. `sqs:DeleteMessage*` moves from `NoDataStoreWrites` into its own Deny
+  on every queue but the scanner's. Every write of the new services is denied,
+  including Glacier `InitiateJob` and Neptune Analytics' writing queries.
 - The brokers' reads (step 3) are opt-in statements: `kafka:GetBootstrapBrokers`,
   `kafka-cluster:Connect`, `DescribeCluster`, `DescribeTopic`, `ReadData`, and
   `DescribeGroup` on the scanner's own throwaway groups only; `mq:DescribeUser`,
