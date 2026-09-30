@@ -259,7 +259,9 @@ def test_every_custom_role_fits_googles_limits_with_every_opt_in_on() -> None:
     """The worst case: every opt-in variable on, so every role in local.roles is made."""
     t = load()
     source = (DEPLOY / "main.tf").read_text()
-    made = re.findall(r'\{ \w+ = \{ id = "(\w+)", title = "([^"]+)", permissions = local\.(\w+) \}', source)
+    made = re.findall(
+        r'\{ \w+ = \{ id = "(\w+)", title = "([^"]+)", permissions = local\.(\w+) \}', source
+    )
     assert len(made) == 1 + len(OPT_IN_ROLES) + 1  # read, the opt-ins, SDP profiles
     (role,) = load()["resource"]["google_organization_iam_custom_role"].values()
     description = str(role["description"])

@@ -53,7 +53,7 @@ def load_text(text: str) -> dict[str, Any]:
 
 
 def _is_ref_to(value: Any, name: str) -> bool:
-    return value == {"Ref": name}
+    return bool(value == {"Ref": name})
 
 
 def role_documents(template: dict[str, Any], role: str) -> dict[str, list[tuple[str, Any]]]:
@@ -77,10 +77,10 @@ def role_documents(template: dict[str, Any], role: str) -> dict[str, list[tuple[
     # else, or an AWS managed policy's ARN.
     attached: dict[str, str | None] = {}
     aws_managed: list[Any] = []
-    for x in props.get("ManagedPolicyArns", []):
-        cond = None
-        if isinstance(x, dict) and "Fn::If" in x:
-            cond, x, other = x["Fn::If"]
+    for entry in props.get("ManagedPolicyArns", []):
+        cond, x = None, entry
+        if isinstance(entry, dict) and "Fn::If" in entry:
+            cond, x, other = entry["Fn::If"]
             assert other == {"Ref": "AWS::NoValue"}, "a managed policy's Fn::If has no else"
         if isinstance(x, dict) and x.get("Ref") in res:
             attached[x["Ref"]] = cond
@@ -89,15 +89,16 @@ def role_documents(template: dict[str, Any], role: str) -> dict[str, list[tuple[
     for name, r in res.items():
         t = r["Type"]
         rp = r.get("Properties", {})
-        if t == "AWS::IAM::RolePolicy" and _is_ref_to(rp.get("RoleName"), role):
-            inline.append((f"{name}/{rp['PolicyName']}", gated(r, rp["PolicyDocument"])))
-        elif t == "AWS::IAM::Policy" and any(_is_ref_to(x, role) for x in rp.get("Roles", [])):
+        to_role = (t == "AWS::IAM::RolePolicy" and _is_ref_to(rp.get("RoleName"), role)) or (
+            t == "AWS::IAM::Policy" and any(_is_ref_to(x, role) for x in rp.get("Roles", []))
+        )
+        if to_role:
             inline.append((f"{name}/{rp['PolicyName']}", gated(r, rp["PolicyDocument"])))
         elif t == "AWS::IAM::ManagedPolicy" and (
             any(_is_ref_to(x, role) for x in rp.get("Roles", [])) or name in attached
         ):
             if name in attached:
-                assert attached[name] == r.get("Condition"), f"{name}: attached under its own Condition"
+                assert attached[name] == r.get("Condition"), f"{name}: under its own Condition"
             managed.append((name, gated(r, rp["PolicyDocument"])))
     for x in aws_managed:
         managed.append((f"arn:{json.dumps(x)}", None))  # an AWS managed policy: counted only
@@ -109,13 +110,14 @@ def statements_with_gates(template: dict[str, Any], role: str) -> list[tuple[lis
     (a resource's Condition, then any Fn::If around the statement), unresolved."""
     out: list[tuple[list[str], Any]] = []
     docs = role_documents(template, role)
-    for _, doc in docs["inline"] + docs["managed"]:
-        if doc is None:
+    for _, wrapped in docs["inline"] + docs["managed"]:
+        if wrapped is None:
             continue
         gates: list[str] = []
-        if isinstance(doc, dict) and "Fn::If" in doc:
-            gates = [doc["Fn::If"][0]]
-            doc = doc["Fn::If"][1]
+        doc = wrapped
+        if isinstance(wrapped, dict) and "Fn::If" in wrapped:
+            gates = [wrapped["Fn::If"][0]]
+            doc = wrapped["Fn::If"][1]
         for raw in doc["Statement"]:
             if isinstance(raw, dict) and "Fn::If" in raw:
                 cond, s, other = raw["Fn::If"]
@@ -250,7 +252,7 @@ class Resolver:
         if not isinstance(v, dict):
             return v
         if len(v) == 1:
-            (k, arg), = v.items()
+            ((k, arg),) = v.items()
             if k == "Ref":
                 return self._DROP if arg == "AWS::NoValue" else self.ref(arg)
             if k == "Fn::GetAtt":

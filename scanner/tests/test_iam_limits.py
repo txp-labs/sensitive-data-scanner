@@ -171,9 +171,8 @@ def test_the_denies_are_managed_and_the_function_waits_for_them() -> None:
         s["Sid"]: name for name, d in docs["managed"] for s in _plain(d)["Statement"] if "Sid" in s
     }
     assert by_sid["NoDataStoreWrites"] == "DataStoreWriteDenyPolicy"
-    assert [
-        s["Sid"] for s in res["DataStoreWriteDenyPolicy"]["Properties"]["PolicyDocument"]["Statement"]
-    ] == ["NoDataStoreWrites"]
+    alone = res["DataStoreWriteDenyPolicy"]["Properties"]["PolicyDocument"]["Statement"]
+    assert [s["Sid"] for s in alone] == ["NoDataStoreWrites"]
     # Attached by the role itself, so the role never exists without its Denies; and every
     # policy the role always holds is also a named dependency of the function.
     attached = res["ScannerRole"]["Properties"]["ManagedPolicyArns"]

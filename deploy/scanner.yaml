@@ -63,7 +63,7 @@ Parameters:
     Type: String
     Default: all
     Description: >-
-      DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
+      DISCOVER - all (or true), or any of s3, logs, dynamodb, glue, rds, redshift,
       opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
       firehose, sqs, ssm, secretsmanager, elasticache, memorydb, timestream,
       keyspaces, stepfunctions, lambda, xray, codecommit, s3express, msk, mq,
