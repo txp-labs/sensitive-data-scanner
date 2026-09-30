@@ -144,6 +144,11 @@ Jira and Confluence have no detection of their own to import: scanner only.
 | Databases anywhere | a container next to your databases: docker, Kubernetes, ECS or Azure Container Instances | [docs/DATABASES.md](docs/DATABASES.md#deploying-it) |
 | SaaS | a container in your own environment: examples for ECS, Container Apps, Cloud Run and Kubernetes | [docs/SAAS.md](docs/SAAS.md#deploying) |
 
+To run the AWS scanner by hand, invoke the function asynchronously
+(`aws lambda invoke --invocation-type Event ...`). A synchronous invoke runs
+long enough for the CLI to retry it
+([Invoking a run](docs/ARCHITECTURE.md#invoking-a-run)).
+
 Every release publishes the images (`ghcr.io/txp-labs/sensitive-data-scanner`,
 and `-databases`, `-azure`, `-gcp` and `-saas`) and a Lambda zip
 ([docs/RELEASING.md](docs/RELEASING.md)).

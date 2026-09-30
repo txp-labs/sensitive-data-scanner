@@ -633,6 +633,36 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
 
 ### Fixed
+- **Cold start past Lambda's 10 s init limit**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
+  account: `INIT_REPORT ... Status: timeout`).
+  - The handler module now imports nothing heavy: about 0.03 s.
+  - The runner, Presidio and spaCy, the AWS SDK, pyarrow and pypdf are
+    imported on the first invoke.
+  - Every image and the Lambda zip now carry bytecode
+    (`scripts/slim-site-packages.sh`, `unchecked-hash`). Without it, every
+    cold start on Lambda's read-only file system compiled them from source:
+    about 10 s, against 0.4 s with bytecode.
+  - `tests/test_handler.py` holds the handler's import under 3 s with no
+    heavy module loaded. CI measures both imports in the image.
+- **Invoking by hand started extra runs**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). A synchronous CLI invoke longer than the
+  CLI's read timeout is retried by the CLI. The docs now say to invoke with
+  `--invocation-type Event`, and describe what concurrent invokes do
+  ([Invoking a run](docs/ARCHITECTURE.md#invoking-a-run)). A second invoke
+  while a run holds the lock returns `locked` and writes nothing (tested). A
+  run now releases the lock only while it is still its own (new log event
+  `run.lock_lost`).
+- **Findings pushed from another region than the bus's**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). The EventBridge client was made in the
+  scanner's own region, so a scanner outside the bus's region could not
+  `PutEvents` to it.
+  - The client is now made in the region from the bus's ARN.
+  - `FINDINGS_EVENT_BUS_ARN` must be an EventBridge bus ARN; the
+    configuration and the templates' `FindingsEventBusArn` (new
+    `AllowedPattern`) refuse anything else.
+  - The IAM statement (`PushFindings`) already names the exact bus ARN, so it
+    allows a bus in any region.
 - **RDS and Aurora snapshot export was always denied**
   ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
   account). `PassTheExportRoleOnly` allowed `iam:PassRole` on the export role

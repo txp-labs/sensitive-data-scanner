@@ -16,6 +16,7 @@ run sends several, numbered by `part` and `parts` (`sensitive_data_core.push`).
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +28,20 @@ if TYPE_CHECKING:
     from mypy_boto3_events import EventBridgeClient
 
 MAX_ENTRIES_PER_CALL = 10
+
+# An EventBridge bus: arn:<partition>:events:<region>:<account>:event-bus/<name>.
+BUS_ARN = re.compile(
+    r"^arn:aws[a-z-]*:events:([a-z]{2}(?:-[a-z]+)+-[0-9]+):[0-9]{12}:event-bus/[A-Za-z0-9._/-]{1,256}$"
+)
+
+
+def bus_region(bus_arn: str) -> str:
+    """The region of the bus: PutEvents goes to the bus's own region's endpoint, which may
+    not be the scanner's (#94). A value that is not a bus ARN is refused."""
+    m = BUS_ARN.match(bus_arn)
+    if m is None:
+        raise ValueError("FINDINGS_EVENT_BUS_ARN is not an EventBridge event bus ARN")
+    return m[1]
 
 
 def put_findings_events(client: EventBridgeClient, bus_arn: str, document: dict[str, Any]) -> int:
