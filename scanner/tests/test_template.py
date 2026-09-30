@@ -96,7 +96,9 @@ READ = re.compile(
     r"|lambda:(ListFunctions|ListTags|GetFunctionConfiguration)$"
     r"|xray:(GetEncryptionConfig|GetTraceSummaries|BatchGetTraces)$"
     r"|codecommit:(List|GetRepository$|GetBranch$|GetFolder$|GetFile$)"
-    r"|s3express:ListAllMyDirectoryBuckets$)"
+    r"|s3express:ListAllMyDirectoryBuckets$"
+    r"|kafka:(ListClustersV2|GetBootstrapBrokers)$|mq:(List|Describe)"
+    r"|kafka-cluster:(Connect|DescribeCluster|DescribeTopic|ReadData|DescribeGroup)$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -323,6 +325,8 @@ SERVICES = {
     "lambda": "lambda",
     "xray": "xray",
     "codecommit": "codecommit",
+    "kafka": "kafka",
+    "mq": "mq",
 }
 
 
@@ -578,3 +582,37 @@ def test_group_seven_defaults_read_and_never_run_push_or_write() -> None:
     assert guard["Condition"] == {"StringNotEquals": {"s3express:SessionMode": "ReadOnly"}}
     source = (PACKAGE / "sources" / "code.py").read_text()
     assert 'params["SessionMode"] = "ReadOnly"' in source
+
+
+def test_brokers_are_read_with_no_commit_and_no_consume() -> None:
+    """#35: MSK is read without a group of its own (a throwaway id it may only describe) and
+    can never commit; MQ queues are browsed by a checked user; both are opt-in."""
+    wrapped = [
+        s["Fn::If"]
+        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        if isinstance(s, dict) and "Fn::If" in s
+    ]
+    gates = {st.get("Sid"): c for c, st, _ in wrapped}
+    for sid in ("MskBootstrapBrokers", "ConnectToMskClusters", "ReadMskTopics"):
+        assert gates[sid] == "MskReads"
+    assert gates["DescribeOwnThrowawayGroups"] == "MskReads"
+    assert gates["CheckMqUsers"] == gates["ReadMqUserSecrets"] == "MqReads"
+    groups = next(s for s in statements() if s.get("Sid") == "DescribeOwnThrowawayGroups")
+    assert actions(groups) == ["kafka-cluster:DescribeGroup"]
+    assert str(groups["Resource"]["Fn::Sub"]).endswith(":group/*/*/sensitive-data-scanner-*")
+    topics = next(s for s in statements() if s.get("Sid") == "ReadMskTopics")
+    assert actions(topics) == ["kafka-cluster:DescribeTopic", "kafka-cluster:ReadData"]
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "kafka-cluster:WriteData",
+        "kafka-cluster:AlterGroup",
+        "kafka-cluster:DeleteGroup",
+        "kafka-cluster:CreateTopic",
+        "mq:Update*",
+        "mq:Reboot*",
+    } <= denied
+    assert SCANNER["Parameters"]["MskRead"]["Default"] == "false"
+    assert SCANNER["Parameters"]["MqRead"]["Default"] == "false"
+    source = (PACKAGE / "sources" / "brokers.py").read_text()
+    assert "enable_auto_commit=False" in source and "commit(" not in source
+    assert '"browser": "true"' in source and '"ACK"' not in source

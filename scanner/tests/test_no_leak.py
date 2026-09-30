@@ -1008,6 +1008,111 @@ def test_no_value_leaves_directory_buckets(
         assert leaks(blob) == [], name_
 
 
+def test_no_value_leaves_the_brokers(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """An MSK cluster and topic and an ActiveMQ broker and queue named with values, carrying
+    values; the broker user's password is never written anywhere (#35)."""
+    import base64
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from sensitive_data_scanner.config import MqTarget
+    from test_brokers import READ_ONLY_CONFIG, FakeConsumer
+    from test_streams import stubs
+
+    s = stubs(env, "kafka", "mq", "secretsmanager")
+    cluster = f"pay-{SSN_A}"
+    arn = f"arn:aws:kafka:us-west-2:123456789012:cluster/{cluster}/x"
+    s["kafka"].add_response(
+        "list_clusters_v2",
+        {
+            "ClusterInfoList": [
+                {
+                    "ClusterName": cluster,
+                    "ClusterArn": arn,
+                    "ClusterType": "SERVERLESS",
+                    "State": "ACTIVE",
+                }
+            ]
+        },
+    )
+    s["kafka"].add_response("get_bootstrap_brokers", {"BootstrapBrokerStringSaslIam": "b:9098"})
+    topic = f"cards-{CARDS['visa']}"
+    consumer = FakeConsumer({topic: {0: [json.dumps({"pan": CARDS["amex"]}).encode()]}})
+    env.clients.services["kafka-consumer"] = lambda b, r, g: consumer
+    broker = f"mq-{SSN_B}"
+    broker_id = "b-1234abcd-56ef-78ab-90cd-ef1234567890"
+    password = f"pw-{CARDS['jcb']}"
+    s["mq"].add_response(
+        "list_brokers",
+        {
+            "BrokerSummaries": [
+                {
+                    "BrokerName": broker,
+                    "BrokerId": broker_id,
+                    "EngineType": "ACTIVEMQ",
+                    "DeploymentMode": "SINGLE_INSTANCE",
+                }
+            ]
+        },
+    )
+    described = {
+        "BrokerId": broker_id,
+        "BrokerName": broker,
+        "BrokerState": "RUNNING",
+        "EngineType": "ACTIVEMQ",
+        "BrokerInstances": [{"Endpoints": ["stomp+ssl://h:61614"]}],
+        "Configurations": {"Current": {"Id": "c", "Revision": 1}},
+    }
+    s["mq"].add_response("describe_broker", described)
+    s["mq"].add_response("describe_broker", described)
+    user_ref = "arn:aws:secretsmanager:us-west-2:123456789012:secret:mq-AbCdEf"
+    s["secretsmanager"].add_response(
+        "get_secret_value",
+        {"SecretString": json.dumps({"username": f"u{SSN_A}", "password": password})},
+    )
+    s["mq"].add_response(
+        "describe_user",
+        {"BrokerId": broker_id, "Username": f"u{SSN_A}", "Groups": ["readers"]},
+    )
+    s["mq"].add_response(
+        "describe_configuration_revision",
+        {"Data": base64.b64encode(READ_ONLY_CONFIG.encode()).decode()},
+    )
+    queue = f"q-{CARDS['discover']}"
+
+    class Browser:
+        def __init__(self, endpoints: list[str], username: str, pw: str) -> None:
+            assert pw == password
+
+        def browse(self, name: str, limit: int) -> list[bytes]:
+            return [f"ssn {dashed(SSN_A)} card {CARDS['mastercard']}".encode()]
+
+        def close(self) -> None:
+            return None
+
+    env.clients.services["stomp"] = Browser
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"msk", "mq"}),
+            msk_read=True,
+            mq_read=True,
+            mq_brokers=[MqTarget(broker, user_ref, (queue,))],
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert {f["resource"]["service"] for f in doc["findings"]} == {"msk", "mq"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+        assert "pw-" not in blob, name_
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

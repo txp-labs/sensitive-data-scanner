@@ -30,6 +30,8 @@ Metadata:
         Parameters: [SqsDlqRead]
       - Label: { default: Parameter Store and Secrets Manager }
         Parameters: [SsmDecrypt, SecretsRead]
+      - Label: { default: "Brokers: MSK and Amazon MQ (opt-in reads)" }
+        Parameters: [MskRead, MqRead, MqBrokers, MqSecretArns]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -60,7 +62,7 @@ Parameters:
       DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
       opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
       firehose, sqs, ssm, secretsmanager, elasticache, memorydb, timestream,
-      keyspaces, stepfunctions, lambda, xray, codecommit, s3express.
+      keyspaces, stepfunctions, lambda, xray, codecommit, s3express, msk, mq.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -175,6 +177,33 @@ Parameters:
     Description: >-
       SECRETS_READ - read each secret's value for sensitive data (reported as
       counts, never the value). Off: secrets are listed and reported.
+  MskRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      MSK_READ - sample MSK topics with IAM authentication: partitions assigned
+      by hand and read from the earliest offset under a throwaway group id,
+      never committed (AlterGroup is denied). Needs network reach to the
+      brokers (public IAM access, or the function in the VPC); unreachable
+      clusters are reported vpc_only.
+  MqRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      MQ_READ - browse (never consume) the ActiveMQ queues named in MqBrokers,
+      with a read-only broker user whose name and password are in a secret.
+      The user is checked first; one that can write is refused.
+  MqBrokers:
+    Type: String
+    Default: ""
+    Description: >-
+      MQ_BROKERS - a JSON list of {"broker", "secretArn", "queues"} for MqRead.
+  MqSecretArns:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: The Secrets Manager secret ARNs named in MqBrokers (read-only broker users).
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -218,6 +247,10 @@ Conditions:
   SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
   SsmSecureStrings: !Equals [!Ref SsmDecrypt, "true"]
   SecretsValues: !Equals [!Ref SecretsRead, "true"]
+  MskReads: !Equals [!Ref MskRead, "true"]
+  MqReads: !And
+    - !Equals [!Ref MqRead, "true"]
+    - !Not [!Equals [!Join [",", !Ref MqSecretArns], ""]]
 
 Resources:
   ResultsBucket:
@@ -564,6 +597,57 @@ Resources:
                 Resource: !Sub arn:${AWS::Partition}:s3express:${AWS::Region}:${AWS::AccountId}:bucket/*
                 Condition:
                   StringEquals: { "s3express:SessionMode": ReadOnly }
+              # --- Brokers: MSK and Amazon MQ, discovered and reported; reads opt-in below
+              - Sid: DescribeBrokers
+                Effect: Allow
+                Action: [kafka:ListClustersV2, mq:ListBrokers, mq:DescribeBroker]
+                Resource: "*"
+              - !If
+                - MskReads
+                - Sid: MskBootstrapBrokers
+                  Effect: Allow
+                  Action: kafka:GetBootstrapBrokers
+                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*
+                - !Ref AWS::NoValue
+              - !If
+                - MskReads
+                - Sid: ConnectToMskClusters
+                  Effect: Allow
+                  Action: [kafka-cluster:Connect, kafka-cluster:DescribeCluster]
+                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*
+                - !Ref AWS::NoValue
+              - !If
+                - MskReads
+                - Sid: ReadMskTopics
+                  Effect: Allow
+                  Action: [kafka-cluster:DescribeTopic, kafka-cluster:ReadData]
+                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:topic/*/*/*
+                - !Ref AWS::NoValue
+              # Its own throwaway groups only, and only to describe them (the consumer
+              # asks for their committed offsets; there are none, and AlterGroup is denied).
+              - !If
+                - MskReads
+                - Sid: DescribeOwnThrowawayGroups
+                  Effect: Allow
+                  Action: kafka-cluster:DescribeGroup
+                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:group/*/*/sensitive-data-scanner-*
+                - !Ref AWS::NoValue
+              - !If
+                - MqReads
+                - Sid: CheckMqUsers
+                  Effect: Allow
+                  Action: [mq:DescribeUser, mq:DescribeConfigurationRevision]
+                  Resource:
+                    - !Sub arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:broker:*
+                    - !Sub arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:configuration:*
+                - !Ref AWS::NoValue
+              - !If
+                - MqReads
+                - Sid: ReadMqUserSecrets
+                  Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref MqSecretArns
+                - !Ref AWS::NoValue
               # --- Which KMS keys are AWS managed (alias/aws/*), to tell each store's
               # at-rest key apart (#35). Metadata only: no key is described or used.
               - Sid: ListKmsAliases
@@ -802,6 +886,31 @@ Resources:
                   - s3express:DeleteBucketPolicy
                   - s3express:PutEncryptionConfiguration
                   - s3express:PutLifecycleConfiguration
+                  - kafka-cluster:WriteData
+                  - kafka-cluster:WriteDataIdempotently
+                  - kafka-cluster:AlterGroup
+                  - kafka-cluster:DeleteGroup
+                  - kafka-cluster:CreateTopic
+                  - kafka-cluster:DeleteTopic
+                  - kafka-cluster:AlterTopic
+                  - kafka-cluster:AlterTopicDynamicConfiguration
+                  - kafka-cluster:AlterCluster
+                  - kafka-cluster:AlterClusterDynamicConfiguration
+                  - kafka-cluster:AlterTransactionalId
+                  - kafka:Create*
+                  - kafka:Delete*
+                  - kafka:Update*
+                  - kafka:Reboot*
+                  - kafka:Put*
+                  - kafka:BatchAssociate*
+                  - kafka:BatchDisassociate*
+                  - kafka:TagResource
+                  - kafka:UntagResource
+                  - mq:Create*
+                  - mq:Delete*
+                  - mq:Update*
+                  - mq:Reboot*
+                  - mq:Promote
                 Resource: "*"
               # A session that could write is never created (the Allow above asks for
               # ReadOnly too; this holds whatever else the role is given).
@@ -1028,6 +1137,9 @@ Resources:
           SQS_DLQ_READ: !Ref SqsDlqRead
           SSM_DECRYPT: !Ref SsmDecrypt
           SECRETS_READ: !Ref SecretsRead
+          MSK_READ: !Ref MskRead
+          MQ_READ: !Ref MqRead
+          MQ_BROKERS: !Ref MqBrokers
 
   ScheduleRole:
     Type: AWS::IAM::Role

@@ -171,6 +171,8 @@ DISCOVER_KINDS = {
     "codecommit": "codecommit",
     "s3express": "s3_directory",
     "s3_directory": "s3_directory",
+    "msk": "msk",
+    "mq": "mq",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -205,6 +207,9 @@ _KIND_ALIASES = {
     "codecommit": "codecommit",
     "s3express": "s3_directory",
     "s3_directory": "s3_directory",
+    "msk": "msk",
+    "kafka": "msk",
+    "mq": "mq",
 }
 
 
@@ -299,6 +304,48 @@ def data_api_targets(raw: str | None) -> list[DataApiTarget]:
                 max_tables=tables,
             )
         )
+    return out
+
+
+@dataclass(frozen=True)
+class MqTarget:
+    """One ActiveMQ broker to browse: its name, the secret holding a read-only user, and the
+    queues to browse."""
+
+    broker: str
+    secret_arn: str
+    queues: tuple[str, ...] = ()
+
+
+_MQ_FIELDS = frozenset({"broker", "secretArn", "queues"})
+_QUEUE = re.compile(r"^[A-Za-z0-9_.:/-]{1,255}$")
+
+
+def mq_brokers(raw: str | None) -> list[MqTarget]:
+    """`MQ_BROKERS`: a JSON list of ActiveMQ brokers to browse, each with the secret of a
+    read-only user and the queues to browse (opt-in, with `MQ_READ`)."""
+    if not raw or not raw.strip():
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ValueError("MQ_BROKERS is not valid JSON") from None
+    if not isinstance(data, list):
+        raise ValueError("MQ_BROKERS must be a JSON list")
+    out = []
+    for t in data:
+        if not isinstance(t, dict) or set(t) - _MQ_FIELDS:
+            raise ValueError("MQ_BROKERS: unknown field in an entry")
+        if not isinstance(t.get("broker"), str) or not t["broker"]:
+            raise ValueError("MQ_BROKERS: broker is required")
+        if not isinstance(t.get("secretArn"), str) or not _ARN.match(t["secretArn"]):
+            raise ValueError("MQ_BROKERS: secretArn must be an ARN")
+        queues = t.get("queues") or []
+        if not isinstance(queues, list) or not all(
+            isinstance(q, str) and _QUEUE.match(q) for q in queues
+        ):
+            raise ValueError("MQ_BROKERS: queues must be a list of queue names")
+        out.append(MqTarget(t["broker"], t["secretArn"], tuple(queues)))
     return out
 
 
@@ -409,6 +456,15 @@ class Config:
     codecommit_max_files: int = 200
     codecommit_max_folders: int = 500
     self_function: str | None = None
+    # Opt-in brokers (#35): MSK read with IAM authentication, sampled per partition and never
+    # committed; ActiveMQ queues browsed, never consumed, with a checked read-only user.
+    msk_read: bool = False
+    msk_records_per_partition: int = 100
+    msk_max_topics: int = 50
+    msk_max_partitions: int = 50
+    mq_read: bool = False
+    mq_brokers: list[MqTarget] = field(default_factory=list)
+    mq_messages_per_queue: int = 100
 
     @property
     def exports_prefix(self) -> str:
@@ -492,6 +548,13 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         codecommit_max_files=_int(e.get("CODECOMMIT_MAX_FILES"), 200, 1, 100_000),
         codecommit_max_folders=_int(e.get("CODECOMMIT_MAX_FOLDERS"), 500, 1, 100_000),
         self_function=e.get("AWS_LAMBDA_FUNCTION_NAME") or None,
+        msk_read=_bool(e.get("MSK_READ")),
+        msk_records_per_partition=_int(e.get("MSK_RECORDS_PER_PARTITION"), 100, 1, 10_000),
+        msk_max_topics=_int(e.get("MSK_MAX_TOPICS"), 50, 1, 10_000),
+        msk_max_partitions=_int(e.get("MSK_MAX_PARTITIONS"), 50, 1, 10_000),
+        mq_read=_bool(e.get("MQ_READ")),
+        mq_brokers=mq_brokers(e.get("MQ_BROKERS")),
+        mq_messages_per_queue=_int(e.get("MQ_MESSAGES_PER_QUEUE"), 100, 1, 10_000),
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
@@ -501,7 +564,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
 # ------------------------------------------------------------------ configuration documents
 
 # Settings holding JSON: a document may give them as JSON values, not strings.
-_JSON_SETTINGS = frozenset({"SCAN_DYNAMODB", "DISCOVER_SAMPLING", "RDS_DATA_API"})
+_JSON_SETTINGS = frozenset({"SCAN_DYNAMODB", "DISCOVER_SAMPLING", "RDS_DATA_API", "MQ_BROKERS"})
 # Read by read_config but set by Lambda, never by a document.
 _NOT_FROM_DOCUMENTS = frozenset({"AWS_LAMBDA_LOG_GROUP_NAME", "AWS_LAMBDA_FUNCTION_NAME"})
 MAX_CONFIG_BYTES = 1024 * 1024

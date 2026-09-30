@@ -147,6 +147,10 @@ NOTES = {
     "budget": ("deferred", "budget"),
     "no_snapshot": ("skipped", "no_snapshot"),
     "export_failed": ("error", "export_failed"),
+    # A source that found, when it tried, that it cannot or may not read (1.5).
+    "vpc_only": ("skipped", "vpc_only"),
+    "no_read_path": ("skipped", "no_read_path"),
+    "user_can_write": ("skipped", "user_can_write"),
 }
 
 
