@@ -812,6 +812,202 @@ def test_no_value_or_key_name_leaves_the_encryption_facts(
         assert cmk not in blob and "pan-" not in blob, name_
 
 
+def test_no_value_leaves_workflows_functions_traces_or_code(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Group 7's defaults (#35): a state machine, a function and its variables, a traced
+    service, a repository and a file path named with values, all carrying values."""
+    import datetime as dt
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_streams import stubs
+
+    t0 = dt.datetime(2026, 9, 29, tzinfo=dt.UTC)
+    s = stubs(env, "stepfunctions", "lambda", "xray", "codecommit")
+    machine = f"orders-{SSN_A}"
+    arn = f"arn:aws:states:us-west-2:123456789012:stateMachine:{machine}"
+    sfn = s["stepfunctions"]
+    sfn.add_response(
+        "list_state_machines",
+        {
+            "stateMachines": [
+                {"stateMachineArn": arn, "name": machine, "type": "STANDARD", "creationDate": t0}
+            ]
+        },
+    )
+    sfn.add_response(
+        "describe_state_machine",
+        {
+            "stateMachineArn": arn,
+            "name": machine,
+            "definition": "{}",
+            "roleArn": "arn:aws:iam::1:role/r",
+            "type": "STANDARD",
+            "creationDate": t0,
+        },
+    )
+    ex = f"arn:aws:states:us-west-2:123456789012:execution:{machine}:{CARDS['mir']}"
+    sfn.add_response(
+        "list_executions",
+        {
+            "executions": [
+                {
+                    "executionArn": ex,
+                    "stateMachineArn": arn,
+                    "name": CARDS["mir"],
+                    "status": "FAILED",
+                    "startDate": t0,
+                }
+            ]
+        },
+    )
+    sfn.add_response(
+        "get_execution_history",
+        {
+            "events": [
+                {
+                    "timestamp": t0,
+                    "type": "ExecutionStarted",
+                    "id": 1,
+                    "executionStartedEventDetails": {
+                        "input": json.dumps({"card": CARDS["visa"], "ssn": dashed(SSN_B)})
+                    },
+                },
+                {
+                    "timestamp": t0,
+                    "type": "ExecutionFailed",
+                    "id": 2,
+                    "executionFailedEventDetails": {"cause": f"declined {CARDS['amex']}"},
+                },
+            ]
+        },
+    )
+    fn = f"pay-{SSN_B}"
+    s["lambda"].add_response(
+        "list_functions",
+        {"Functions": [{"FunctionName": fn, "FunctionArn": f"arn:aws:lambda:x:1:function:{fn}"}]},
+    )
+    s["lambda"].add_response(
+        "get_function_configuration",
+        {
+            "FunctionName": fn,
+            "Environment": {"Variables": {f"K_{CARDS['jcb']}": CARDS["discover"], "S": SSN_A}},
+        },
+    )
+    x = s["xray"]
+    x.add_response("get_encryption_config", {"EncryptionConfig": {"Type": "NONE"}})
+    x.add_response("get_trace_summaries", {"TraceSummaries": [{"Id": "1-00000000-0"}]})
+    document = {
+        "id": "a",
+        "name": f"svc-{SSN_A}",
+        "annotations": {f"a_{CARDS['visa13']}": CARDS["mastercard"]},
+        "metadata": {"default": {"ssn": dashed(SSN_A)}},
+    }
+    x.add_response(
+        "batch_get_traces",
+        {"Traces": [{"Id": "t", "Segments": [{"Id": "s", "Document": json.dumps(document)}]}]},
+    )
+    for _ in range(3):
+        x.add_response("get_trace_summaries", {"TraceSummaries": []})
+    repo = f"repo-{SSN_B}"
+    cc = s["codecommit"]
+    cc.add_response(
+        "list_repositories", {"repositories": [{"repositoryName": repo, "repositoryId": "r"}]}
+    )
+    cc.add_response(
+        "get_repository",
+        {"repositoryMetadata": {"repositoryName": repo, "defaultBranch": "main", "Arn": "a"}},
+    )
+    cc.add_response("get_branch", {"branch": {"branchName": "main", "commitId": "c"}})
+    path = f"data/{CARDS['unionpay']}.txt"
+    cc.add_response(
+        "get_folder",
+        {
+            "commitId": "c",
+            "folderPath": "/",
+            "files": [{"absolutePath": path, "relativePath": path, "blobId": "b"}],
+        },
+    )
+    cc.add_response(
+        "get_file",
+        {
+            "commitId": "c",
+            "blobId": "b",
+            "filePath": path,
+            "fileMode": "NORMAL",
+            "fileSize": 10,
+            "fileContent": f"card {CARDS['maestro']} ssn {dashed(SSN_A)}".encode(),
+        },
+    )
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"stepfunctions", "lambda", "xray", "codecommit"}),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    services = {f["resource"]["service"] for f in doc["findings"]}
+    assert services == {"stepfunctions", "lambda", "xray", "codecommit"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
+def test_no_value_leaves_directory_buckets(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """An S3 directory bucket whose keys hold values (#35), read through the S3 source."""
+    import datetime as dt
+    import io
+
+    import boto3
+    from botocore.response import StreamingBody
+    from botocore.stub import Stubber
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+
+    s3: Any = boto3.client(
+        "s3",
+        region_name="us-west-2",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",  # noqa: S106 - a stub, never sent
+    )
+    stub = Stubber(s3)
+    env.clients.services["s3"] = s3
+    bucket = "pan--usw2-az1--x-s3"
+    key = f"cards/{CARDS['visa']}/{SSN_A}.json"
+    data = json.dumps({"card": CARDS["amex"], "ssn": dashed(SSN_B)}).encode()
+    stub.add_response("list_directory_buckets", {"Buckets": [{"Name": bucket}]})
+    stub.add_response(
+        "list_objects_v2",
+        {
+            "Contents": [{"Key": key, "Size": len(data), "LastModified": dt.datetime.now(dt.UTC)}],
+            "IsTruncated": False,
+        },
+    )
+    stub.add_response("get_object", {"Body": StreamingBody(io.BytesIO(data), len(data))})
+    stub.activate()
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=frozenset({"s3_directory"}),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert {f["class"] for f in doc["findings"]} == {"card", "us_ssn"}
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

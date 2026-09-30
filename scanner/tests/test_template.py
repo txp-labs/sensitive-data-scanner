@@ -91,7 +91,12 @@ READ = re.compile(
     r"|ssm:(DescribeParameters|GetParameters|GetParameter|ListTagsForResource)$"
     r"|secretsmanager:ListSecrets$"
     r"|elasticache:Describe|memorydb:Describe|timestream:(DescribeEndpoints$|List|Select$)"
-    r"|timestream-influxdb:List|cassandra:Select$)"
+    r"|timestream-influxdb:List|cassandra:Select$"
+    r"|states:(List|DescribeStateMachine$|GetExecutionHistory$)"
+    r"|lambda:(ListFunctions|ListTags|GetFunctionConfiguration)$"
+    r"|xray:(GetEncryptionConfig|GetTraceSummaries|BatchGetTraces)$"
+    r"|codecommit:(List|GetRepository$|GetBranch$|GetFolder$|GetFile$)"
+    r"|s3express:ListAllMyDirectoryBuckets$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -149,6 +154,12 @@ AIMED: dict[str, Any] = {
     "ReadServerlessCollections": lambda s, a: (
         a == "aoss:APIAccessAll" and in_account(s["Resource"], "aoss", "collection/")
     ),
+    # A directory bucket is read only through a session, and the session is read-only.
+    "ReadOnlyExpressSessions": lambda s, a: (
+        a == "s3express:CreateSession"
+        and in_account(s["Resource"], "s3express", "bucket/")
+        and s["Condition"] == {"StringEquals": {"s3express:SessionMode": "ReadOnly"}}
+    ),
 }
 
 
@@ -201,8 +212,11 @@ def test_denies_keep_writes_home_and_lake_formation_out() -> None:
     ]
     assert actions(denies["NeverAskLakeFormation"]) == ["lakeformation:*"]
     assert "dynamodb:PutItem" in actions(denies["NoDataStoreWrites"])
-    # Nothing allowed is also denied (a Deny would silently break a source).
-    denied = [a for s in denies.values() if "Resource" in s for a in actions(s)]
+    # Nothing allowed is also denied (a Deny would silently break a source). A conditional
+    # Deny (a read-write S3 Express session) narrows an Allow; it is checked on its own.
+    denied = [
+        a for s in denies.values() if "Resource" in s and "Condition" not in s for a in actions(s)
+    ]
     for a in ALLOWED:
         assert not any(re.fullmatch(d.replace("*", ".*"), a) for d in denied), a
 
@@ -268,6 +282,8 @@ S3_ACTIONS = {
     "ListBuckets": "s3:ListAllMyBuckets",
     "HeadObject": "s3:GetObject",
     "DeleteObjects": "s3:DeleteObject",
+    "ListDirectoryBuckets": "s3express:ListAllMyDirectoryBuckets",
+    "CreateSession": "s3express:CreateSession",
     "GetBucketEncryption": "s3:GetEncryptionConfiguration",
 }
 SERVICES = {
@@ -303,6 +319,10 @@ SERVICES = {
     "timestream-influxdb": "timestream-influxdb",
     "keyspaces": "cassandra",
     "kms": "kms",
+    "stepfunctions": "states",
+    "lambda": "lambda",
+    "xray": "xray",
+    "codecommit": "codecommit",
 }
 
 
@@ -535,3 +555,26 @@ def test_docs_name_every_allowed_action() -> None:
     doc = (REPO / "docs" / "ARCHITECTURE.md").read_text()
     for a in sorted(set(ALLOWED)):
         assert a in doc, f"{a} is allowed in deploy/scanner.yaml but not documented"
+
+
+def test_group_seven_defaults_read_and_never_run_push_or_write() -> None:
+    """#35: Step Functions, Lambda, X-Ray and CodeCommit are read by default and never
+    started, invoked, pushed to or changed; a directory bucket's session is read-only."""
+    reads = next(s for s in statements() if s.get("Sid") == "ReadWorkflowsFunctionsTracesAndCode")
+    assert all(READ.match(a) for a in actions(reads))
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "states:Start*",
+        "states:RedriveExecution",
+        "lambda:Invoke*",
+        "lambda:Update*",
+        "xray:Put*",
+        "codecommit:GitPush",
+        "codecommit:Put*",
+        "s3express:CreateBucket",
+    } <= denied
+    guard = next(s for s in statements() if s.get("Sid") == "NoReadWriteExpressSessions")
+    assert guard["Effect"] == "Deny" and actions(guard) == ["s3express:CreateSession"]
+    assert guard["Condition"] == {"StringNotEquals": {"s3express:SessionMode": "ReadOnly"}}
+    source = (PACKAGE / "sources" / "code.py").read_text()
+    assert 'params["SessionMode"] = "ReadOnly"' in source

@@ -60,7 +60,39 @@ bumps the minor version. Spec changes are listed under **Spec**.
   storage-level encryption alone does not render PAN unreadable), worded as
   guidance for the customer's QSA, who decides.
 
+- **More AWS stores, read by default** ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35), step 2):
+  - **Step Functions** (`stepfunctions`): the most recent executions of each
+    Standard state machine (`STEPFUNCTIONS_EXECUTIONS`, 20) and their history
+    with its data (`STEPFUNCTIONS_EVENTS`, 500 events), every event's input,
+    output, parameters, result, error and cause. Express state machines keep no
+    history in the service and are reported `unsupported` (`workflowType`).
+  - **Lambda environment variables** (`lambda`): `GetFunctionConfiguration`
+    per function, each variable read with its name as context and reported as
+    counts only, like a secret. A variable under a key the scanner may not use
+    is counted unreadable; the scanner's own function is `self`.
+  - **X-Ray** (`xray`): sampled trace summaries since the last run
+    (`XRAY_LOOKBACK_HOURS`, 24), then `BatchGetTraces` up to `XRAY_MAX_TRACES`
+    (100): every segment's and subsegment's annotations and metadata.
+  - **CodeCommit** (`codecommit`): a stable, hash-spread sample of the default
+    branch's files at its head (`CODECOMMIT_MAX_FILES`, 200, over at most
+    `CODECOMMIT_MAX_FOLDERS`, 500), read once per head.
+  - **S3 directory buckets** (`s3express` in `DISCOVER`, kind `s3_directory`):
+    read by the S3 source through S3 Express sessions that are always
+    read-only (`SessionMode=ReadOnly`, set on every `CreateSession` botocore
+    makes), resuming by continuation token, since a directory bucket lists in
+    no key order.
+
 ### Security
+- Group 7's reads (step 2) are one statement of read actions
+  (`ReadWorkflowsFunctionsTracesAndCode`), `s3express:ListAllMyDirectoryBuckets`,
+  and `s3express:CreateSession` allowed only with `s3express:SessionMode`
+  `ReadOnly`, with a matching Deny for any other mode. Every write is denied:
+  Step Functions start, stop, redrive, send-task and changes; Lambda invoke,
+  create, update, publish, permissions and tags; X-Ray puts and changes;
+  CodeCommit pushes, merges, comments and changes; directory bucket create,
+  delete and policy or encryption changes. `kms:Decrypt` through S3 and
+  DynamoDB (`AllowKmsDecrypt`) now also covers Step Functions, Lambda, X-Ray
+  and CodeCommit.
 - The scanner's role gains three read actions, each for the encryption
   facts: `s3:GetEncryptionConfiguration` (a bucket's default),
   `kinesis:DescribeStreamSummary` (a stream's `EncryptionType`) and

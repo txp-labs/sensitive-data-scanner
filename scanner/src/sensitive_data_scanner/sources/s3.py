@@ -32,6 +32,11 @@ A **catalog table** (a Glue table, `catalog` set) is this source over the
 table's S3 location: its findings also name the database and table, and a
 CSV or JSON table is read by the catalog's columns.
 
+**Directory buckets** (S3 Express One Zone, `express`): the same reads through
+a read-only S3 Express session. A directory bucket lists in no key order and
+takes no `StartAfter`, so a pass resumes at its page's continuation token and
+the objects of that page already read.
+
 **Encryption (1.5).** With a key classifier (`keys`), each object's findings
 carry the encryption it is stored under, from the `x-amz-server-side-encryption`
 header of the GetObject that read it (`encryption.s3_object_facts`): the
@@ -222,8 +227,10 @@ class S3Source:
         skip_header: int = 0,
         columnar: bool | None = None,
         keys: KeyClassifier | None = None,
+        express: bool = False,
     ) -> None:
         self.client = client
+        self.express = express
         self.keys = keys
         # Set per object from its headers when `keys` is given; else the store's (runner.plan).
         self.facts: dict[str, Any] | None = None
@@ -248,6 +255,10 @@ class S3Source:
             self.kind = "glue_table"
             self.id = f"glue:{catalog[0]}.{catalog[1]}"
             self.target = f"{catalog[0]}.{catalog[1]}"
+        elif express:
+            self.kind = "s3_directory"
+            self.id = f"s3x:{bucket}/{prefix}"
+            self.target = f"{bucket}/{prefix}"
         else:
             self.id = f"s3:{bucket}/{prefix}"
             self.target = f"{bucket}/{prefix}"
@@ -351,6 +362,9 @@ class S3Source:
         watermark = cursor.get("watermark")
         pass_started = cursor.get("passStartedAt") or now.isoformat()
         start_after = cursor.get("startAfter")
+        # A directory bucket resumes by its page's token and how much of that page was read.
+        token: str | None = cursor.get("token")
+        skip = int(cursor.get("skip") or 0)
         since = (_dt.datetime.fromisoformat(watermark) - self.skew) if watermark else None
         seen_at = now.isoformat()
         done = False
@@ -362,11 +376,17 @@ class S3Source:
                 args: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
                 if self.prefix:
                     args["Prefix"] = self.prefix
-                if start_after:
+                if self.express:
+                    if token:
+                        args["ContinuationToken"] = token
+                elif start_after:
                     args["StartAfter"] = start_after
                 page = self.client.list_objects_v2(**args)
                 stop = False
-                for obj in page.get("Contents", []):
+                contents = list(page.get("Contents", []))
+                done_before, skip = (skip, 0) if self.express else (0, 0)
+                start_after = None if self.express else start_after
+                for obj in contents[done_before:]:
                     key = obj["Key"]
                     cov.listed += 1
                     modified = obj.get("LastModified")
@@ -424,7 +444,12 @@ class S3Source:
                         log_event("item.unreadable", source=self.target, error=name)
                     start_after = key
                 if stop:
+                    if self.express:
+                        keys = [o["Key"] for o in contents]
+                        skip = keys.index(start_after) + 1 if start_after in keys else done_before
                     break
+                if self.express:
+                    token = page.get("NextContinuationToken")
                 if not page.get("IsTruncated"):
                     done = True
         except Exception as err:  # recorded by name on the source
@@ -444,8 +469,10 @@ class S3Source:
             new_cursor = {
                 "watermark": watermark,
                 "passStartedAt": pass_started,
-                "startAfter": start_after,
+                "startAfter": None if self.express else start_after,
             }
+            if self.express:
+                new_cursor.update(token=token, skip=skip)
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
@@ -557,7 +584,7 @@ class S3Source:
         cov.test_values += item.test_values
         cov.suppressed += item.suppressed
         resource = s3_resource(self.bucket, key, version, catalog=self.catalog)
-        link = s3_link(self.region, self.bucket, key, version)
+        link = s3_link(self.region, self.bucket, key, version, directory=self.express)
         connect = (
             {"contactId": item.contact_id, "instanceId": item.instance_id or ""}
             if item.contact_id
@@ -589,7 +616,7 @@ class S3Source:
         cov.redaction_markers += table.redaction_markers
         cov.test_values += table.test_values
         cov.suppressed += table.suppressed
-        link = s3_link(self.region, self.bucket, key, version)
+        link = s3_link(self.region, self.bucket, key, version, directory=self.express)
         findings: list[dict[str, Any]] = []
         for column, item in sorted(table.by_column.items()):
             resource = s3_resource(self.bucket, key, version, column=column, catalog=self.catalog)

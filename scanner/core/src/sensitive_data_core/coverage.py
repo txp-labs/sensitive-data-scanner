@@ -35,6 +35,8 @@ _INTERNAL = frozenset(
         "names",
         "tableName",
         "itemFacts",
+        "arn",
+        "branch",
     }
 )
 

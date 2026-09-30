@@ -11,6 +11,8 @@ from __future__ import annotations
 from sensitive_data_core.adapter import Adapter
 
 from .base import Context
+from .code import CodeCommitAdapter, DirectoryBucketAdapter
+from .compute import LambdaAdapter, StepFunctionsAdapter, XRayAdapter
 from .config_stores import SecretsAdapter, SsmAdapter
 from .coverage_only import ClusterAdapter, EfsAdapter, FsxAdapter
 from .ebs import BackupAdapter, EbsAdapter
@@ -42,5 +44,11 @@ _ALL: list[Adapter[Context]] = [
     MemoryDbAdapter(),
     TimestreamAdapter(),
     KeyspacesAdapter(),
+    # Group 7, read by default (#35).
+    StepFunctionsAdapter(),
+    LambdaAdapter(),
+    XRayAdapter(),
+    CodeCommitAdapter(),
+    DirectoryBucketAdapter(),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}

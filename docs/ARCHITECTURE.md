@@ -147,6 +147,9 @@ One run:
 | `SECRETS_READ` | Read Secrets Manager secrets' values for sensitive data | off: listed and reported `read_not_configured` |
 | `TIMESTREAM_MAX_ROWS`, `TIMESTREAM_LOOKBACK_DAYS` | Rows sampled per Timestream table, and how far back (`WHERE time > ago(Nd)`) | 1,000 and 1 |
 | `KEYSPACES_MAX_ROWS` | Rows sampled per Keyspaces table (`LIMIT`) | 1,000 |
+| `STEPFUNCTIONS_EXECUTIONS`, `STEPFUNCTIONS_EVENTS` | Executions sampled per Standard state machine (the most recent), and history events read per execution | 20 and 500 |
+| `XRAY_MAX_TRACES`, `XRAY_LOOKBACK_HOURS` | Traces read per run, and how far back the first run (and a long gap) reaches | 100 and 24 |
+| `CODECOMMIT_MAX_FILES`, `CODECOMMIT_MAX_FOLDERS` | Files read per repository per head, and folders walked to find them | 200 and 500 |
 | `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
 
 #### Configuration beyond 4 KB
@@ -222,6 +225,11 @@ region, and a bucket in another region is left to that region's scanner.
 | `elasticache`, `memorydb` | `DescribeReplicationGroups`, `DescribeCacheClusters`, `DescribeServerlessCaches` (and their snapshots); MemoryDB `DescribeClusters`, `DescribeSnapshots` | reported (`in_memory`); an exported snapshot in S3 is read by the S3 source |
 | `timestream` | `ListDatabases`, `ListTables`; InfluxDB `ListDbInstances` | one sampled query per table; InfluxDB reported (`no_read_path`) |
 | `keyspaces` | `ListKeyspaces`, `ListTables` | one sampled CQL query per table, signed with the role |
+| `stepfunctions` | `ListStateMachines`, `DescribeStateMachine` | each Standard state machine's recent executions' history, sampled ([below](#step-functions-lambda-environment-variables-and-x-ray)) |
+| `lambda` | `ListFunctions` | each function's environment variables (`GetFunctionConfiguration`), counts only |
+| `xray` | `GetEncryptionConfig` | one store, `xray-traces`: sampled traces since the last run, annotations and metadata |
+| `codecommit` | `ListRepositories`, `GetRepository` | a stable sample of the default branch's files at its head ([below](#codecommit-and-s3-directory-buckets)) |
+| `s3express` | `ListDirectoryBuckets` | each directory bucket, by the S3 source, through read-only S3 Express sessions |
 
 #### Coverage by store
 
@@ -251,6 +259,11 @@ reason.
 | DocumentDB, Neptune | Coverage only | | `no_snapshot_export` |
 | EFS, FSx | Coverage only; opt-in task designed | | `needs_task` |
 | Timestream for InfluxDB | Coverage only | | `no_read_path` |
+| Step Functions (Standard) | **Scanned** | recent executions' history, sampled | `unsupported` (Express: `workflowType: express`) |
+| Lambda environment variables | **Scanned** | `GetFunctionConfiguration`, counts only | `self`; a variable under an unusable key is `unreadable` |
+| X-Ray traces | **Scanned** | sampled traces' annotations and metadata | |
+| CodeCommit | **Scanned** | a sample of the default branch's files at its head | `unsupported` (`state: empty`) |
+| S3 directory buckets | **Scanned** | the S3 source, read-only S3 Express sessions | `self` |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -842,6 +855,63 @@ listing (the system keyspaces) and the read. A sampled `LIMIT` read uses the
 table's read capacity. The Cassandra driver is a dependency of both the
 image and the zip.
 
+### Step Functions, Lambda environment variables and X-Ray
+
+Read by default when discovered: each is where an application leaves data in
+passing, and each read is a describe or a get.
+
+- **Step Functions.** `ListStateMachines`, then `DescribeStateMachine` for
+  its encryption. For each Standard state machine, the most recent
+  `STEPFUNCTIONS_EXECUTIONS` executions (`ListExecutions`) and each one's
+  history (`GetExecutionHistory` with `includeExecutionData`, up to
+  `STEPFUNCTIONS_EVENTS` events): the `input`, `output`, `parameters`,
+  `result`, `error` and `cause` of every event are read as JSON or text.
+  Findings are `store_field` with the state machine as `store`, that part as
+  `field`, and `readBy: execution_history`. A pass that runs out of budget
+  resumes with the executions it has not read (kept in the state as hashes,
+  never names). An **Express** state machine keeps no history in the service
+  (its runs go to CloudWatch Logs, read by the logs source), so it is reported
+  `unsupported` with `workflowType: express`. Nothing is started, stopped,
+  redriven or answered (`SendTask*`): the role denies it.
+- **Lambda environment variables.** `ListFunctions`, then
+  `GetFunctionConfiguration` for each function (never `GetFunction`, which
+  would hand out the code's download link). Each variable's value is read with
+  its name as context, like a column, and reported **as counts only**, like a
+  secret: `store_field` with the function as `store`, the variable's name as
+  `field`, `readBy: get_function_configuration`. Variables encrypted with a
+  customer managed key the scanner may not use come back as an error, not
+  values: counted `unreadable` (`kmsDenied`). The scanner's own function
+  (`AWS_LAMBDA_FUNCTION_NAME`) is `self`. Nothing is invoked.
+- **X-Ray.** One store per account and region, `xray-traces`, with its
+  encryption from `GetEncryptionConfig` (`NONE` is X-Ray's default AWS-held
+  key). Each run asks for sampled trace summaries (`GetTraceSummaries` with
+  `Sampling`) from where the last run ended (at most `XRAY_LOOKBACK_HOURS`
+  back), six hours at a time, then `BatchGetTraces` five at a time, up to
+  `XRAY_MAX_TRACES`. Each segment's and subsegment's `annotations` and
+  `metadata` are read; a finding names the segment's service as `store`.
+
+### CodeCommit and S3 directory buckets
+
+- **CodeCommit.** `ListRepositories`, `GetRepository` (the default branch
+  and the key). For each repository, the branch's head (`GetBranch`) is walked
+  with `GetFolder` (at most `CODECOMMIT_MAX_FOLDERS`), and a stable sample of
+  its files, ordered by a hash of the path so it spreads across the tree, is
+  read with `GetFile` (at most `CODECOMMIT_MAX_FILES`, each to
+  `MAX_OBJECT_BYTES`). Images, archives and other kinds S3 skips, and binary
+  files, are counted, not read. Findings name the repository and the file's
+  path (`readBy: get_file`). A pass resumes across runs, and a head already
+  read in full is not read again until the branch moves. An empty repository
+  is `unsupported` (`state: empty`). Nothing is pushed or merged.
+- **S3 directory buckets** (S3 Express One Zone). `ListDirectoryBuckets`,
+  then each bucket read by the S3 source. A directory bucket is reached only
+  through an S3 Express session, and every session the scanner's client
+  creates asks for `SessionMode=ReadOnly` (a botocore hook on
+  `CreateSession`); the role allows `s3express:CreateSession` only with that
+  mode and denies any other. A directory bucket lists in no key order and
+  takes no `StartAfter`, so a pass resumes at its page's continuation token,
+  after the objects of that page already read. Links open the directory
+  bucket's page (`bucketType=directory`).
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -1059,6 +1129,8 @@ named resources because the stores are not known in advance. They are read-only:
 | `opensearch` | `es:ListDomainNames`, `es:DescribeDomains`, `aoss:ListCollections`, `aoss:BatchGetCollection`; `es:ListTags`, `aoss:ListTagsForResource` only with tag rules; `es:ESHttpGet` on the domains; with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on the collections | `*`; this account's domains and collections |
 | `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx` | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `rds:DescribeDBClusters`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`; with `EbsDirectRead`, `ebs:ListSnapshotBlocks` and `ebs:GetSnapshotBlock` on this region's snapshots, and `kms:Decrypt` through EBS | `*`; `snapshot/*` |
 | `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:DescribeStreamSummary` (the stream's encryption), `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
+| `stepfunctions`, `lambda`, `xray`, `codecommit` | `states:ListStateMachines`, `states:DescribeStateMachine`, `states:ListTagsForResource`, `states:ListExecutions`, `states:GetExecutionHistory`, `lambda:ListFunctions`, `lambda:ListTags`, `lambda:GetFunctionConfiguration`, `xray:GetEncryptionConfig`, `xray:GetTraceSummaries`, `xray:BatchGetTraces`, `codecommit:ListRepositories`, `codecommit:GetRepository`, `codecommit:ListTagsForResource`, `codecommit:GetBranch`, `codecommit:GetFolder`, `codecommit:GetFile` | `*` |
+| `s3express` | `s3express:ListAllMyDirectoryBuckets`; `s3express:CreateSession` with `s3express:SessionMode` `ReadOnly` only | `*`; this account's directory buckets |
 | `ssm`, `secretsmanager` | `ssm:DescribeParameters`, `ssm:GetParameters` (on this account's parameters), `secretsmanager:ListSecrets`; `ssm:ListTagsForResource` only with tag rules; with `SsmDecrypt`, `kms:Decrypt` through SSM; with `SecretsRead`, `secretsmanager:GetSecretValue` on this account's secrets and `kms:Decrypt` through Secrets Manager | `*`; the ARNs named |
 | `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
@@ -1189,7 +1261,10 @@ several things:
 | DynamoDB | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`, `dynamodb:Query`, `dynamodb:ListTagsOfResource` | `*` | |
 | Glue Data Catalog | `glue:GetDatabases`, `glue:GetTables`, `glue:GetTags` | `*` | |
 | RDS and Aurora (discovery) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBClusterSnapshots`, `rds:DescribeDBSnapshots`, `rds:DescribeExportTasks` | `*` | |
-| KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>`, `dynamodb.<region>` or `kinesis.<region>` (`AllowKmsDecrypt`) |
+| KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>`, `dynamodb.<region>`, `kinesis.<region>`, or (#35) `states.<region>`, `lambda.<region>`, `xray.<region>` or `codecommit.<region>` (`AllowKmsDecrypt`) |
+| Workflows, functions, traces and code (#35) | `states:ListStateMachines`, `states:DescribeStateMachine`, `states:ListTagsForResource`, `states:ListExecutions`, `states:GetExecutionHistory`, `lambda:ListFunctions`, `lambda:ListTags`, `lambda:GetFunctionConfiguration`, `xray:GetEncryptionConfig`, `xray:GetTraceSummaries`, `xray:BatchGetTraces`, `codecommit:ListRepositories`, `codecommit:GetRepository`, `codecommit:ListTagsForResource`, `codecommit:GetBranch`, `codecommit:GetFolder`, `codecommit:GetFile` | `*` | Read by default |
+| S3 directory buckets (#35) | `s3express:ListAllMyDirectoryBuckets` | `*` | |
+| | `s3express:CreateSession` | this account's `bucket/*` in the region | `s3express:SessionMode` is `ReadOnly`; `NoReadWriteExpressSessions` denies any other mode |
 | KMS aliases (1.5) | `kms:ListAliases` | `*` | The one KMS action with no `kms:ViaService`: it lists names and names no key material (`ListKmsAliases`) |
 | Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
 | RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
@@ -1225,13 +1300,14 @@ several things:
 | Keyspaces | `cassandra:Select` (listing, through the system keyspaces, and reading) | this account's `/keyspace/*` in the region | |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
-And three explicit denies, as defense in depth against any other policy the
+And four explicit denies, as defense in depth against any other policy the
 role might gain:
 
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner` |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner`; (#35) Step Functions `Start*`, `Stop*`, `SendTask*`, `RedriveExecution`, `Publish*`, create, update, delete and tags; Lambda `Invoke*`, create, update, delete, `Put*`, `Publish*`, permissions and tags; X-Ray `Put*`, create, update, delete and tags; CodeCommit `GitPush`, `Put*`, `Merge*`, `Post*`, `Override*`, associations, create, update, delete and tags; S3 directory bucket create, delete, policy, encryption and lifecycle changes |
+| `NoReadWriteExpressSessions` | `s3express:CreateSession` unless `s3express:SessionMode` is `ReadOnly`: a directory bucket session that could write is never created |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 
 The RDS **export role** (`RdsExportRole`, trusted by

@@ -60,7 +60,7 @@ Parameters:
       DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
       opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
       firehose, sqs, ssm, secretsmanager, elasticache, memorydb, timestream,
-      keyspaces.
+      keyspaces, stepfunctions, lambda, xray, codecommit, s3express.
   DiscoverAllow:
     Type: String
     Default: ""
@@ -529,6 +529,41 @@ Resources:
                 Effect: Allow
                 Action: cassandra:Select
                 Resource: !Sub arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*
+              # --- Group 7, read by default (#35): Step Functions history, Lambda
+              # environment variables (counts only), X-Ray traces, CodeCommit files
+              - Sid: ReadWorkflowsFunctionsTracesAndCode
+                Effect: Allow
+                Action:
+                  - states:ListStateMachines
+                  - states:DescribeStateMachine
+                  - states:ListTagsForResource
+                  - states:ListExecutions
+                  - states:GetExecutionHistory
+                  - lambda:ListFunctions
+                  - lambda:ListTags
+                  - lambda:GetFunctionConfiguration
+                  - xray:GetEncryptionConfig
+                  - xray:GetTraceSummaries
+                  - xray:BatchGetTraces
+                  - codecommit:ListRepositories
+                  - codecommit:GetRepository
+                  - codecommit:ListTagsForResource
+                  - codecommit:GetBranch
+                  - codecommit:GetFolder
+                  - codecommit:GetFile
+                Resource: "*"
+              # --- S3 directory buckets: listed, and read through S3 Express sessions
+              # that can only be read-only (a session is the only way in)
+              - Sid: ListDirectoryBuckets
+                Effect: Allow
+                Action: s3express:ListAllMyDirectoryBuckets
+                Resource: "*"
+              - Sid: ReadOnlyExpressSessions
+                Effect: Allow
+                Action: s3express:CreateSession
+                Resource: !Sub arn:${AWS::Partition}:s3express:${AWS::Region}:${AWS::AccountId}:bucket/*
+                Condition:
+                  StringEquals: { "s3express:SessionMode": ReadOnly }
               # --- Which KMS keys are AWS managed (alias/aws/*), to tell each store's
               # at-rest key apart (#35). Metadata only: no key is described or used.
               - Sid: ListKmsAliases
@@ -556,6 +591,10 @@ Resources:
                         - !Sub s3.${AWS::Region}.amazonaws.com
                         - !Sub dynamodb.${AWS::Region}.amazonaws.com
                         - !Sub kinesis.${AWS::Region}.amazonaws.com
+                        - !Sub states.${AWS::Region}.amazonaws.com
+                        - !Sub lambda.${AWS::Region}.amazonaws.com
+                        - !Sub xray.${AWS::Region}.amazonaws.com
+                        - !Sub codecommit.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
               # --- Defense in depth: never write anywhere else, never escalate
               - Sid: NoWritesOutsideOwnBucket
@@ -719,7 +758,59 @@ Resources:
                   - cassandra:Modify
                   - cassandra:Restore*
                   - cassandra:UpdatePartitioner
+                  - states:Start*
+                  - states:Stop*
+                  - states:Create*
+                  - states:Delete*
+                  - states:Update*
+                  - states:SendTask*
+                  - states:RedriveExecution
+                  - states:Publish*
+                  - states:TagResource
+                  - states:UntagResource
+                  - lambda:Create*
+                  - lambda:Delete*
+                  - lambda:Update*
+                  - lambda:Put*
+                  - lambda:Publish*
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:Invoke*
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - xray:Put*
+                  - xray:Create*
+                  - xray:Delete*
+                  - xray:Update*
+                  - xray:TagResource
+                  - xray:UntagResource
+                  - codecommit:Put*
+                  - codecommit:Create*
+                  - codecommit:Delete*
+                  - codecommit:Update*
+                  - codecommit:Merge*
+                  - codecommit:Post*
+                  - codecommit:Override*
+                  - codecommit:Associate*
+                  - codecommit:Disassociate*
+                  - codecommit:GitPush
+                  - codecommit:TagResource
+                  - codecommit:UntagResource
+                  - s3express:CreateBucket
+                  - s3express:DeleteBucket
+                  - s3express:PutBucketPolicy
+                  - s3express:DeleteBucketPolicy
+                  - s3express:PutEncryptionConfiguration
+                  - s3express:PutLifecycleConfiguration
                 Resource: "*"
+              # A session that could write is never created (the Allow above asks for
+              # ReadOnly too; this holds whatever else the role is given).
+              - Sid: NoReadWriteExpressSessions
+                Effect: Deny
+                Action: s3express:CreateSession
+                Resource: "*"
+                Condition:
+                  StringNotEquals: { "s3express:SessionMode": ReadOnly }
               - Sid: NeverAskLakeFormation
                 Effect: Deny
                 Action: lakeformation:*
