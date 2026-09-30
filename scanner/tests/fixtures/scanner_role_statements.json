@@ -1,5 +1,5 @@
 {
- "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request.",
+ "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request. Changed since fb9097a, deliberately: #94 (iam:PassedToService on the RDS export role also rds.amazonaws.com, which StartExportTask evaluates; kms:Decrypt also through logs.<region>, for log groups under a customer managed key).",
  "statements": [
   {
    "gates": [
@@ -259,6 +259,9 @@
        },
        {
         "Fn::Sub": "codecommit.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "logs.${AWS::Region}.amazonaws.com"
        }
       ]
      }
@@ -463,7 +466,10 @@
     "Action": "iam:PassRole",
     "Condition": {
      "StringEquals": {
-      "iam:PassedToService": "export.rds.amazonaws.com"
+      "iam:PassedToService": [
+       "rds.amazonaws.com",
+       "export.rds.amazonaws.com"
+      ]
      }
     },
     "Effect": "Allow",

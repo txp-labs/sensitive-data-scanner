@@ -37,7 +37,7 @@ from sensitive_data_core.scan.item import scan_item_text
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
-from .encryption import classifier
+from .encryption import classifier, weakest
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).
@@ -100,16 +100,19 @@ class SsmAdapter:
 
         secure = {str(p["Name"]) for p in params if p.get("Type") == "SecureString"}
         keys = classifier(ctx.clients)
-        # A SecureString's KMS key (`alias/aws/ssm` by default). A String or StringList
-        # parameter names no key: AWS documents none, so its findings say `unknown`.
+        # A SecureString's KMS key (`alias/aws/ssm` by default). Only a SecureString's value
+        # is encrypted with KMS; a String or StringList parameter is `none` (#94).
         item_facts = {
             str(p["Name"]): keys.facts(key=p.get("KeyId") or "alias/aws/ssm")
             if p.get("Type") == "SecureString"
-            else keys.facts(encrypted=None)
+            else keys.facts(encrypted=False)
             for p in params
         }
         own = [str(p["Name"]) for p in params if str(p["Name"]).startswith(OWN_PARAMETERS)]
         params = [p for p in params if not str(p["Name"]).startswith(OWN_PARAMETERS)]
+        # The store's own `atRestEncryption` (#94): its weakest parameter's, the scanner's
+        # own configuration left out. Every parameter counts, read this run or not.
+        store.facts = weakest([item_facts[str(p["Name"])] for p in params])
         kept, excluded = _members(
             ctx, "ssm", [(str(p["Name"]), None, str(p["Name"])) for p in params], tags
         )

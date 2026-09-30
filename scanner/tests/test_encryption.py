@@ -14,7 +14,9 @@ import boto3
 import pytest
 from botocore.stub import Stubber
 
-from aws_fixtures import DATA, Env, config
+from aws_fixtures import DATA, NOW, Env, config, shared_detector
+from sensitive_data_core.adapter import Budget, FindingStore
+from sensitive_data_core.coverage import Store, settle
 from sensitive_data_core.findings import (
     ClassFinding,
     encryption_facts,
@@ -22,6 +24,7 @@ from sensitive_data_core.findings import (
     key_hash,
     pci_note,
 )
+from sensitive_data_scanner.sources.cloudwatch_logs import CloudWatchLogsSource
 from sensitive_data_scanner.sources.encryption import (
     KeyClassifier,
     dynamodb_facts,
@@ -29,6 +32,7 @@ from sensitive_data_scanner.sources.encryption import (
     rds_facts,
     s3_bucket_facts,
     s3_object_facts,
+    weakest,
 )
 from synthetic import CARDS, SSN_A, dashed
 from test_streams import SHARD_A, kinesis_estate, records, stubs, valid
@@ -280,3 +284,68 @@ def test_the_aliases_are_listed_once_per_run() -> None:
     for _ in range(5):
         assert keys.facts(key=CUSTOMER_ARN)["atRestEncryption"] == "customer_managed_key"
         assert keys.facts(key=AWS_ARN)["atRestEncryption"] == "service_managed"
+
+
+# ------------------------------------------------------------------ #94
+
+
+def test_a_store_of_many_items_says_its_weakest() -> None:
+    keys = KeyClassifier(_Clients(kms_stub(ALIASES)))
+    cmk = keys.facts(key=CUSTOMER_ARN)
+    aws = keys.facts(key="alias/aws/ssm")
+    plain = keys.facts(encrypted=False)
+    assert weakest([cmk, cmk]) == cmk  # one key: its hash stays
+    assert weakest([cmk, aws]) == {"atRestEncryption": "service_managed"}
+    assert weakest([cmk, aws, plain]) == {"atRestEncryption": "none"}
+    other = encryption_facts("customer_managed_key", "1" * 36)
+    assert weakest([cmk, other]) == {"atRestEncryption": "customer_managed_key"}
+    assert weakest([]) == {"atRestEncryption": "unknown"}
+
+
+def _logs_denied(message: str) -> Any:
+    logs = boto3.client(
+        "logs",
+        region_name="us-west-2",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",  # noqa: S106 - a stub, never sent
+    )
+    stub = Stubber(logs)
+    stub.add_client_error(
+        "filter_log_events",
+        "AccessDeniedException",
+        message,
+        http_status_code=400,
+    )
+    stub.activate()
+    return logs
+
+
+@pytest.mark.parametrize(
+    ("message", "kms"),
+    [
+        ("The ciphertext refers to a customer master key that does not exist (KMS)", True),
+        ("User is not authorized to perform: kms:Decrypt on the resource", True),
+        ("User is not authorized to perform: logs:FilterLogEvents", False),
+    ],
+)
+def test_a_log_group_s_kms_denial_is_a_coverage_gap(message: str, kms: bool) -> None:
+    """#94: CloudWatch Logs decrypts a group under a customer managed key with the scanner's
+    credentials. A KMS denial is `kmsDenied` and the store's reason `kms_access`; never a
+    group read clean."""
+    src = CloudWatchLogsSource(_logs_denied(message), log_group="/aws/lambda/x", region="us-west-2")
+    src.facts = encryption_facts("customer_managed_key", CMK_ID)
+    result = src.run(
+        {}, Budget(100, 10**6, 10**12), shared_detector(), FindingStore(NOW.isoformat()), NOW
+    )
+    cov = result.coverage
+    assert cov.error == "AccessDeniedException"
+    assert not cov.pass_complete
+    assert cov.kms_denied == int(kms)
+    assert ("kmsDenied" in cov.as_json()) is kms
+    store = Store("cloudwatch_logs", "/aws/lambda/x")
+    settle(store, [cov])
+    assert store.status == "error"
+    assert store.reason == ("kms_access" if kms else "access_denied")
+    assert (store.gaps.get("kmsDenied") == 1) is kms
+    # The watermark stays where it was: the next run retries the same window.
+    assert result.cursor["watermarkMs"] == int(NOW.timestamp() * 1000) - 7 * 86_400_000
