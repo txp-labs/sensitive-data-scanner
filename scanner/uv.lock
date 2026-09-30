@@ -245,6 +245,20 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-keyvault-secrets"
+version = "4.11.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/d5/41043abed42ca3ab6930c52a25956a8eb468af2db0acb5ce446ff5437ddc/azure_keyvault_secrets-4.11.2.tar.gz", hash = "sha256:c0d86db01a8ae34d1db92ec6b9ef92d9a2aef7fbb1a67c0956513d46b85d7adb", size = 116119, upload-time = "2026-08-25T21:55:39.774Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/7a/dbdaf5f11b5a410fd29be4ac544880ff970ac09de7274f141801c90e179e/azure_keyvault_secrets-4.11.2-py3-none-any.whl", hash = "sha256:7abdd4a830bd8f4998bea0edbe69b8a772d672c17eabfdf3f77d8e4ef29442e9", size = 103809, upload-time = "2026-08-25T21:55:41.372Z" },
+]
+
+[[package]]
 name = "azure-mgmt-core"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3081,6 +3095,7 @@ dependencies = [
     { name = "azure-cosmos" },
     { name = "azure-data-tables" },
     { name = "azure-identity" },
+    { name = "azure-keyvault-secrets" },
     { name = "azure-mgmt-resourcegraph" },
     { name = "azure-monitor-query" },
     { name = "azure-storage-blob" },
@@ -3124,6 +3139,7 @@ requires-dist = [
     { name = "azure-data-tables", specifier = ">=12.7" },
     { name = "azure-eventgrid", marker = "extra == 'eventgrid'", specifier = ">=4.20" },
     { name = "azure-identity", specifier = ">=1.25" },
+    { name = "azure-keyvault-secrets", specifier = ">=4.9" },
     { name = "azure-mgmt-resourcegraph", specifier = ">=8.0" },
     { name = "azure-monitor-query", specifier = ">=2.0" },
     { name = "azure-storage-blob", specifier = ">=12.26" },
