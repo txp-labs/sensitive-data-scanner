@@ -17,7 +17,7 @@ from conftest import (
     conversation_vector_files,
     load_jsonl,
 )
-from sensitive_data_core.engine.conversation import prompt_classes
+from sensitive_data_core.engine.conversation import has_context, prompt_classes
 from sensitive_data_core.engine.spec import load_spec
 
 
@@ -43,9 +43,9 @@ def test_spec_file_follows_schema(yaml_name: str, schema_name: str) -> None:
     assert errors == []
 
 
-def test_spec_version_is_0_4() -> None:
-    assert load_yaml("classes.yaml")["specVersion"] == "0.4"
-    assert load_yaml("normalize.yaml")["specVersion"] == "0.4"
+def test_spec_version_is_0_5() -> None:
+    assert load_yaml("classes.yaml")["specVersion"] == "0.5"
+    assert load_yaml("normalize.yaml")["specVersion"] == "0.5"
 
 
 def test_prompt_phrases_leave_boundaries_to_the_implementation() -> None:
@@ -188,3 +188,18 @@ def test_prompt_phrases_match_on_boundaries(text: str, classes: tuple[str, ...])
 def test_retry_prefixes_ignore_punctuation(text: str, retry: bool) -> None:
     # Spec 0.3: . , ! ? ; : and whitespace runs between the words; only at the start.
     assert prompt_classes(load_spec(), text)[1] is retry
+
+
+@pytest.mark.parametrize(
+    ("context", "cls", "found"),
+    [
+        # Spec 0.5 (#75): "social media" is not an SSN or ITIN word; "social" still is.
+        ("Shared on social media, post", "us_ssn", False),
+        ("found you on Social-Media", "us_itin", False),
+        ("my social is", "us_ssn", True),
+        ("my social, not my social media", "us_ssn", True),
+        ("social security", "us_itin", True),
+    ],
+)
+def test_social_media_is_not_ssn_context(context: str, cls: str, found: bool) -> None:
+    assert has_context(load_spec().classes[cls], context) is found

@@ -742,8 +742,8 @@
               "const": "inventory"
             },
             "recommendation": {
-              "description": "(1.10, #67) A bucket large enough that an S3 Inventory configuration would spare it a listing each pass. The scanner never creates one (a write).",
-              "const": "s3_inventory"
+              "description": "(1.10, #67) s3_inventory: an S3 bucket large enough that a daily S3 Inventory configuration would spare it a listing each pass. (1.11) s3_inventory_daily: a bucket read from a weekly inventory, whose changes can wait a week to be seen; blob_inventory: an Azure container large enough that a Blob Inventory policy would spare it a listing; storage_insights: a Cloud Storage bucket large enough that a Storage Insights inventory report would. The scanner never creates or changes one (a write), and reads only S3's.",
+              "enum": ["s3_inventory", "s3_inventory_daily", "blob_inventory", "storage_insights"]
             },
               "pitr": { "const": false },
               "deployment": {

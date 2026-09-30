@@ -443,6 +443,7 @@ masked.
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
 | `OBJECT_INDEX`, `INDEX_MAX_OBJECTS` | on, 10,000,000 | The per-object index in the state bucket (`state/index/`, [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)): what each object was read with, as keyed hashes; and the most objects one source indexes ([ARCHITECTURE.md](ARCHITECTURE.md#the-object-index-and-component-versions)) |
+| `GCS_INVENTORY_MIN_OBJECTS` | 1,000,000 | A bucket whose last complete pass listed at least this many objects is named in the run summary (`recommendation: storage_insights`): a Storage Insights inventory report would spare it a listing each pass. Reading one is designed, not built ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)); 0: never named |
 | `RESCAN_PERCENT` | 25 | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change what they give changed, such as a reader or the spec ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); 0 turns rescans off |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on objects per run |
 | `STATE_BUCKET` | | The job's own bucket, `gs://<bucket>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |
