@@ -914,6 +914,18 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- **`docs/THREAT-MODEL.md`** ([#76](https://github.com/txp-labs/sensitive-data-scanner/issues/76)). It covers:
+  - the assets;
+  - four trust boundaries: the object and the runner, the runner and the
+    customer's account, Mermera's ingest, and GitHub releases;
+  - four attackers: a malicious file, a compromised release, a curious
+    operator and a tenant-crossing attacker;
+  - STRIDE per boundary, each mitigation named by the code that does it and
+    the test that holds it;
+  - the rules Mermera's ingest must keep: the tenant comes from the key or
+    the EventBridge envelope, never from the body;
+  - the residual risks: unsigned releases, GHCR hosting, no replay nonce, the
+    ingest's rules outside this repository, and findings as a map.
 - `README.md` rewritten to say what the scanner does, accurately: a capability
   matrix by platform (read by default, opt-in, reported as a gap), what it
   detects, scanner, vendor or both, how it stays safe, efficiency, how to
