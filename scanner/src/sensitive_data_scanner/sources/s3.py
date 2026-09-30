@@ -16,8 +16,17 @@ many objects are read per "directory" (the key up to its last `/`) in a
 pass, and the rest are counted as sampled out: a data lake's thousand
 partition files are represented by the first few of each. An object larger than
 `max_object_bytes` is read up to that size and counted as partial. Audio,
-video, images, office documents and archives are not read; they are counted
-by kind.
+video, images, PDFs, the older binary Office formats and archives are not
+read; they are counted by kind.
+
+Word, Excel and PowerPoint's Open XML files (`.docx`, `.xlsx`, `.pptx`, and
+`.docm`, `.xlsm`) are read as their text by the core's reader
+(`sensitive_data_core.scan.objects.read_object`, `scan/office.py`), the same
+one the Azure, Google Cloud and SaaS scanners use: the zip's central
+directory and the parts that hold text, through ranged GETs of one object
+version, up to `max_object_bytes` fetched and `max_inflated_bytes` inflated.
+A rights-managed (encrypted) file is counted as `encrypted`; one that is not
+a readable zip, or whose directory lies past the byte cap, as `document`.
 
 Columnar and data-lake files (Parquet, ORC, Avro, by extension or by magic
 bytes) are read by column (scan/columnar.py): Parquet and ORC through
@@ -68,11 +77,12 @@ from sensitive_data_core.scan.columnar import (
     sniff,
     zstd_text,
 )
-from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_text
-from sensitive_data_core.scan.objects import RangeCut, is_rdb, sample_point
+from sensitive_data_core.scan.item import ItemResult, looks_binary, scan_item_text
+from sensitive_data_core.scan.objects import RangeCut, is_rdb, read_object, sample_point, skip_kind
 from sensitive_data_core.scan.objects import compression as _compression
 from sensitive_data_core.scan.objects import gunzip as _gunzip
 from sensitive_data_core.scan.objects import inner_name as _inner_name
+from sensitive_data_core.scan.office import office_kind
 from sensitive_data_core.scan.raw import printable_text
 
 from ..resources import s3_link, s3_resource
@@ -363,11 +373,10 @@ class S3Source:
                         cov.sampled_out += 1
                         start_after = key
                         continue
-                    read_it, _, kind = classify_key(_inner_name(key))
-                    if columnar_kind(key) is not None:
-                        read_it = True
-                    if not read_it:
-                        cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
+                    # Columnar and Office Open XML files are read; the other kinds are counted.
+                    kind = skip_kind(key)
+                    if kind is not None:
+                        cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
                         start_after = key
                         continue
                     directory = key.rsplit("/", 1)[0] if "/" in key else ""
@@ -449,10 +458,13 @@ class S3Source:
         store: FindingStore,
         seen_at: str,
     ) -> None:
+        self._object_facts = None
+        if office_kind(key) is not None:
+            self._office(key, size=size, cov=cov, detector=detector, store=store, seen_at=seen_at)
+            return
         kind = columnar_kind(key)
         head: bytes | None = None
         version: str | None = None
-        self._object_facts = None
         if kind is None:
             head, read, version, partial = self._read(key, size, cov)
             kind = sniff(head) if _compression(key) is None else None
@@ -502,6 +514,64 @@ class S3Source:
             seen_at=seen_at,
         )
 
+    def _office(
+        self,
+        key: str,
+        *,
+        size: int,
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+    ) -> None:
+        """A `.docx`, `.xlsx` or `.pptx` object, read as its text by the core's reader through
+        ranged GETs of one version: the first GET's version is pinned for the rest, and its
+        encryption headers are the object's."""
+        version: str | None = None
+        headers: dict[str, Any] | None = None
+
+        def fetch(start: int, end: int) -> bytes:
+            nonlocal version, headers
+            args: dict[str, Any] = {
+                "Bucket": self.bucket,
+                "Key": key,
+                "Range": f"bytes={start}-{end}",
+            }
+            if version and version != "null":
+                args["VersionId"] = version
+            r = self.client.get_object(**args)
+            if version is None:
+                version = r.get("VersionId") or "null"
+            if headers is None:
+                headers = {k: r.get(k) for k in _SSE_HEADERS}
+            data: bytes = r["Body"].read()
+            return data
+
+        got = read_object(
+            key,
+            size,
+            fetch,
+            detector,
+            max_object_bytes=self.max_object_bytes,
+            max_inflated_bytes=self.max_inflated_bytes,
+            max_rows=self.max_rows,
+            columnar=self.columnar,
+        )
+        cov.partial += int(got.partial)
+        if got.skipped is not None or got.item is None:
+            self._skip(cov, got.skipped or "document")
+            return
+        self._headers(headers)
+        self._record_item(
+            key,
+            got.item,
+            read=got.read,
+            version=version,
+            cov=cov,
+            store=store,
+            seen_at=seen_at,
+        )
+
     def _record_text(
         self,
         key: str,
@@ -536,6 +606,21 @@ class S3Source:
             item.format = fmt
             for cf in item.findings.values():
                 cf.offsets = []
+        self._record_item(
+            key, item, read=read, version=version, cov=cov, store=store, seen_at=seen_at
+        )
+
+    def _record_item(
+        self,
+        key: str,
+        item: ItemResult,
+        *,
+        read: int,
+        version: str | None,
+        cov: Coverage,
+        store: FindingStore,
+        seen_at: str,
+    ) -> None:
         cov.scanned += 1
         cov.bytes_scanned += read
         cov.formats[item.format] = cov.formats.get(item.format, 0) + 1

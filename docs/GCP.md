@@ -63,8 +63,9 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
   scanner reads S3 objects, with the core's readers
   (`sensitive_data_core.scan.objects`): Parquet and ORC by column through
   ranged reads (footer first), Avro, gzip and zstd inflated, JSON and JSON
-  lines, CSV, conversation transcripts and text. Audio, video, images, office
-  documents and archives are counted, not read. Every storage class is read
+  lines, CSV, conversation transcripts and text, and Word, Excel and
+  PowerPoint files as their text. Audio, video, images, PDFs, the older binary
+  Office formats and archives are counted, not read. Every storage class is read
   in place (Nearline, Coldline and Archive objects are online; their
   retrieval fee falls within the run's bytes budget).
 - **Incremental.** A pass reads only the objects updated since the previous
