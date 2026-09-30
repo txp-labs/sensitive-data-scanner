@@ -35,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from sensitive_data_core import grants as g
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import (
     CUSTOMER_MANAGED_KEY,
@@ -53,7 +54,6 @@ from sensitive_data_core.scan.sql import (
     sample_tables,
 )
 
-from . import grants as g
 from .config import Database, Settings
 
 OnTable = Callable[[str, str, TableResult], None]

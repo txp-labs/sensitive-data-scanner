@@ -21,7 +21,12 @@ generic sampled SQL of the core's scan/sql.py (list the tables from
 `information_schema`, then `SELECT * ... LIMIT n` from each), inside a
 transaction that is always rolled back (and `SET TRANSACTION READ ONLY` on
 PostgreSQL). Identifiers are quoted; the only statements are the scanner's
-own SELECTs. The secret should belong to a read-only database user.
+own SELECTs. **The user is checked first**, as the databases runner checks its
+own (`sensitive_data_core.grants`): a user that can write (superuser, CREATE on
+the database or a schema, INSERT, UPDATE, DELETE or TRUNCATE anywhere; for
+MySQL, any privilege beyond reads, roles included) is refused as
+`db_user_can_write` with `writeGrants`, and one whose privileges cannot be read
+as `grants_unverifiable`: nothing is read.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import json
 import secrets
 from typing import TYPE_CHECKING, Any
 
+from sensitive_data_core import grants
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import (
@@ -64,6 +70,7 @@ if TYPE_CHECKING:
     from mypy_boto3_rds_data import RDSDataServiceClient
     from mypy_boto3_s3 import S3Client
 
+MAX_WRITE_GRANTS = 30
 # Engines whose snapshots RDS can export to S3.
 EXPORTABLE_ENGINES = frozenset(
     {"aurora", "aurora-mysql", "aurora-postgresql", "mysql", "mariadb", "postgres"}
@@ -426,7 +433,7 @@ class RdsDataApiSource:
         seen_at = now.isoformat()
         engine = "aurora-postgresql" if self.t.engine == "postgresql" else "aurora-mysql"
         link = rds_link(self.region, self.identifier, "cluster")
-        extra = {"engine": engine, "dbType": "cluster", "readBy": "data_api"}
+        extra: dict[str, Any] = {"engine": engine, "dbType": "cluster", "readBy": "data_api"}
         tx: str | None = None
         done = False
         if self.facts is None:
@@ -464,6 +471,19 @@ class RdsDataApiSource:
             )["transactionId"]
             if self.t.engine == "postgresql":
                 self._exec("SET TRANSACTION READ ONLY", tx)
+            check = grants.postgresql if self.t.engine == "postgresql" else grants.mysql
+            try:
+                held = check(execute)
+            except Exception as err:  # the catalog is hidden from the user
+                held = grants.Grants(verified=False, error=error_name(err))
+            if not held.verified or held.write:
+                refused = "grants_unverifiable" if not held.verified else "db_user_can_write"
+                log_event("source.refused", source=self.target, kind="rds", reason=refused)
+                if held.write:
+                    extra["writeGrants"] = sorted(held.write)[:MAX_WRITE_GRANTS]
+                # Named on the coverage too, for a run without DISCOVER (no run summary).
+                cov.error = "DbUserCanWrite" if held.write else "GrantsUnverifiable"
+                return SourceRun(cov, dict(cursor), refused, extra)
             res = sample_tables(
                 execute,
                 _dialect(self.t.engine),

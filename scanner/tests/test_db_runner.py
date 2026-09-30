@@ -665,3 +665,141 @@ def test_postgresql_findings_say_unknown() -> None:
     valid(doc)
     assert {f["atRestEncryption"] for f in doc["findings"]} == {"unknown"}
     assert not any("pciNote" in f for f in doc["findings"] if f["class"] == "card")
+
+
+# ------------------------------------------------------------------ state across runs (#21)
+
+
+def test_a_deferred_database_goes_first_next_run(tmp_path: Path) -> None:
+    from sensitive_data_db.state import FileState
+
+    e = env(a="postgresql://ro@db/app", b="postgresql://ro@db/app", c="postgresql://ro@db/app")
+    e["MAX_ITEMS_PER_RUN"] = "1"
+    e["STATE_LOCATION"] = str(tmp_path / "state.json")
+    settings = read_settings(e)
+    state = FileState(str(tmp_path / "state.json"))
+
+    def once() -> dict[str, dict[str, Any]]:
+        doc, failed = run(
+            settings,
+            [Sink()],
+            drivers={"postgresql": Driver(pg_db())},
+            detector=DETECTOR,
+            now=lambda: NOW,
+            state=state,
+        )
+        assert failed == 0
+        return stores(doc)
+
+    first = once()
+    assert first["a"]["status"] == "scanned"
+    assert (first["b"]["status"], first["c"]["status"]) == ("deferred", "deferred")
+    saved = json.loads((tmp_path / "state.json").read_text())
+    assert saved == {"version": 1, "site": "dc-1", "rotation": "b"}
+    second = once()
+    assert (second["b"]["status"], second["c"]["status"]) == ("scanned", "deferred")
+    third = once()
+    assert third["c"]["status"] == "scanned"
+    assert json.loads((tmp_path / "state.json").read_text())["rotation"] == "a"
+    # Another site's state, or none that parses, is no state.
+    (tmp_path / "state.json").write_text('{"version": 1, "site": "dc-2", "rotation": "c"}')
+    assert once()["a"]["status"] == "scanned"
+    (tmp_path / "state.json").write_text("not json")
+    assert once()["a"]["status"] == "scanned"
+
+
+def test_state_locations(tmp_path: Path) -> None:
+    import io
+
+    from botocore.stub import Stubber
+
+    from sensitive_data_db.sinks import SIGNATURE_HEADER, verify
+    from sensitive_data_db.state import FileState, HttpsState, S3State, state_for
+
+    key = "k" * 40
+    base = env(a="postgresql://ro@db/app")
+    assert state_for(read_settings(base)) is None
+    s3_settings = read_settings({**base, "STATE_LOCATION": "s3://ops-bucket/sds/state.json"})
+    assert isinstance(state_for(s3_settings), S3State)
+    file_settings = read_settings({**base, "STATE_LOCATION": "file:///var/sds/state.json"})
+    got = state_for(file_settings)
+    assert isinstance(got, FileState) and str(got.path) == "/var/sds/state.json"
+    for bad, code in (
+        ("relative/state.json", "state_location"),
+        ("s3://bucket-only", "state_location"),
+        ("https://state.example/x", "state_hmac_key"),
+    ):
+        with pytest.raises(ConfigError) as err:
+            read_settings({**base, "STATE_LOCATION": bad})
+        assert err.value.code == code
+    https = read_settings(
+        {**base, "STATE_LOCATION": "https://state.example/x?t=made-up", "FINDINGS_HMAC_KEY": key}
+    )
+    assert isinstance(state_for(https), HttpsState)
+    assert "made-up" not in repr(https) and "made-up" not in repr(state_for(https))
+
+    import boto3
+
+    s3 = boto3.client(
+        "s3",
+        region_name="us-west-2",
+        aws_access_key_id="t",
+        aws_secret_access_key="t",  # noqa: S106
+    )
+    stub = Stubber(s3)
+    stub.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    stub.add_response(
+        "put_object",
+        {},
+        {"Bucket": "b", "Key": "k", "Body": ANY_BYTES, "ContentType": "application/json"},
+    )
+    with stub:
+        st = S3State("b", "k", client=s3)
+        assert st.load() is None
+        st.save({"version": 1, "site": "dc-1", "rotation": "a"})
+
+    sent: list[Any] = []
+
+    class Resp(io.BytesIO):
+        def __enter__(self) -> Resp:
+            return self
+
+        def __exit__(self, *a: Any) -> None:
+            return None
+
+    def opener(req: Any, timeout: int) -> Resp:
+        sent.append(req)
+        if req.get_method() == "GET":
+            return Resp(b'{"version": 1, "site": "dc-1", "rotation": "z"}')
+        return Resp(b"")
+
+    hs = HttpsState(
+        Secret("https://state.example/x"), Secret(key), opener=opener, clock=lambda: 1000.0
+    )
+    assert hs.load() == {"version": 1, "site": "dc-1", "rotation": "z"}
+    hs.save({"version": 1, "site": "dc-1", "rotation": None})
+    put = sent[-1]
+    assert put.get_method() == "PUT"
+    assert verify(key.encode(), put.get_header(SIGNATURE_HEADER.capitalize()), put.data, 1000.0)
+
+
+class _AnyBytes:
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, bytes)
+
+    def __hash__(self) -> int:
+        return 0
+
+
+ANY_BYTES = _AnyBytes()
+
+
+def test_postgresql_before_15_is_refused_until_public_create_is_revoked() -> None:
+    driver = Driver(pg_db(schema_create=1, public_schema_create=True))
+    doc = scan(env(app=f"postgresql://ro:{MADE_UP_PW}@db/app"), {"postgresql": driver})
+    s = stores(doc)["app"]
+    assert (s["reason"], s["writeGrants"]) == (
+        "db_user_can_write",
+        ["public_schema_create", "schema_create"],
+    )
+    assert doc["findings"] == []

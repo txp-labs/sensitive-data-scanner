@@ -326,6 +326,21 @@ def test_cleanup_never_leaves_the_exports_prefix(env: Env) -> None:
 # ------------------------------------------------------------------ Data API (opt-in)
 
 
+READ_ONLY_PG = {
+    "superuser": False,
+    "createrole": False,
+    "createdb": False,
+    "database_create": False,
+    "table_write": 0,
+    "schema_create": 0,
+    "public_schema_create": False,
+}
+READ_ONLY_MYSQL = [
+    {"Grants for ro@%": "GRANT USAGE ON *.* TO `ro`@`%`"},
+    {"Grants for ro@%": "GRANT SELECT ON `app`.* TO `ro`@`%`"},
+]
+
+
 def data_api(
     stub: Stubber, engine: str, tables: list[tuple[str, str]], rows: dict[str, list[dict[str, Any]]]
 ) -> None:
@@ -343,6 +358,9 @@ def data_api(
                 "transactionId": "tx-1",
             },
         )
+    # The user check comes first: a read-only user's privileges.
+    held = [READ_ONLY_PG] if engine == "postgresql" else READ_ONLY_MYSQL
+    stub.add_response("execute_statement", {"formattedRecords": json.dumps(held)})
     listed = [{"table_schema": s, "table_name": t} for s, t in tables]
     stub.add_response("execute_statement", {"formattedRecords": json.dumps(listed)})
     for s, t in sorted(tables):
@@ -397,6 +415,48 @@ def test_data_api_reads_read_only_and_always_rolls_back(env: Env, engine: str) -
     f = doc["findings"][0]
     assert (f["resource"]["readBy"], f["format"]) == ("data_api", "sql")
     assert doc["coverage"][0]["scanned"] == 2
+
+
+@pytest.mark.parametrize(
+    ("engine", "held", "reason", "grants"),
+    [
+        # Before PostgreSQL 15, PUBLIC may create in `public`: refused until revoked.
+        (
+            "postgresql",
+            [{**READ_ONLY_PG, "schema_create": 1, "public_schema_create": True}],
+            "db_user_can_write",
+            ["public_schema_create", "schema_create"],
+        ),
+        ("postgresql", [{**READ_ONLY_PG, "table_write": 3}], "db_user_can_write", ["table_write"]),
+        ("postgresql", [], "grants_unverifiable", None),
+        (
+            "mysql",
+            [{"Grants for rw@%": "GRANT SELECT, INSERT ON `app`.* TO `rw`@`%`"}],
+            "db_user_can_write",
+            ["INSERT"],
+        ),
+    ],
+)
+def test_data_api_refuses_a_user_that_can_write_before_any_read(
+    env: Env, engine: str, held: list[dict[str, Any]], reason: str, grants: list[str] | None
+) -> None:
+    rd, stub = client("rds-data")
+    env.clients.rds_data = rd
+    stub.add_response("begin_transaction", {"transactionId": "tx-1"})
+    if engine == "postgresql":
+        stub.add_response("execute_statement", {})  # SET TRANSACTION READ ONLY
+    stub.add_response("execute_statement", {"formattedRecords": json.dumps(held)})
+    stub.add_response("rollback_transaction", {"transactionStatus": "Rollback Complete"})
+    doc = env.run(config(s3_targets=[], data_api_targets=[target(engine)]))
+    assert doc is not None
+    valid(doc)
+    stub.assert_no_pending_responses()  # no table listed, no row read; rolled back
+    assert doc["findings"] == []
+    cov = doc["coverage"][0]
+    assert (cov["scanned"], cov["listed"]) == (0, 0)
+    assert cov["error"] == ("DbUserCanWrite" if grants else "GrantsUnverifiable")
+    state = next(v for k, v in env.state()["cursors"].items() if k.startswith("rdsdata:"))
+    assert state == {}
 
 
 def test_data_api_rolls_back_when_a_statement_fails(env: Env) -> None:

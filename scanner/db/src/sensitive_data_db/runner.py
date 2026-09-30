@@ -14,7 +14,9 @@ For each database, in the order configured:
 
 The findings document names the site (`SCANNER_SITE`), not an account, and
 its run summary lists every database, read or not, and why. It goes to every
-configured sink. A container run keeps no state: each run samples afresh.
+configured sink. With `STATE_LOCATION` (state.py), a run starts with the database
+the previous run's budget did not reach, so every database is read over a few runs;
+without it, each run samples afresh in the configured order.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ from sensitive_data_core.scan.columnar import TableResult
 from . import __version__
 from .config import Database, Settings
 from .engines import CONNECT, ReadRefused, load_driver
+from .state import StateStore, load_rotation, save_rotation
 
 MAX_WRITE_GRANTS = 30
 
@@ -161,6 +164,7 @@ def run(
     detector: Detector | None = None,
     now: Callable[[], _dt.datetime] = lambda: _dt.datetime.now(_dt.UTC),
     clock: Callable[[], float] = time.monotonic,
+    state: StateStore | None = None,
 ) -> tuple[dict[str, Any], int]:
     """One run. Returns the findings document, and how many sinks failed."""
     started = now()
@@ -176,18 +180,26 @@ def run(
     findings = FindingStore(started.isoformat())
     stores: list[Store] = []
     coverage: list[Coverage] = []
-    for i, db in enumerate(settings.databases):
+    ordered = list(settings.databases)
+    start = load_rotation(state, settings.site)
+    names = [d.name for d in ordered]
+    if start in names:
+        k = names.index(start)
+        ordered = ordered[k:] + ordered[:k]
+    deferred: str | None = None
+    for i, db in enumerate(ordered):
         if budget.exhausted():
             store = Store(db.engine, db.name, origin="config")
             store.status, store.reason = "deferred", "budget"
             log_event("source.deferred", source=db.name, kind=db.engine)
             stores.append(store)
+            deferred = deferred or db.name
             continue
         store, session = check_database(db, settings, drivers)
         stores.append(store)
         if session is None:
             continue
-        share = budget.share(len(settings.databases) - i)
+        share = budget.share(len(ordered) - i)
         cov = _read(
             db=db,
             store=store,
@@ -216,6 +228,7 @@ def run(
         discovery=summary(stores, {}),
         scanner_version=__version__,
     )
+    save_rotation(state, settings.site, deferred)
     failed = 0
     for sink in sinks:
         try:
