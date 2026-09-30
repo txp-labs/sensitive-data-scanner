@@ -32,6 +32,7 @@ and its own image (`docker build --target azure`).
 | Kind (`DISCOVER`) | Store | Read with | Default |
 |---|---|---|---|
 | `azure_blob` (`blob`, `adls`) | A Blob Storage or ADLS Gen2 container, `account/container` | Reader (the account's containers and encryption scopes) and Storage Blob Data Reader (List Blobs, ranged Get Blob) | read |
+| `azure_files` (`files`, `fileshares`) | An Azure Files share, `account/share` | Reader (the account's shares); **Storage File Data Privileged Reader** when on (List, ranged Get File over REST with the backup intent) | **off**: `read_not_configured`; `AZURE_FILES_READ=on` reads. An NFS share is `no_read_path` |
 | `azure_sql` (`sql`) | An Azure SQL database, `server/database` | Reader (discovery, TDE); a contained user for the identity with `db_datareader` (below) | discovered; read with `AZURE_DB_READ` |
 | `azure_sql_mi` (`sqlmi`) | A SQL Managed Instance database, `instance/database` | the same | discovered; read with `AZURE_DB_READ` |
 | `azure_postgresql` (`postgresql`) | A PostgreSQL flexible server's database, `server/database` | Reader (discovery, `dataEncryption`); an Entra role for the identity with SELECT (below) | discovered; read with `AZURE_DB_READ` |
@@ -79,6 +80,36 @@ and its own image (`docker build --target azure`).
   ```sh
   printf %s https://<vault>.vault.azure.net/keys/<key-name> | tr A-Z a-z | shasum -a 256
   ```
+
+### Azure Files
+
+- **Discovery** is on by default. The storage accounts' Resource Graph listing
+  (FileStorage accounts included) gives each account's File endpoint, and
+  Resource Manager (Reader) lists its shares, with their protocol and usage.
+  A store is one share, `account/share`, so every share is in the run summary.
+- **Reading is opt-in** (`AZURE_FILES_READ=on`, and the Bicep parameter
+  `readFileShares`, which grants the role). Azure Files takes an Entra token
+  over REST only with the **backup intent** (`x-ms-file-request-intent:
+  backup`), which the Storage SDK sends as `token_intent="backup"`. The role
+  is **Storage File Data Privileged Reader**: its data actions are
+  `fileshares/files/read` and `readFileBackupSemantics/action`, both reads,
+  and it reads a file whatever its NTFS ACL says. That is why it is opt-in.
+  Storage File Data SMB Share Reader works over SMB only, not REST.
+- The share is listed directory by directory, and files are read the way
+  blobs are: ranged reads, table files by column, compressed text inflated,
+  media and archives counted. A pass reads the files modified since the
+  previous complete pass started, in path order, and resumes after the last
+  file read. A file that is gone takes its findings with it. Nothing is
+  written, leased, closed or snapshotted.
+- **Gaps:** an **NFS share** has no REST access, so it is `no_read_path`; a
+  firewall or private-only account that keeps the job out is `network`; a
+  missing role is `access_denied`.
+- A finding is the `azure_file` resource: `account`, `share`, `path` (and
+  `column` for a table file), with `subscription`, `resourceGroup` and
+  `resourceIdHash` (the storage account's).
+- **Encryption.** Azure Files is encrypted with the account's key:
+  `Microsoft.Storage` is `service_managed`; a Key Vault key is
+  `customer_managed_key` (hashed).
 
 ### Azure SQL, SQL Managed Instance, PostgreSQL and MySQL flexible servers, Synapse SQL pools
 
@@ -346,6 +377,7 @@ to be masked.
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `TABLE_MAX_ENTITIES`, `COSMOS_MAX_ITEMS` | 1000, 1000 | Entities sampled per table; items per Cosmos DB container |
 | `LOGS_LOOKBACK_DAYS`, `LOGS_MAX_ROWS_PER_TABLE` | 1, 500 | Log Analytics: the window sampled, and rows per table |
+| `AZURE_FILES_READ` | off | `on` reads Azure Files shares' files (Storage File Data Privileged Reader) |
 | `KEYVAULT_SECRETS_READ` | off | `on` reads Key Vault secrets' values, reported as counts only |
 
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
@@ -373,7 +405,7 @@ az deployment mg create --management-group-id <mg> --location <region> \
 | `jobName` | `sds-scanner-job` | The job, and so the identity's name: what the database users above are created as |
 | `schedule`, `replicaTimeoutSeconds` | daily 06:00 UTC, 3600 | When it runs, and for how long at most |
 | `site` | the management group, lower case | `SCANNER_SITE` |
-| `discover`, `readDatabases`, `readKeyVaultSecrets` | every kind; off; off | `DISCOVER`, `AZURE_DB_READ` (with `AZURE_DB_PRINCIPAL` set to the job's name), `KEYVAULT_SECRETS_READ` |
+| `discover`, `readDatabases`, `readKeyVaultSecrets`, `readFileShares` | every kind; off; off; off | `DISCOVER`, `AZURE_DB_READ` (with `AZURE_DB_PRINCIPAL` set to the job's name), `KEYVAULT_SECRETS_READ`, `AZURE_FILES_READ` |
 | `cosmosAccountIds` | | Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on (central mode) |
 | `findingsHttpsUrl`, `findingsHmacKey` | | The signed push; both are Container Apps secrets |
 | `findingsEventGridEndpoint` | | The Event Grid push; the topic's owner grants the job's identity EventGrid Data Sender on it |
@@ -396,6 +428,7 @@ az deployment mg create --management-group-id <mg> --location <region> \
 | Storage Table Data Reader | the same | Query Entities |
 | Storage Queue Data Reader | the same | Peek Messages (dequeuing needs `messages/process/action`, which it does not have) |
 | Key Vault Secrets User | the same, **only with `readKeyVaultSecrets`** | Get Secret, secrets' metadata |
+| Storage File Data Privileged Reader | the same, **only with `readFileShares`** | List and read files over REST with the backup intent (`readFileBackupSemantics`, a read past a file's ACL) |
 | Storage Blob Data Contributor | **the job's own state container only** | Its findings, cursors and lock |
 | Cosmos DB Built-in Data Reader (a Cosmos DB role) | each account in `cosmosAccountIds` | NoSQL queries |
 

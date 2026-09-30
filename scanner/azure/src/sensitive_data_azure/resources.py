@@ -94,6 +94,32 @@ class BlobTarget:
         return f"BlobTarget({redact_digits(self.account)!r}, {redact_digits(self.container)!r})"
 
 
+@dataclass
+class ShareTarget:
+    """One Azure Files share: its account, endpoint and the account's key."""
+
+    rid: ResourceId  # the storage account
+    account: str
+    share: str
+    endpoint: str  # https://<account>.file.core.windows.net/
+    facts: dict[str, Any] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        return f"ShareTarget({redact_digits(self.account)!r}, {redact_digits(self.share)!r})"
+
+
+def file_resource(t: ShareTarget, path: str, *, column: str | None = None) -> dict[str, Any]:
+    """One file of an Azure Files share (and, for a table file, one column of it)."""
+    names = {"account": t.account, "share": t.share, "path": path}
+    if column is not None:
+        names["column"] = column
+    masked = {k: redact_digits(v) for k, v in names.items()}
+    out: dict[str, Any] = {"type": "azure_file", **masked, **azure_fields(t.rid)}
+    if masked != names:
+        out["keyMasked"] = True
+    return out
+
+
 def blob_resource(
     t: BlobTarget, blob: str, version: str | None, *, column: str | None = None
 ) -> dict[str, Any]:

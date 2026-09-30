@@ -315,6 +315,21 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-storage-file-share"
+version = "12.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "cryptography" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/35/50eb9772dba52fe921f75858ec5a5f0bf43cc5544b7247936bddf56dc976/azure_storage_file_share-12.26.0.tar.gz", hash = "sha256:08cf8bc436df532cdb9bfdfce7bb10c5f1d83d51360954cd8eef56cbccf4300a", size = 383344, upload-time = "2026-06-08T12:45:38.107Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/99/90b557d7ab2601f9d313cfa9d166bd2e892881d69fbbff4ad3454a128dae/azure_storage_file_share-12.26.0-py3-none-any.whl", hash = "sha256:c4117d311ed0fe15a963118fe934f33db0c91d706a13a45c7c8dcb969b2e9578", size = 319081, upload-time = "2026-06-08T12:45:39.827Z" },
+]
+
+[[package]]
 name = "azure-storage-queue"
 version = "12.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3160,6 +3175,7 @@ dependencies = [
     { name = "azure-mgmt-resourcegraph" },
     { name = "azure-monitor-query" },
     { name = "azure-storage-blob" },
+    { name = "azure-storage-file-share" },
     { name = "azure-storage-queue" },
     { name = "sensitive-data-scanner-core" },
     { name = "sensitive-data-scanner-db" },
@@ -3204,6 +3220,7 @@ requires-dist = [
     { name = "azure-mgmt-resourcegraph", specifier = ">=8.0" },
     { name = "azure-monitor-query", specifier = ">=2.0" },
     { name = "azure-storage-blob", specifier = ">=12.26" },
+    { name = "azure-storage-file-share", specifier = ">=12.20" },
     { name = "azure-storage-queue", specifier = ">=12.13" },
     { name = "mssql-python", marker = "extra == 'sql'", specifier = ">=1.15" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgresql'", specifier = ">=3.2" },

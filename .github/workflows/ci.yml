@@ -336,7 +336,7 @@ jobs:
           # Every database driver loads, mssql-python with its bundled ODBC driver.
           import mssql_python, psycopg, pymysql, pymongo
           import azure.cosmos, azure.data.tables, azure.storage.queue, azure.monitor.query
-          import azure.keyvault.secrets
+          import azure.keyvault.secrets, azure.storage.fileshare
           from sensitive_data_azure.sources.databases import DRIVERS
           from sensitive_data_azure.clients import Clients
           assert all(Clients().client("driver", m) is not None for m in set(DRIVERS.values()))

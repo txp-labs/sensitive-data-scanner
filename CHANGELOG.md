@@ -195,6 +195,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `ghcr.io/txp-labs/sensitive-data-scanner-gcp:X.Y.Z` (with its SBOM and
   `GCP_IMAGE_DIGEST`), the Google Cloud wheel and the module
   (`sensitive-data-scanner-gcp-terraform.tar.gz`).
+- **Azure Files shares** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
+  every share is discovered (`azure_files`, `account/share`, FileStorage
+  accounts included) and reported; reading is **opt-in**
+  (`AZURE_FILES_READ=on`, the Bicep parameter `readFileShares`): the File
+  service's REST API with an Entra token and the backup intent, as the
+  identity with Storage File Data Privileged Reader, whose data actions both
+  read (it reads past a file's NTFS ACL, hence opt-in). Files are listed
+  directory by directory and read like blobs, incremental and resumable in
+  path order. An NFS share is `no_read_path`; a firewall is `network`.
+  `azure-storage-file-share` joins the Azure package.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -336,6 +346,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   docs show the one-line `REVOKE`.
 
 ### Security
+- The Azure deployment assigns Storage File Data Privileged Reader only with
+  `readFileShares` (off by default); the strict test lists its data actions
+  (`fileshares/files/read`, `readFileBackupSemantics/action`) and holds it to
+  that parameter.
 - The Google Cloud deployment's roles are read-only, held so by a strict test
   (`scanner/tests/test_gcp_template.py`): every permission in its custom roles
   reads by its verb, or is a named exception with its reason
@@ -388,7 +402,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.7**, additive: the Google Cloud scanner's
+- `schemaVersion` is now **1.7**, additive: Azure Files' `azure_files` kind
+  and `azure_file` resource, and the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and
   `resourceNameHash` (the SHA-256 of the store's full resource name) on
   Google Cloud findings and stores, the `gcs`, `bigquery`, `firestore`,

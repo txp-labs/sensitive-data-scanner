@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15271230207868155297"
+      "templateHash": "11779444587685286898"
     }
   },
   "parameters": {
@@ -90,6 +90,13 @@
         "description": "Key Vault secrets: off by default. On grants Key Vault Secrets User and reads values (counts only)."
       }
     },
+    "readFileShares": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Azure Files shares: off by default. On grants Storage File Data Privileged Reader (reads files over REST, overriding their ACLs) and reads them."
+      }
+    },
     "cosmosAccountIds": {
       "type": "array",
       "defaultValue": [],
@@ -129,7 +136,8 @@
       "19e7f393-937e-4f77-808e-94535e297925"
     ],
     "vaultReadRole": "4633458b-17de-408a-b874-0445c86b69e6",
-    "roles": "[concat(variables('readRoles'), if(parameters('readKeyVaultSecrets'), createArray(variables('vaultReadRole')), createArray()))]",
+    "fileReadRole": "b8eda974-7b85-4f76-af95-65846b26df6d",
+    "roles": "[concat(variables('readRoles'), if(parameters('readKeyVaultSecrets'), createArray(variables('vaultReadRole')), createArray()), if(parameters('readFileShares'), createArray(variables('fileReadRole')), createArray()))]",
     "central": "[equals(parameters('mode'), 'central')]"
   },
   "resources": [
@@ -252,6 +260,9 @@
           "readKeyVaultSecrets": {
             "value": "[parameters('readKeyVaultSecrets')]"
           },
+          "readFileShares": {
+            "value": "[parameters('readFileShares')]"
+          },
           "findingsHttpsUrl": {
             "value": "[parameters('findingsHttpsUrl')]"
           },
@@ -275,7 +286,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7985067989259499409"
+              "templateHash": "7323159116458964652"
             }
           },
           "parameters": {
@@ -326,6 +337,10 @@
               "defaultValue": ""
             },
             "readKeyVaultSecrets": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "readFileShares": {
               "type": "bool",
               "defaultValue": false
             },
@@ -452,7 +467,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
@@ -605,6 +620,9 @@
           "readKeyVaultSecrets": {
             "value": "[parameters('readKeyVaultSecrets')]"
           },
+          "readFileShares": {
+            "value": "[parameters('readFileShares')]"
+          },
           "findingsHttpsUrl": {
             "value": "[parameters('findingsHttpsUrl')]"
           },
@@ -625,7 +643,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7985067989259499409"
+              "templateHash": "7323159116458964652"
             }
           },
           "parameters": {
@@ -676,6 +694,10 @@
               "defaultValue": ""
             },
             "readKeyVaultSecrets": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "readFileShares": {
               "type": "bool",
               "defaultValue": false
             },
@@ -802,7 +824,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }

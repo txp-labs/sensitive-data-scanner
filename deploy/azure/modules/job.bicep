@@ -21,6 +21,7 @@ param subscriptionIds array = []
 param discover string = ''
 param readDatabases string = ''
 param readKeyVaultSecrets bool = false
+param readFileShares bool = false
 @secure()
 param findingsHttpsUrl string = ''
 @secure()
@@ -144,6 +145,10 @@ var settings = filter(
     {
       name: 'KEYVAULT_SECRETS_READ'
       value: readKeyVaultSecrets ? 'on' : 'off'
+    }
+    {
+      name: 'AZURE_FILES_READ'
+      value: readFileShares ? 'on' : 'off'
     }
     {
       name: 'FINDINGS_EVENT_GRID_ENDPOINT'

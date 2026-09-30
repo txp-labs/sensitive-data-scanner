@@ -62,6 +62,7 @@ def account_row(
         "blobEndpoint": "" if kind == "FileStorage" else f"https://{name}.blob.core.windows.net/",
         "tableEndpoint": "" if kind == "FileStorage" else f"https://{name}.table.core.windows.net/",
         "queueEndpoint": "" if kind == "FileStorage" else f"https://{name}.queue.core.windows.net/",
+        "fileEndpoint": f"https://{name}.file.core.windows.net/",
         "tableKeyType": "Service",
         "queueKeyType": "Service",
         "hns": hns,
@@ -311,3 +312,83 @@ def containers(*names: str) -> list[dict[str, Any]]:
         {"name": n, "properties": {"defaultEncryptionScope": "$account-encryption-key"}}
         for n in names
     ]
+
+
+# ------------------------------------------------------------------ Azure Files
+
+
+@dataclass
+class File:
+    data: bytes
+    modified: dt.datetime = NOW - dt.timedelta(days=1)
+    fail: Exception | None = None
+
+
+class Share:
+    """A `ShareClient` over REST: directories, files, ranged downloads; and what it was
+    asked. It has no method that writes."""
+
+    def __init__(self, files: dict[str, File] | None = None) -> None:
+        self.files = files or {}
+        self.list_fail: Exception | None = None
+        self.downloads: list[tuple[str, int, int]] = []
+        self.listed: list[tuple[str, Any]] = []
+
+    def get_directory_client(self, directory: str) -> Any:
+        share = self
+
+        class Directory:
+            def list_directories_and_files(self, **kwargs: Any) -> list[Any]:
+                share.listed.append((directory, kwargs.get("include")))
+                if share.list_fail is not None:
+                    raise share.list_fail
+                prefix = f"{directory}/" if directory else ""
+                out: dict[str, Any] = {}
+                for path, f in sorted(share.files.items()):
+                    if not path.startswith(prefix):
+                        continue
+                    rest = path[len(prefix) :]
+                    head, sep, _ = rest.partition("/")
+                    if sep:
+                        out.setdefault(head, SimpleNamespace(name=head, is_directory=True))
+                    else:
+                        out[head] = SimpleNamespace(
+                            name=head,
+                            is_directory=False,
+                            size=len(f.data),
+                            last_modified=f.modified,
+                        )
+                return list(out.values())
+
+        return Directory()
+
+    def get_file_client(self, path: str) -> Any:
+        share = self
+
+        class FileClient:
+            def download_file(self, offset: int = 0, length: int | None = None) -> Downloader:
+                f = share.files.get(path)
+                if f is None:
+                    raise AzureError("ResourceNotFound", f"no file {path}")
+                if f.fail is not None:
+                    raise f.fail
+                end = len(f.data) if length is None else offset + length
+                share.downloads.append((path, offset, end))
+                return Downloader(f.data[offset:end])
+
+            def get_file_properties(self) -> Any:
+                if path not in share.files:
+                    raise AzureError("ResourceNotFound", f"no file {path}")
+                return SimpleNamespace(size=len(share.files[path].data))
+
+        return FileClient()
+
+
+class FileService:
+    """A `ShareServiceClient` for one account, and the token intent it was made with."""
+
+    def __init__(self, shares: dict[str, Share]) -> None:
+        self.shares = shares
+
+    def get_share_client(self, name: str) -> Share:
+        return self.shares.setdefault(name, Share())
