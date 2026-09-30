@@ -1851,3 +1851,84 @@ def test_no_value_leaves_azure_databases(capsys: pytest.CaptureFixture[str]) -> 
     for where, blob in {"document": json.dumps(doc), "logs": out, "reprs": repr(s)}.items():
         assert leaks(blob) == [], where
         assert "made-up-token" not in blob and SSN_B not in blob, where
+
+
+def test_no_value_leaves_cosmos_tables_or_queues(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in items, entities and messages, and in account, database, container, table,
+    queue and property names, and in 403 messages: none of them leave."""
+    from types import SimpleNamespace
+
+    from azure_fakes import NOW, SUB_A, Arm, AzureError, Graph, Tenant, account_row, settings
+    from sensitive_data_azure.runner import run_scan
+
+    account = f"cos-{SSN_A}"
+    storage = f"st{CARDS['visa']}"
+    rg = f"/subscriptions/{SUB_A}/resourceGroups/rg-{SSN_B}/providers"
+    cosmos_id = f"{rg}/Microsoft.DocumentDB/databaseAccounts/{account}"
+    storage_id = f"{rg}/Microsoft.Storage/storageAccounts/{storage}"
+    db, container = f"db_{CARDS['amex']}", f"c_{SSN_B}"
+    table, queue, broken = f"t{SSN_A}", f"q-{SSN_A}", f"q-{CARDS['mir']}"
+
+    class Items:
+        def query_items(self, query: str, **kwargs: Any) -> Any:
+            return iter([{f"card_{CARDS['jcb']}": CARDS["discover"], "_rid": "x"}])
+
+    class Entities:
+        def list_entities(self, **kwargs: Any) -> Any:
+            return iter([{"PartitionKey": SSN_A, f"ssn_{SSN_B}": dashed(SSN_B)}])
+
+    class Peek:
+        def __init__(self, fail: bool = False) -> None:
+            self.fail = fail
+
+        def peek_messages(self, **kwargs: Any) -> list[Any]:
+            if self.fail:
+                denied = AzureError("Forbidden", f"denied on {queue} for {CARDS['visa']}")
+                denied.status_code = 403  # type: ignore[attr-defined]
+                raise denied
+            return [SimpleNamespace(content=f"card {printed(CARDS['unionpay'])}")]
+
+    t = Tenant(
+        Graph(
+            {
+                "databaseaccounts": [
+                    {
+                        "id": cosmos_id,
+                        "name": account,
+                        "kind": "GlobalDocumentDB",
+                        "endpoint": "https://c.example/",
+                    }
+                ],
+                "storageaccounts": [account_row(storage, group=f"rg-{SSN_B}")],
+            }
+        ),
+        Arm(
+            paths={
+                f"{cosmos_id}/sqlDatabases": [{"name": db}],
+                f"{cosmos_id}/sqlDatabases/{db}/containers": [{"name": container}],
+                f"{storage_id}/tableServices/default/tables": [{"name": table}],
+                f"{storage_id}/queueServices/default/queues": [{"name": queue}, {"name": broken}],
+            }
+        ),
+    )
+    clients = t.clients()
+    clients.made[("cosmos", "https://c.example/")] = SimpleNamespace(
+        get_database_client=lambda d: SimpleNamespace(get_container_client=lambda c: Items())
+    )
+    clients.made[("table", f"https://{storage}.table.core.windows.net/")] = SimpleNamespace(
+        get_table_client=lambda n: Entities()
+    )
+    clients.made[("queue", f"https://{storage}.queue.core.windows.net/")] = SimpleNamespace(
+        get_queue_client=lambda n: Peek(fail=n == broken)
+    )
+    s = settings(DISCOVER="cosmos,table,queue")
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, clients, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    services = {f["resource"]["service"] for f in doc["findings"]}
+    assert services == {"cosmosdb", "azure_table", "azure_queue"}
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob and CARDS["mir"] not in blob, where

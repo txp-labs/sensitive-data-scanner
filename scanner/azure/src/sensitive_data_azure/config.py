@@ -13,8 +13,11 @@ reported by a fixed code, never by its value.
 - `DISCOVER`: the kinds to discover (`azure_blob`, `azure_sql`, ...; `all`);
   by default, every kind.
 - `AZURE_DB_READ`: the database kinds that are read (`azure_sql`,
-  `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`, or `all`);
-  off by default, since each database needs a contained user for the identity.
+  `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`,
+  `cosmosdb_mongo`, or `all`); off by default, since each database needs a user
+  for the identity.
+- `TABLE_MAX_ENTITIES`, `COSMOS_MAX_ITEMS`: entities sampled per table, items per
+  Cosmos DB container.
 - `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
   `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
@@ -61,9 +64,16 @@ DATABASE_KINDS: tuple[str, ...] = (
     "azure_postgresql",
     "azure_mysql",
     "synapse_sql",
+    "cosmosdb_mongo",
 )
 # Every kind this package discovers, and the ones discovered by default.
-KINDS: tuple[str, ...] = ("azure_blob", *DATABASE_KINDS)
+KINDS: tuple[str, ...] = (
+    "azure_blob",
+    "azure_table",
+    "azure_queue",
+    "cosmosdb",
+    *DATABASE_KINDS,
+)
 DEFAULT_KINDS: tuple[str, ...] = KINDS
 # Rule and DISCOVER prefixes: each kind, and shorter names for it.
 KIND_ALIASES = {
@@ -76,6 +86,10 @@ KIND_ALIASES = {
     "postgres": "azure_postgresql",
     "mysql": "azure_mysql",
     "synapse": "synapse_sql",
+    "table": "azure_table",
+    "queue": "azure_queue",
+    "cosmos": "cosmosdb",
+    "mongo": "cosmosdb_mongo",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -140,6 +154,9 @@ class Settings:
     db_max_tables: int = 500
     db_statement_seconds: int = 60
     db_connect_seconds: int = 15
+    # Table Storage and Cosmos DB for NoSQL: entities or items sampled per table or container.
+    table_max_entities: int = 1000
+    cosmos_max_items: int = 1000
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -293,4 +310,6 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         db_max_tables=_int(e.get("DB_MAX_TABLES"), 500, 1, 10_000),
         db_statement_seconds=_int(e.get("DB_STATEMENT_TIMEOUT_SECONDS"), 60, 5, 3600),
         db_connect_seconds=_int(e.get("DB_CONNECT_TIMEOUT_SECONDS"), 15, 1, 300),
+        table_max_entities=_int(e.get("TABLE_MAX_ENTITIES"), 1000, 1, 100_000),
+        cosmos_max_items=_int(e.get("COSMOS_MAX_ITEMS"), 1000, 1, 100_000),
     )

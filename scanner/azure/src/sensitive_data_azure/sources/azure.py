@@ -10,10 +10,16 @@ from sensitive_data_core.adapter import Adapter
 
 from .base import Context
 from .blob import BlobAdapter
+from .cosmos import CosmosAdapter, MongoClusterAdapter
 from .databases import DatabaseAdapter
+from .storage_services import QueueAdapter, TableAdapter
 
 _ALL: list[Adapter[Context]] = [
     BlobAdapter(),
+    TableAdapter(),
+    QueueAdapter(),
+    CosmosAdapter(),
+    MongoClusterAdapter(),
     DatabaseAdapter("azure_sql"),
     DatabaseAdapter("azure_sql_mi"),
     DatabaseAdapter("azure_postgresql"),
