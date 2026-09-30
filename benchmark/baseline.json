@@ -344,52 +344,52 @@
       },
       "us_itin": {
         "high": {
-          "f1": 0.951,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 7,
-          "precision": 0.9067,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 68
         },
         "low": {
-          "f1": 0.951,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 7,
-          "precision": 0.9067,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 68
         },
         "medium": {
-          "f1": 0.951,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 7,
-          "precision": 0.9067,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 68
         }
       },
       "us_ssn": {
         "high": {
-          "f1": 0.79,
+          "f1": 0.9109,
           "fn": 96,
-          "fp": 165,
-          "precision": 0.7485,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 0.8365,
           "tp": 491
         },
         "low": {
-          "f1": 0.8768,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 165,
-          "precision": 0.7806,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 587
         },
         "medium": {
-          "f1": 0.8768,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 165,
-          "precision": 0.7806,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 587
         }
@@ -422,6 +422,6 @@
       }
     }
   },
-  "specVersion": "0.4",
+  "specVersion": "0.5",
   "tolerance": 0.01
 }
