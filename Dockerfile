@@ -136,7 +136,8 @@ CMD ["scan"]
 # ---------------------------------------------------------------------------
 # The Google Cloud scanner (docs/GCP.md): a Cloud Run job's image, a separate
 # target, never the default. It carries the core, google-auth (every Google API
-# is called over REST: no gRPC stack) and pyarrow for the columnar formats.
+# is called over REST: no gRPC stack), pyarrow for the columnar formats, and the
+# drivers for Cloud SQL and AlloyDB (psycopg, PyMySQL).
 #
 #   docker build --target gcp -t sensitive-data-scanner-gcp .
 FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS gcp-build
@@ -156,6 +157,7 @@ RUN cd scanner \
  && uv export --frozen --package sensitive-data-scanner-gcp --no-default-groups --extra all --no-emit-workspace -o /tmp/requirements.txt \
  && uv pip install --python /usr/local/bin/python --target /opt/app --require-hashes -r /tmp/requirements.txt \
  && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
+ && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-gcp --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
  && /src/scripts/slim-site-packages.sh /opt/app \

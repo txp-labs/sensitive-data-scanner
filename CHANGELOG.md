@@ -133,6 +133,23 @@ bumps the minor version. Spec changes are listed under **Spec**.
   (new reason), policy-tagged columns are left out (`protectedColumns`), and
   external tables are `unsupported`. `atRestEncryption` from the table's or
   its dataset's Cloud KMS key.
+- **Google Cloud, step 3: Cloud SQL and AlloyDB** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 5):
+  - Discovered by default: Cloud SQL for PostgreSQL, MySQL and SQL Server
+    (`cloudsql_postgresql`, `cloudsql_mysql`, `cloudsql_sqlserver`, one store
+    per `instance/database`) and AlloyDB clusters (`alloydb`), from Cloud Asset
+    Inventory and the Cloud SQL Admin and AlloyDB APIs; stopped instances are
+    `paused`; system databases are not stores.
+  - Read when opted in (`GCP_DB_READ`, `GCP_DB_PRINCIPAL`) as the service
+    account with IAM database authentication: its access token as the
+    password over TLS verified against the instance's own CA, never a
+    password. The databases runner's `SqlSession`, the core's user check
+    first (`db_user_can_write`, `grants_unverifiable`), then the core's
+    sampled pass (`scan/sql.py`) in a read-only transaction. AlloyDB is read
+    through a read pool when there is one, its databases listed by SQL.
+  - `network` for an instance out of reach, `access_denied` for a refused
+    login, `no_read_path` for SQL Server (no IAM authentication) and for an
+    instance with the IAM flag off, `driver_missing`. `atRestEncryption` from
+    the instance's or cluster's Cloud KMS key.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -318,7 +335,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `schemaVersion` is now **1.7**, additive: the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and
   `resourceNameHash` (the SHA-256 of the store's full resource name) on
-  Google Cloud findings and stores, the `gcs` and `bigquery` kinds, the
+  Google Cloud findings and stores, the `gcs`, `bigquery`,
+  `cloudsql_postgresql`, `cloudsql_mysql`, `cloudsql_sqlserver` and `alloydb`
+  kinds, the
   `requester_pays`, `row_level_policy` and `authorized_view` reasons, the
   store fields `tableType` and `protectedColumns`, and Google Cloud console
   links.

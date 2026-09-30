@@ -153,6 +153,7 @@ class Cloud:
         self.published: list[dict[str, Any]] = []
         self.routes: list[tuple[str, re.Pattern[str], Handler]] = []
         self.page = 2
+        self.credentials = Credentials()
 
     def route(self, method: str, pattern: str, handler: Handler) -> None:
         """Answer `method` on URLs matching `pattern` (a regex) with `handler`."""
@@ -284,15 +285,24 @@ class Cloud:
             body["nextPageToken"] = str(end)
         return Resp(200, body)
 
-    def clients(self) -> Clients:
-        return Clients(credentials=Credentials(), session=self, sleep=lambda s: None)
+    def clients(self, drivers: dict[str, Any] | None = None) -> Clients:
+        out = Clients(credentials=self.credentials, session=self, sleep=lambda s: None)
+        out.drivers.update(drivers or {})
+        return out
 
 
 class Credentials:
-    """The job's service account: made-up tokens."""
+    """The job's service account: made-up tokens, and the scopes they were asked for."""
 
     token = TOKEN
     service_account_email = "sds-scanner@acme-sds.iam.gserviceaccount.com"
+
+    def __init__(self) -> None:
+        self.scopes: list[list[str]] = []
+
+    def with_scopes(self, scopes: list[str]) -> Credentials:
+        self.scopes.append(list(scopes))
+        return self
 
     def refresh(self, request: Any) -> None:
         return None
@@ -403,3 +413,85 @@ class BigQuery:
         fields = [f for f in tb.fields if not selected or f["name"] in selected.split(",")]
         n = int(query.get("maxResults") or 100)
         return Resp(200, {"rows": [bq_cells(fields, r) for r in tb.rows[:n]]})
+
+
+# ------------------------------------------------------------------ Cloud SQL and AlloyDB
+
+SA = "sds-scanner@acme-sds.iam.gserviceaccount.com"
+CA = "-----BEGIN CERTIFICATE-----\nMADEUP\n-----END CERTIFICATE-----\n"
+
+
+def sql_row(instance: str, project: str = PROJECT, number: str = PROJECT_NUMBER) -> dict[str, Any]:
+    return {
+        "name": f"//cloudsql.googleapis.com/projects/{project}/instances/{instance}",
+        "assetType": "sqladmin.googleapis.com/Instance",
+        "project": f"projects/{number}",
+        "displayName": instance,
+    }
+
+
+def sql_instance(
+    version: str,
+    *,
+    iam: bool = True,
+    private: bool = False,
+    state: str = "RUNNABLE",
+    kms: str | None = None,
+) -> dict[str, Any]:
+    flag = (
+        "cloudsql_iam_authentication"
+        if version.startswith("MYSQL")
+        else "cloudsql.iam_authentication"
+    )
+    meta: dict[str, Any] = {
+        "databaseVersion": version,
+        "state": state,
+        "settings": {
+            "activationPolicy": "ALWAYS",
+            "databaseFlags": [{"name": flag, "value": "on" if iam else "off"}],
+            "userLabels": {"team": "data"},
+        },
+        "ipAddresses": [{"type": "PRIVATE" if private else "PRIMARY", "ipAddress": "10.0.0.5"}],
+        "serverCaCert": {"cert": CA},
+    }
+    if kms:
+        meta["diskEncryptionConfiguration"] = {"kmsKeyName": kms}
+    return meta
+
+
+class Databases:
+    """The Cloud SQL Admin and AlloyDB APIs for `Cloud`: instances, databases, clusters."""
+
+    def __init__(self, cloud: Cloud) -> None:
+        self.instances: dict[tuple[str, str], dict[str, Any] | Resp] = {}
+        self.databases: dict[tuple[str, str], list[str]] = {}
+        self.clusters: dict[str, dict[str, Any]] = {}
+        self.cluster_instances: dict[str, list[dict[str, Any]]] = {}
+        self.certificates: list[str] = []
+        cloud.route("GET", r"^https://sqladmin\.googleapis\.com/", self.sql)
+        cloud.route("GET", r"^https://alloydb\.googleapis\.com/", self.alloy)
+        cloud.route("POST", r"^https://alloydb\.googleapis\.com/", self.alloy_post)
+
+    def sql(self, req: Req) -> Resp:
+        parts = [urllib.parse.unquote(p) for p in urllib.parse.urlsplit(req.url).path.split("/")]
+        project, instance = parts[3], parts[5]
+        got = self.instances.get((project, instance))
+        if got is None:
+            return error(404, "NOT_FOUND", message=f"no instance {instance}")
+        if isinstance(got, Resp):
+            return got
+        if parts[-1] == "databases":
+            names = self.databases.get((project, instance), [])
+            return Resp(200, {"items": [{"name": n} for n in names]})
+        return Resp(200, got)
+
+    def alloy(self, req: Req) -> Resp:
+        path = urllib.parse.urlsplit(req.url).path.removeprefix("/v1/")
+        if path.endswith("/instances"):
+            return Resp(200, {"instances": self.cluster_instances.get(path.rsplit("/", 1)[0], [])})
+        got = self.clusters.get(path)
+        return Resp(200, got) if got is not None else error(404, "NOT_FOUND")
+
+    def alloy_post(self, req: Req) -> Resp:
+        self.certificates.append(req.url)
+        return Resp(200, {"caCert": CA, "pemCertificateChain": []})

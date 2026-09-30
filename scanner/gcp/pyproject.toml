@@ -11,6 +11,8 @@ authors = [{ name = "txp-labs, LLC" }]
 # service account signs each request through Application Default Credentials, with no key.
 dependencies = [
     "sensitive-data-scanner-core",
+    # The databases runner's SQL sessions and user checks, for Cloud SQL and AlloyDB.
+    "sensitive-data-scanner-db",
     "google-auth>=2.40",
     "requests>=2.32",
 ]
@@ -18,13 +20,18 @@ dependencies = [
 [project.optional-dependencies]
 # Columnar and data-lake formats (Parquet, ORC, zstd, Avro's snappy and zstandard).
 columnar = ["pyarrow>=21"]
-all = ["sensitive-data-scanner-gcp[columnar]"]
+# Cloud SQL for PostgreSQL and AlloyDB, and Cloud SQL for MySQL, with IAM database
+# authentication (an access token as the password, over verified TLS).
+postgresql = ["psycopg[binary]>=3.2"]
+mysql = ["pymysql>=1.1"]
+all = ["sensitive-data-scanner-gcp[columnar,postgresql,mysql]"]
 
 [project.scripts]
 sensitive-data-scanner-gcp = "sensitive_data_gcp.__main__:main"
 
 [tool.uv.sources]
 sensitive-data-scanner-core = { workspace = true }
+sensitive-data-scanner-db = { workspace = true }
 
 [build-system]
 requires = ["hatchling>=1.32.4"]

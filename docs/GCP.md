@@ -39,6 +39,10 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 |---|---|---|---|
 | `gcs` (`storage`, `bucket`) | A Cloud Storage bucket | `cloudasset.assets.searchAllResources` (discovery); `storage.objects.list` and `storage.objects.get` (List Objects, ranged media reads) | read |
 | `bigquery` (`bq`) | A BigQuery table, `project.dataset.table` | `bigquery.datasets.get` and `bigquery.tables.list` (discovery), `bigquery.tables.get`, `bigquery.rowAccessPolicies.list` and `bigquery.tables.getData` (`tabledata.list`): BigQuery Data Viewer's reads | read; views, external tables, tables with row-level policies are gaps |
+| `cloudsql_postgresql` (`postgresql`, `cloudsql`) | A Cloud SQL for PostgreSQL database, `instance/database` | `cloudsql.instances.get`, `cloudsql.databases.list` (discovery, TLS CA, key); `cloudsql.instances.login` and an IAM database user with read grants (below) | discovered; read with `GCP_DB_READ` |
+| `cloudsql_mysql` (`mysql`) | A Cloud SQL for MySQL database, `instance/database` | the same | discovered; read with `GCP_DB_READ` |
+| `cloudsql_sqlserver` (`sqlserver`) | A Cloud SQL for SQL Server database, `instance/database` | `cloudsql.instances.get`, `cloudsql.databases.list` | gap: `no_read_path` (no IAM database authentication; only a password could read it) |
+| `alloydb` (`alloy`) | An AlloyDB cluster (its databases, listed by SQL) | `alloydb.clusters.get`, `alloydb.instances.list` (discovery); `alloydb.clusters.generateClientCertificate` (the cluster's CA), `alloydb.users.login` and an IAM database user with read grants | discovered; read with `GCP_DB_READ` |
 
 ### Cloud Storage
 
@@ -115,6 +119,90 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
   key, is `customer_managed_key` (hashed as above); otherwise
   `service_managed`.
 
+### Cloud SQL and AlloyDB
+
+- **Discovery** is on by default. Cloud Asset Inventory lists every Cloud SQL
+  instance and AlloyDB cluster. The Cloud SQL Admin API gives each instance's
+  engine, state, addresses, server CA, flags and databases; the AlloyDB API
+  gives each cluster's key and instances. A Cloud SQL database is a store,
+  `instance/database`; an AlloyDB cluster is one store, whose databases are
+  listed by SQL once connected (AlloyDB has no API that lists them). System
+  databases are not stores. A stopped instance is `paused`.
+- **Reading is opt-in** (`GCP_DB_READ`: `all`, or kinds such as
+  `postgresql,alloydb`). Each database needs an IAM database user for the
+  service account first, created by you. Until then every run would add a
+  failed login to your audit logs.
+- **As the service account, with IAM database authentication.** No password
+  exists. The service account's access token (scoped to `sqlservice.login`,
+  or `alloydb.login`) is the password, over TLS with the server's
+  certificate verified against the instance's own CA: Cloud SQL's
+  `serverCaCert`, or the AlloyDB cluster's CA from
+  `generateClientCertificate` (which mints a short-lived client certificate
+  and changes nothing on the cluster). With no CA, nothing is sent. The
+  database user is `GCP_DB_PRINCIPAL`, the service account's email, as each
+  engine names IAM users: PostgreSQL and AlloyDB without
+  `.gserviceaccount.com`, MySQL only the part before `@`. An AlloyDB cluster
+  is read through a read pool instance when it has one.
+- **The user is checked first**, with the core's allow list of reads, as the
+  databases runner does ([DATABASES.md](DATABASES.md)). A user that can write
+  is refused as `db_user_can_write` with its privileges by name
+  (`writeGrants`); one whose privileges cannot be read is
+  `grants_unverifiable`. Nothing is read from either. In an AlloyDB cluster,
+  a user that can write in any database refuses the whole cluster.
+- **The sample** is the core's: the base tables, then `SELECT * ... LIMIT n`
+  with quoted identifiers, in a read-only transaction (and a read-only
+  session), always rolled back, resumable by table (and, in AlloyDB, by
+  database). A finding is a `store_field` with the kind as `service`, the
+  instance or cluster as `store`, then `database`, `schema.table` and the
+  column, `readBy: sample`, format `sql`.
+- **Gaps:**
+  - `network`: the job cannot reach the instance. A Cloud Run job reaches a
+    private IP through Direct VPC egress (or a Serverless VPC Access
+    connector) into the instance's network; a public IP needs the job's
+    egress (Cloud NAT) in the instance's authorized networks. A store with
+    only a private address is `networkRestricted`.
+  - `access_denied`: no IAM database user yet, `cloudsql.instances.login` (or
+    `alloydb.users.login`) missing, or a login the database refused.
+  - `no_read_path`: Cloud SQL for SQL Server, which has no IAM database
+    authentication, and an instance with the IAM authentication flag off.
+  - `driver_missing`, `no_grant`, as for the databases runner.
+- **Encryption.** The instance's or cluster's Cloud KMS key is
+  `customer_managed_key` (hashed); otherwise `service_managed`.
+
+#### Creating the service account's database user
+
+Turn IAM database authentication on (`cloudsql.iam_authentication=on` for
+PostgreSQL, `cloudsql_iam_authentication=on` for MySQL,
+`alloydb.iam_authentication=on` on an AlloyDB instance), then create the user
+and grant reads only. With the service account
+`sds-scanner@acme-sds.iam.gserviceaccount.com`:
+
+```sh
+# Cloud SQL (either engine): the user's name is the service account's email.
+gcloud sql users create sds-scanner@acme-sds.iam.gserviceaccount.com \
+  --instance=<instance> --type=cloud_iam_service_account
+# AlloyDB:
+gcloud alloydb users create sds-scanner@acme-sds.iam \
+  --cluster=<cluster> --region=<region> --type=IAM_BASED
+```
+
+PostgreSQL and AlloyDB, in each database to read:
+
+```sql
+GRANT pg_read_all_data TO "sds-scanner@acme-sds.iam";  -- or SELECT on the schemas to read
+-- Before PostgreSQL 15, PUBLIC may create in `public`, which the check refuses:
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+MySQL:
+
+```sql
+GRANT SELECT ON `shop`.* TO 'sds-scanner'@'%';
+```
+
+Grant nothing else: any privilege but reads is refused, and a role you cannot
+narrow is refused rather than read.
+
 ## Findings
 
 A Google Cloud document says `"platform": "gcp"` and names its `site`
@@ -149,6 +237,10 @@ masked.
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES` | 20 MiB, 100 MiB | Bytes read from one object, and inflated from one compressed object |
 | `COLUMNAR_MAX_ROWS` | 10000 | Rows read from one table file |
 | `BIGQUERY_MAX_ROWS` | 1000 | Rows read from one BigQuery table (`tabledata.list`) |
+| `GCP_DB_READ` | off | The database kinds read: `all`, or `cloudsql_postgresql`, `cloudsql_mysql`, `alloydb` (or `postgresql`, `mysql`, `alloy`) |
+| `GCP_DB_PRINCIPAL` | | The service account's email; its IAM database users are logged in as. Required to read |
+| `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's |
+| `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on objects per run |
 | `STATE_BUCKET` | | The job's own bucket, `gs://<bucket>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |

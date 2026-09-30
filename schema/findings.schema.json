@@ -74,7 +74,8 @@
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
         "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo",
         "log_analytics", "azure_disk_snapshot", "key_vault",
-        "gcs", "bigquery"
+        "gcs", "bigquery", "cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver",
+        "alloydb"
       ]
     },
     "azureSubscription": {

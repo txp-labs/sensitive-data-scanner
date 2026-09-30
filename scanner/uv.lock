@@ -3274,25 +3274,37 @@ dependencies = [
     { name = "google-auth" },
     { name = "requests" },
     { name = "sensitive-data-scanner-core" },
+    { name = "sensitive-data-scanner-db" },
 ]
 
 [package.optional-dependencies]
 all = [
+    { name = "psycopg", extra = ["binary"] },
     { name = "pyarrow" },
+    { name = "pymysql" },
 ]
 columnar = [
     { name = "pyarrow" },
+]
+mysql = [
+    { name = "pymysql" },
+]
+postgresql = [
+    { name = "psycopg", extra = ["binary"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "google-auth", specifier = ">=2.40" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgresql'", specifier = ">=3.2" },
     { name = "pyarrow", marker = "extra == 'columnar'", specifier = ">=21" },
+    { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1" },
     { name = "requests", specifier = ">=2.32" },
     { name = "sensitive-data-scanner-core", editable = "core" },
-    { name = "sensitive-data-scanner-gcp", extras = ["columnar"], marker = "extra == 'all'", editable = "gcp" },
+    { name = "sensitive-data-scanner-db", editable = "db" },
+    { name = "sensitive-data-scanner-gcp", extras = ["columnar", "postgresql", "mysql"], marker = "extra == 'all'", editable = "gcp" },
 ]
-provides-extras = ["columnar", "all"]
+provides-extras = ["columnar", "postgresql", "mysql", "all"]
 
 [[package]]
 name = "setuptools"

@@ -2129,3 +2129,42 @@ def test_no_value_leaves_bigquery(capsys: pytest.CaptureFixture[str]) -> None:
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob and SSN_A not in blob and CARDS["amex"] not in blob, where
+
+
+def test_no_value_leaves_cloud_sql_or_alloydb(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in cells, and in instance, database, schema, table and column names; the access
+    token; a driver's error quoting the host and the token: none of them leave."""
+    from db_fakes import Db, Driver
+    from gcp_fakes import SA, TOKEN, Cloud, Databases, settings, sql_instance, sql_row
+    from sensitive_data_gcp.runner import run_scan
+    from test_azure_databases import postgres_db
+
+    instance, down = f"pg-{SSN_A}", f"my-{CARDS['visa']}"
+    database = f"hr_{dashed(SSN_B)}"
+    c = Cloud()
+    dbs = Databases(c)
+    c.assets["sqladmin.googleapis.com/Instance"] = [sql_row(instance), sql_row(down)]
+    dbs.instances[("acme-data", instance)] = sql_instance("POSTGRES_16")
+    dbs.databases[("acme-data", instance)] = [database]
+    dbs.instances[("acme-data", down)] = sql_instance("MYSQL_8_0")
+    dbs.databases[("acme-data", down)] = [f"shop_{CARDS['mir']}"]
+    rows = [{f"card_{CARDS['amex']}": CARDS["discover"], "note": f"ssn {dashed(SSN_A)}"}]
+    db: Db = postgres_db()
+    db.tables = {(f"s_{SSN_B}", f"t_{CARDS['jcb']}"): rows}
+
+    class Down:
+        def connect(self, **kwargs: Any) -> None:
+            raise ConnectionError(f"timeout reaching {kwargs['host']} as {kwargs['password']}")
+
+    s = settings(DISCOVER="postgresql,mysql", GCP_DB_READ="all", GCP_DB_PRINCIPAL=SA)
+    clients = c.clients({"psycopg": Driver(db), "pymysql": Down()})
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, clients, detector=detector, now=lambda: __import__("gcp_fakes").NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert any(x.get("reason") == "network" for x in doc["discovery"]["stores"])
+    for where, blob in {"document": json.dumps(doc), "logs": out, "reprs": repr(s)}.items():
+        assert leaks(blob) == [], where
+        assert TOKEN not in blob and SSN_B not in blob and SSN_A not in blob, where

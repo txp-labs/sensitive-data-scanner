@@ -10,10 +10,15 @@ from sensitive_data_core.adapter import Adapter
 
 from .base import Context
 from .bigquery import BigQueryAdapter
+from .databases import DatabaseAdapter
 from .gcs import GcsAdapter
 
 _ALL: list[Adapter[Context]] = [
     GcsAdapter(),
     BigQueryAdapter(),
+    DatabaseAdapter("cloudsql_postgresql"),
+    DatabaseAdapter("cloudsql_mysql"),
+    DatabaseAdapter("cloudsql_sqlserver"),
+    DatabaseAdapter("alloydb"),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}
