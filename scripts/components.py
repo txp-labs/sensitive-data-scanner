@@ -54,7 +54,7 @@ READERS: dict[str, dict[str, Any]] = {
     "text": {
         "sources": [
             f"{CORE}/scan/item.py::looks_binary,ItemResult,_Collector,_pointer_escape,"
-            "_document_context,_json_leaves,_json_format,_scan_json,_parse_json,scan_item_text",
+            "_labels,_json_leaves,csv_cells,_scan_csv,_csv_column,_json_format,_scan_json,_parse_json,scan_item_text",
         ],
         "kinds": ["text"],
     },

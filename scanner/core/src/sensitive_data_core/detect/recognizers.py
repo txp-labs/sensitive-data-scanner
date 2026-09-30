@@ -96,6 +96,21 @@ def card_grouping(raw: str) -> str:
     return "odd"
 
 
+_RUN_BEFORE = re.compile(r"[0-9][ -]?\Z")
+_RUN_AFTER = re.compile(r"^[ -]?[0-9]{4}")
+
+
+def in_digit_run(text: str, start: int, end: int) -> bool:
+    """A match that starts right after a digit (or a digit and one separator), or runs on
+    into another group of four digits, is a slice of a longer number: four groups in the
+    middle of a USPS tracking number or an IBAN (#75). The spec's own card pattern never
+    starts or ends inside a run; Presidio's starts at any word boundary. A card followed by
+    its expiry (`12/27`) or its code (`123`) still counts."""
+    return bool(_RUN_BEFORE.search(text[max(0, start - 2) : start])) or bool(
+        _RUN_AFTER.match(text[end : end + 5])
+    )
+
+
 class SpecCreditCardRecognizer(CreditCardRecognizer):
     """Presidio's card recognizer, plus the 2-series and 19-digit ranges and the spec's rules."""
 
@@ -126,6 +141,8 @@ class SpecCreditCardRecognizer(CreditCardRecognizer):
         card = self.spec.classes["card"]
         out: list[RecognizerResult] = []
         for r in super().analyze(text, entities, nlp_artifacts, regex_flags):
+            if in_digit_run(text, r.start, r.end):
+                continue
             raw = text[r.start : r.end]
             grouping = card_grouping(raw)
             if grouping == "odd":
