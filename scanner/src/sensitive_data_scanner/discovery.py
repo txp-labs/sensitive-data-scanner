@@ -148,7 +148,7 @@ def decide(store: Store, config: Config, tag_error: str | None = None) -> None:
         return
     kind, name, tags = store.kind, store.name, store.tags
     pct, per = config.sampling_for(kind, name, tags)
-    if kind in ("s3", "glue_table"):
+    if kind in ("s3", "glue_table", "s3_directory"):
         store.sample_percent = pct if pct is not None else config.sample_percent
         store.max_per_prefix = per if per is not None else config.s3_max_objects_per_prefix
     elif kind == "dynamodb":

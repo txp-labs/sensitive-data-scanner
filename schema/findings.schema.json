@@ -63,12 +63,13 @@
     },
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "storeKind": {
-      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB).",
+      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit and s3_directory are new in 1.5).",
       "enum": [
         "s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift", "opensearch",
         "documentdb", "neptune", "ebs", "backup", "efs", "fsx", "kinesis", "firehose", "sqs",
         "ssm", "secretsmanager", "elasticache", "memorydb", "timestream", "keyspaces",
-        "postgresql", "mysql", "sqlserver", "oracle", "mongodb", "snowflake", "databricks"
+        "postgresql", "mysql", "sqlserver", "oracle", "mongodb", "snowflake", "databricks",
+        "stepfunctions", "lambda", "xray", "codecommit", "s3_directory"
       ]
     },
     "maskedName": {
@@ -460,6 +461,10 @@
                 "description": "FSx: LUSTRE, WINDOWS, ONTAP or OPENZFS (1.3).",
                 "type": "string",
                 "pattern": "^[A-Z_]{0,40}$"
+              },
+              "workflowType": {
+                "description": "Step Functions (1.5): a Standard state machine (its history is read) or an Express one (no history in the service; reported).",
+                "enum": ["standard", "express"]
               },
               "state": {
                 "description": "The store's own state, when it is why the store was not read (1.3).",

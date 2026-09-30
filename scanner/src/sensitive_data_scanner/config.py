@@ -165,6 +165,12 @@ DISCOVER_KINDS = {
     "memorydb": "memorydb",
     "timestream": "timestream",
     "keyspaces": "keyspaces",
+    "stepfunctions": "stepfunctions",
+    "lambda": "lambda",
+    "xray": "xray",
+    "codecommit": "codecommit",
+    "s3express": "s3_directory",
+    "s3_directory": "s3_directory",
 }
 _KIND_ALIASES = {
     "s3": "s3",
@@ -192,6 +198,13 @@ _KIND_ALIASES = {
     "memorydb": "memorydb",
     "timestream": "timestream",
     "keyspaces": "keyspaces",
+    "stepfunctions": "stepfunctions",
+    "states": "stepfunctions",
+    "lambda": "lambda",
+    "xray": "xray",
+    "codecommit": "codecommit",
+    "s3express": "s3_directory",
+    "s3_directory": "s3_directory",
 }
 
 
@@ -386,6 +399,16 @@ class Config:
     timestream_max_rows: int = 1000
     timestream_lookback_days: int = 1
     keyspaces_max_rows: int = 1000
+    # Group 7, read by default (#35): Step Functions executions sampled per state machine and
+    # events per execution; X-Ray traces per run and how far back; CodeCommit files and
+    # folders per repository. The scanner's own function (Lambda sets its name) is never read.
+    stepfunctions_executions: int = 20
+    stepfunctions_events: int = 500
+    xray_max_traces: int = 100
+    xray_lookback_hours: int = 24
+    codecommit_max_files: int = 200
+    codecommit_max_folders: int = 500
+    self_function: str | None = None
 
     @property
     def exports_prefix(self) -> str:
@@ -462,6 +485,13 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         timestream_max_rows=_int(e.get("TIMESTREAM_MAX_ROWS"), 1000, 1, 100_000),
         timestream_lookback_days=_int(e.get("TIMESTREAM_LOOKBACK_DAYS"), 1, 1, 3650),
         keyspaces_max_rows=_int(e.get("KEYSPACES_MAX_ROWS"), 1000, 1, 100_000),
+        stepfunctions_executions=_int(e.get("STEPFUNCTIONS_EXECUTIONS"), 20, 1, 1000),
+        stepfunctions_events=_int(e.get("STEPFUNCTIONS_EVENTS"), 500, 1, 25_000),
+        xray_max_traces=_int(e.get("XRAY_MAX_TRACES"), 100, 1, 10_000),
+        xray_lookback_hours=_int(e.get("XRAY_LOOKBACK_HOURS"), 24, 1, 720),
+        codecommit_max_files=_int(e.get("CODECOMMIT_MAX_FILES"), 200, 1, 100_000),
+        codecommit_max_folders=_int(e.get("CODECOMMIT_MAX_FOLDERS"), 500, 1, 100_000),
+        self_function=e.get("AWS_LAMBDA_FUNCTION_NAME") or None,
     )
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
@@ -473,7 +503,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
 # Settings holding JSON: a document may give them as JSON values, not strings.
 _JSON_SETTINGS = frozenset({"SCAN_DYNAMODB", "DISCOVER_SAMPLING", "RDS_DATA_API"})
 # Read by read_config but set by Lambda, never by a document.
-_NOT_FROM_DOCUMENTS = frozenset({"AWS_LAMBDA_LOG_GROUP_NAME"})
+_NOT_FROM_DOCUMENTS = frozenset({"AWS_LAMBDA_LOG_GROUP_NAME", "AWS_LAMBDA_FUNCTION_NAME"})
 MAX_CONFIG_BYTES = 1024 * 1024
 _S3_LOCATION = re.compile(r"^s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/(.{1,1024})$")
 _SSM_ARN = re.compile(r"^arn:aws[a-z-]*:ssm:[a-z0-9-]+:[0-9]{12}:parameter/.{1,2000}$")

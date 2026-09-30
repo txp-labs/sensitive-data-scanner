@@ -16,9 +16,11 @@ from sensitive_data_core.findings import Link
 from sensitive_data_core.safety import redact_digits
 
 
-def s3_link(region: str, bucket: str, key: str, version_id: str | None) -> Link:
-    """The object's page: it names the bucket and the key."""
-    q = {"region": region, "bucketType": "general", "prefix": key}
+def s3_link(
+    region: str, bucket: str, key: str, version_id: str | None, *, directory: bool = False
+) -> Link:
+    """The object's page: it names the bucket and the key (a directory bucket's, `directory`)."""
+    q = {"region": region, "bucketType": "directory" if directory else "general", "prefix": key}
     if version_id and version_id != "null":
         q["versionId"] = version_id
     return Link(

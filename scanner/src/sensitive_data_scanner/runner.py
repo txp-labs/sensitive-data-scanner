@@ -471,6 +471,7 @@ def run_scan(
         budget = Budget(config.max_items_per_run, config.max_bytes_per_run, deadline, clock)
         caps = {
             "s3": config.max_objects_per_run,
+            "s3_directory": config.max_objects_per_run,
             "glue_table": config.max_objects_per_run,
             "cloudwatch_logs": config.max_log_events_per_run,
             "dynamodb": config.max_table_items_per_run,
