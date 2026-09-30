@@ -38,7 +38,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
-from sensitive_data_core.index import Indexes, ObjectPass
+from sensitive_data_core.index import Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
@@ -262,13 +262,28 @@ class DriveSource:
         s = self.ctx.settings
         cov = Coverage(self.kind, self.target, sample_percent=self.sample_percent)
         r = ItemReader(detector, s, cov, now.isoformat(), dict(self.facts or {}), store, budget)
-        r.index = ObjectPass(self.indexes, self.id, self.kind)
-        st: dict[str, Any] = dict(cursor)
+        op = r.index = ObjectPass(
+            self.indexes, self.id, self.kind, columnar=r.columnar, budget=budget
+        )
+        st: dict[str, Any] = {
+            k: v for k, v in cursor.items() if k not in ("full", "indexed", "rescan")
+        }
+        # A pass from no delta link lists every item (`full`); once one completes, every item
+        # has a row (`indexed`), and later passes list only what changed.
+        full = bool(cursor.get("full")) or not (st.get("page") or st.get("delta"))
+        indexed = bool(cursor.get("indexed"))
+        rescan = dict(cursor["rescan"]) if isinstance(cursor.get("rescan"), dict) else None
         note: str | None = None
         done = False
         try:
             drive = self.drive or self._own_drive()
             done = self._drive(drive, st, r, cap=s.files_max)
+            indexed = indexed or (done and full)
+            if done and (rescan is not None or op.needs_enumeration(indexed=indexed)):
+                # Then every item again, reading only the stale ones (#67), within the cap.
+                rescan = rescan or {}
+                if self._rescan(drive, rescan, r):
+                    rescan, indexed = None, True
         except Exception as err:  # recorded by name on the source
             gap = call_gap(err)
             cov.error = None if gap == "throttled" else error_name(err)
@@ -278,7 +293,62 @@ class DriveSource:
         cov.pass_complete = done and cov.error is None
         if not done and cov.error is None:
             cov.backlog = True
+        if not done and full:
+            st["full"] = True
+        if op.index is not None:
+            st["indexed"] = indexed
+            if rescan is not None:
+                st["rescan"] = rescan
+        op.settle(cov)
         return SourceRun(cov, st, note=note)
+
+    def _rescan(self, drive: Drive, rs: dict[str, Any], r: ItemReader) -> bool:
+        """One pass over every item of the drive (a delta query from no link), reading the
+        ones whose recorded components are stale; resumable (`rs`). True when complete."""
+        url = rs.get("page")
+        if url is None:
+            query = urllib.parse.urlencode({"$select": ITEM_FIELDS, "$top": "200"})
+            url = f"/drives/{drive.drive_id}/root/delta?{query}"
+        skip = int(rs.get("skip") or 0)
+        while True:
+            page = self.graph.get(url)
+            items = [i for i in page.get("value") or [] if isinstance(i, dict)]
+            for i, item in enumerate(items):
+                if i < skip:
+                    continue
+                if not (r.room() and self._candidate(drive, item, r)):
+                    rs.clear()
+                    rs.update(page=url, skip=i)
+                    return False
+            skip = 0
+            nxt = page.get("@odata.nextLink")
+            if not nxt:
+                return True
+            url = str(nxt)
+
+    def _candidate(self, drive: Drive, item: dict[str, Any], r: ItemReader) -> bool:
+        """One item of the enumeration: read when stale (or changed), else passed over. False
+        when a stale one did not fit the cap: the enumeration goes on there next run."""
+        iid = str(item.get("id") or "")
+        size = int(item.get("size") or 0)
+        if not iid or "file" not in item or size == 0 or item.get("deleted") is not None:
+            return True
+        if "@removed" in item or sample_point(iid) >= self.sample_percent or r.index is None:
+            return True
+        decision = r.index.decide(iid, changed=False, marker=item_marker(item))
+        if not (decision.read or decision.rescan):
+            return True
+        want = min(size, self.ctx.settings.max_object_bytes)
+        if decision.why is not None:
+            if not r.index.rescans.take(want, r.budget):
+                r.index.rescans.miss(decision.why)
+                return False
+        elif r.budget.has(want):
+            r.budget.take(want)
+        else:
+            return False
+        self._read_item(drive, item, r, decision.why)
+        return True
 
     def _drive(self, drive: Drive, st: dict[str, Any], r: ItemReader, *, cap: int) -> bool:
         url = st.get("page") or st.get("delta")
@@ -331,8 +401,18 @@ class DriveSource:
         if sample_point(iid) >= self.sample_percent:
             r.cov.sampled_out += 1
             return 0
-        name = str(item.get("name") or "file")
         r.budget.take(min(size, self.ctx.settings.max_object_bytes))
+        self._read_item(drive, item, r)
+        return 1
+
+    def _read_item(
+        self, drive: Drive, item: dict[str, Any], r: ItemReader, why: Stale | None = None
+    ) -> None:
+        """One file read (a change, or a rescan for `why`) and its findings stored."""
+        iid = str(item.get("id") or "")
+        size = int(item.get("size") or 0)
+        location = f"{self.id}\n{iid}"
+        name = str(item.get("name") or "file")
         ids = item.get("sharepointIds") if isinstance(item.get("sharepointIds"), dict) else {}
         link = sharepoint_link(drive.host, str((ids or {}).get("listItemUniqueId") or ""))
         path = f"/drives/{drive.drive_id}/items/{iid}/content"
@@ -370,6 +450,7 @@ class DriveSource:
                 r.index.record(iid, marker=item_marker(item), unreadable=True)
             r.cov.unreadable += 1
             log_event("item.unreadable", source=self.target, error=error_name(err))
-            return 1
+            return
+        if r.index is not None:
+            r.index.rescanned(findings, why)
         r.store.replace_location(location, findings)
-        return 1

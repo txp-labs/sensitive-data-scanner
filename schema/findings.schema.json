@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.9",
+  "title": "Sensitive-data scanner findings, version 1.10",
   "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site, or (1.8) in the SaaS tenants of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.9" },
+    "schemaVersion": { "const": "1.10" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
@@ -96,6 +96,9 @@
       "pattern": "^[0-9a-f]{64}$"
     },
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "rescanReason": {
+      "enum": ["adapter", "reader", "new_reader", "sniffer", "spec_standalone", "spec_conversation", "unindexed"]
+    },
     "storeKind": {
       "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5; the Azure kinds, from azure_blob, are new in 1.6; the Google Cloud kinds, from gcs, are new in 1.7; the SaaS kinds, from m365_mail, are new in 1.8).",
       "enum": [
@@ -567,6 +570,16 @@
           "description": "With disguised (1.9): the kind the bytes are.",
           "$ref": "#/$defs/contentKind"
         },
+        "rescanReason": {
+          "description": "(1.10, #67) The object did not change at its source and was read again because a component it was last read with changed and could change this result: its adapter, a reader it was read with, a new reader for a kind it held unread, the sniffer (for an object whose kind was undetermined or disputed), the standalone spec (text-bearing objects), the conversation spec (transcripts), or it had no row in the object index (read before the index knew it). Absent on a read for a change at the source.",
+          "$ref": "#/$defs/rescanReason"
+        },
+        "rescanClasses": {
+          "description": "(1.10) With rescanReason spec_standalone: the classes whose own rules changed, or that are new, when only those changed.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/class" }
+        },
         "pciNote": {
           "description": "Guidance for the customer's QSA, never a verdict (1.5): 3.3.1 for any cvv finding, whatever the encryption; 3.5.1.2 for a card finding under storage-level encryption (service_managed or customer_managed_key).",
           "type": "object",
@@ -625,6 +638,22 @@
           "description": "Objects and archive entries whose name claimed another kind than their bytes are (1.9, #65), counted whether or not anything was found in them. They were read by content.",
           "type": "integer",
           "minimum": 1
+        },
+        "indexed": {
+          "description": "(1.10, #67) Objects the source's object index holds after the run. Present when the source keeps an index.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "rescanned": {
+          "description": "(1.10) Objects read again this run though unchanged at the source, by rescanReason.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/rescanReason" },
+          "additionalProperties": { "type": "integer", "minimum": 1 }
+        },
+        "rescanBacklog": {
+          "description": "(1.10) Rescans still owed: objects whose recorded components are stale, and objects with no row met and not read. Later runs read them within their capped share.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

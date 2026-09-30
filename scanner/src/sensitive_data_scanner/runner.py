@@ -419,6 +419,7 @@ def indexes_for(config: Config, clients: Clients, state: dict[str, Any]) -> Inde
         S3Backend(config.results_bucket, Keys(config.results_prefix).index, clients.s3),
         index_salt(state),
         max_rows=config.index_max_objects,
+        rescan_percent=config.rescan_percent,
     )
 
 

@@ -206,7 +206,12 @@ def _scan(
     cursors: dict[str, Any] = dict(saved.get("cursors") or {})
     sources = rotate(sources, saved.get("rotation"))
     indexes = (
-        Indexes(PrefixBackend(state, INDEX), index_salt(saved), max_rows=settings.index_max_objects)
+        Indexes(
+            PrefixBackend(state, INDEX),
+            index_salt(saved),
+            max_rows=settings.index_max_objects,
+            rescan_percent=settings.rescan_percent,
+        )
         if state is not None and settings.object_index
         else None
     )

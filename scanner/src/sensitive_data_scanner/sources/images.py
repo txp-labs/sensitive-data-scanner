@@ -41,6 +41,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.index import Indexes, ObjectPass, Stale, flags_for
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.objects import read_object, record
 from sensitive_data_core.scan.sniff import MEDIA, SNIFF_BYTES, compatible, declared, sniff
@@ -157,10 +158,16 @@ class EcrAdapter:
 
 
 class EcrSource:
-    """One repository's latest image: its top layers' files, sampled."""
+    """One repository's latest image: its top layers' files, sampled.
+
+    With the object index (#67), a layer is indexed by its digest (its content's hash), with
+    what its files were read with: a newer image reads only the layers it has not read (or
+    whose recorded components are stale), and an image already read in full is read again
+    only for the layers a changed component could read differently."""
 
     kind = "ecr"
     facts: dict[str, Any] | None = None
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self,
@@ -239,6 +246,9 @@ class EcrSource:
     ) -> SourceRun:
         cov = Coverage(self.kind, self.target)
         seen_at, link = now.isoformat(), self.link()
+        op = ObjectPass(self.indexes, self.id, self.kind, budget=budget)
+        rescan = bool(cursor.get("rescan"))
+        indexed = bool(cursor.get("indexed"))
         try:
             digest = self._latest()
             if digest is None:
@@ -246,8 +256,13 @@ class EcrSource:
                 return SourceRun(cov, {}, None, {})
             same = cursor.get("image") == digest
             if same and cursor.get("done"):
-                cov.pass_complete = True  # read in full; a newer push starts a new pass
-                return SourceRun(cov, dict(cursor), None, {})
+                if not op.needs_enumeration(indexed=indexed):
+                    cov.pass_complete = True  # read in full; a newer push starts a new pass
+                    op.settle(cov)
+                    return SourceRun(cov, dict(cursor), None, {})
+                same, rescan = False, True  # the same image, for its stale layers (#67)
+            elif not same:
+                rescan = False
             pass_id = str(cursor.get("passId")) if same else secrets.token_hex(8)
             done_layers = list(cursor.get("layers") or []) if same else []
             layers = (self._manifest(digest).get("layers") or [])[-self.max_layers :]
@@ -257,18 +272,34 @@ class EcrSource:
             for layer in todo:
                 if not budget.has(0):
                     break
-                self._layer(layer, cov, budget, detector, store, seen_at, link, pass_id)
-                done_layers.append(str(layer.get("digest")))
+                layer_digest = str(layer.get("digest"))
+                decision = op.decide(layer_digest, changed=not rescan, marker=layer_digest)
+                if not (decision.read or decision.rescan):
+                    # A layer this scanner read, with what it would read it with now.
+                    op.carry(store, f"{self.id}\n{layer_digest}\n", pass_id)
+                    done_layers.append(layer_digest)
+                    continue
+                if decision.why is not None and not op.rescans.admit():
+                    op.rescans.miss(decision.why)
+                    break
+                self._layer(
+                    layer, cov, budget, detector, store, seen_at, link, pass_id, op, decision.why
+                )
+                done_layers.append(layer_digest)
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
             log_event("source.failed", source=self.target, error=cov.error)
             return SourceRun(cov, dict(cursor), None, {})
+        op.settle(cov)
+        index = {"indexed": True} if op.index is not None else {}
         if len(done_layers) >= len(layers):
             cov.pass_complete = True
             drop_other_passes(store, self.id, pass_id)
-            return SourceRun(cov, {"image": digest, "done": True}, None, {})
+            return SourceRun(cov, {"image": digest, "done": True, **index}, None, {})
         cov.backlog = True
-        cursor_out = {"image": digest, "passId": pass_id, "layers": done_layers}
+        cursor_out = {"image": digest, "passId": pass_id, "layers": done_layers, "rescan": rescan}
+        if indexed:
+            cursor_out["indexed"] = True
         return SourceRun(cov, cursor_out, None, {})
 
     def _members(self, stream: IO[bytes], media: str) -> Iterator[tuple[str, IO[bytes], int]]:
@@ -298,8 +329,15 @@ class EcrSource:
         seen_at: str,
         link: str,
         pass_id: str,
+        op: ObjectPass | None = None,
+        why: Stale | None = None,
     ) -> None:
         digest = str(layer.get("digest"))
+        # What the layer's files met, for its row in the index (the layer is one object).
+        readers: set[str] = set()
+        unread: set[str] = set()
+        flags = 0
+        failed = False
         media = str(layer.get("mediaType") or "")
         url = self.ecr.get_download_url_for_layer(
             repositoryName=self.repository, layerDigest=digest
@@ -318,6 +356,7 @@ class EcrSource:
                     # Counted by what its bytes are; the stream passes over the rest.
                     cov.disguised += int(not compatible(declared(path), kind))
                     cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
+                    unread.add(kind)
                     continue
                 if files >= self.max_files or not budget.has(size):
                     cov.sampled_out += 1
@@ -342,6 +381,9 @@ class EcrSource:
                     field=path,
                     read_by="layer_sample",
                 )
+                readers |= got.readers
+                unread |= got.unread
+                flags |= flags_for(got)
                 findings = record(
                     got,
                     cov,
@@ -353,6 +395,8 @@ class EcrSource:
                 )
                 if findings is None:
                     continue
+                if op is not None:
+                    op.rescanned(findings, why)
                 files += 1
                 for fnd in findings:
                     merge(store, f"{self.id}\n{digest}\n{path}", fnd, pass_id)
@@ -363,6 +407,16 @@ class EcrSource:
                 cov.partial += 1  # the byte cap fell inside the layer: what was read stands
             else:
                 cov.unreadable += 1
+                failed = True
                 log_event("item.unreadable", source=self.target, error=error_name(err))
         if raw.cut:
             cov.partial += 1
+        if op is not None:
+            op.record(
+                digest,
+                marker=digest,
+                readers=tuple(sorted(readers)),
+                unread=tuple(sorted(unread)),
+                flags=flags,
+                unreadable=failed,
+            )

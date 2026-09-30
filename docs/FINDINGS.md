@@ -1,4 +1,4 @@
-# Findings, schema version 1.9
+# Findings, schema version 1.10
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.9"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.10"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -109,6 +109,11 @@ value shows up in findings, events, logs, exception messages or object reprs.
   resource, the `pdf` format, the skip kinds `archive_unsupported` and
   `pdf_image_only`, `disguised` in coverage and the `disguised` gap on a
   store. All additive.
+- Version 1.10 ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67))
+  reads an object that did not change again only when a component it was read
+  with changed and could change what it finds ([Rescans](#rescans-110)): the
+  finding fields `rescanReason` and `rescanClasses`, and `indexed`,
+  `rescanned` and `rescanBacklog` in coverage. All additive.
 
 ## Sources and modes (1.8)
 
@@ -311,6 +316,7 @@ One class of data at one location.
 | `via` | How the values were found: `prompt` (a bot or agent asked for this class), `context` (a context word was nearby) or `shape` (the value alone looks like it). |
 | `offsets` | Where each occurrence is, at most 50 (`offsetsTruncated` says if more exist). `start` and `end` are UTF-16 code units. For a JSON item, `pointer` (RFC 6901) names the string they are in. A value split across a caller's turns has one offset per turn. |
 | `link` | A deep link into the account's own AWS console: the S3 object version, the log event, or the DynamoDB table's item explorer (it names no key; query by the masked key). A reviewer follows it with their own access. It is `null` when the key had to be masked. |
+| `rescanReason`, `rescanClasses` | (1.10) Present when this run read the object again although it had not changed at its source ([Rescans](#rescans-110)). |
 
 ### A table finding: a column (1.2)
 
@@ -657,6 +663,38 @@ with no text layer `pdf_image_only` (OCR is out of scope), a
 password-protected zip, zip entry or PDF `encrypted`. A PDF encrypted only
 for its permissions (an empty user password) opens for anyone, so it is read.
 
+### Rescans (1.10)
+
+An object that did not change at its source is read again only when a
+component it was last read with has changed, and that change could change
+what the read finds
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67);
+[ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)). Its findings say
+why:
+
+```json
+{
+  "resource": { "type": "s3_object", "bucket": "example-drop", "key": "hr/letter.pdf", "versionId": "null" },
+  "format": "pdf",
+  "class": "us_ssn",
+  "rescanReason": "spec_standalone",
+  "rescanClasses": ["us_itin"]
+}
+```
+
+| `rescanReason` | The object was read again because |
+|---|---|
+| `adapter` | The adapter that reads its store changed (that adapter's objects only) |
+| `reader` | A reader it was read with changed (on every platform; an archive is read by its own reader and its entries') |
+| `new_reader` | It held a kind no reader read (7z, older Office files, images; Parquet in the Lambda zip), and one does now |
+| `sniffer` | The sniffer changed, and what the object is was undetermined (`binary`) or disputed (`disguised`) |
+| `spec_standalone` | The unprompted rules changed, and the object was read as text or a table. `rescanClasses` names the classes when only their own rules changed or they are new |
+| `spec_conversation` | The prompts, carryover, normalization or answer windows changed, and part of the object was a conversation (a transcript) |
+| `unindexed` | It has no row in the object index: it was read before the index knew it, or by a scanner with the index off |
+
+A finding from a read for a change at the source carries neither field. The
+next read of the object replaces its findings, and the fields with them.
+
 ### Names are masked
 
 In a bucket name or key, log group or log stream name, DynamoDB table name,
@@ -785,6 +823,7 @@ One entry per source says what was, and was not, read:
 | `error` | The AWS error name when the source could not be read (`AccessDenied`, `NoSuchBucket`), else `null` |
 | `kmsDenied` | Items not read because the scanner may not use their KMS key (1.2; present when not zero) |
 | `disguised` | Objects and archive entries whose name claims another kind than their bytes are, read by content (1.9; present when not zero). Counted whether or not anything was found in them |
+| `indexed`, `rescanned`, `rescanBacklog` | (1.10) Present when the source keeps an object index: the objects the index holds after the run, the objects read again this run though unchanged at their source by `rescanReason`, and the rescans still owed (objects whose recorded components are stale, and objects with no row met and not read). Later runs read the backlog within `RESCAN_PERCENT` of each source's budget |
 
 ### Discovery: the run summary (1.2)
 

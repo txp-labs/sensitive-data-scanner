@@ -518,6 +518,33 @@ bumps the minor version. Spec changes are listed under **Spec**.
     files. The core's `read_object` now reports the detected type, the
     readers used, the kinds it could not read and whether any part was a
     conversation. Nothing changes in what a run reads or finds yet.
+- **Smart rescans** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 2):
+  - An object that did not change at its source is read again only when a
+    component it was read with changed and could change its result:
+    - its adapter changed: that adapter's objects only;
+    - a reader it was read with changed: on every platform, archives with an
+      entry it read included;
+    - a new reader (or pyarrow in the build) reads a kind it held unread;
+    - the sniffer changed: only objects whose kind was undetermined or
+      disputed;
+    - `spec-standalone` changed: text-bearing objects only, with the classes
+      named when only their rules changed or they are new;
+    - `spec-conversation` changed: transcripts only;
+    - no row in the index: read once (`unindexed`), the objects read before it.
+  - Source changes come first. Rescans follow in listing order within
+    `RESCAN_PERCENT` (25%) of each source's budget, so an upgrade is spread
+    over runs and never spikes one. `RESCAN_PERCENT=0` turns rescans off.
+  - Findings of a rescan carry `rescanReason` (and `rescanClasses`). Coverage
+    reports `indexed`, `rescanned` by reason and `rescanBacklog`.
+  - With a row in the index, the recorded change marker decides whether an
+    object changed, so an object inside the five-minute skew window is no
+    longer read twice.
+  - OneDrive, SharePoint and Drive find stale files by listing every item
+    again after the delta feed, resumably.
+  - CodeCommit reads only the files whose blob changed on a new head.
+  - ECR does not download a layer it has read again for a newer image.
+  - A head or image already read is read again only for the files or layers
+    a changed component could read differently.
 
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
@@ -641,7 +668,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
+- `schemaVersion` is now **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+  `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
+  `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
+  a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage.
+- Version **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
   `declaredType` and `detectedType` on a finding; `archivePath`,
   `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,
   `azure_file`, `gcs_object`, `saas_item` or `store_field` resource; the
@@ -699,6 +730,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/ARCHITECTURE.md` (How rescans are chosen), `docs/FINDINGS.md`
+  (Rescans, schema 1.10), and `RESCAN_PERCENT` in `docs/AZURE.md`,
+  `docs/GCP.md` and `docs/SAAS.md` ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
 - `docs/ARCHITECTURE.md`: the object index and component versions, and its
   size per million objects; `OBJECT_INDEX` and `INDEX_MAX_OBJECTS` in
   `docs/AZURE.md`, `docs/GCP.md` and `docs/SAAS.md` ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).

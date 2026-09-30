@@ -32,6 +32,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.index import Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
 
@@ -102,10 +103,16 @@ class CodeCommitAdapter:
 
 
 class CodeCommitSource:
-    """One repository's default branch at its head: a stable sample of its files."""
+    """One repository's default branch at its head: a stable sample of its files.
+
+    With the object index (#67), a new head reads only the sampled files whose blob changed
+    (a file's blob id is its content's hash) or whose recorded components are stale; the
+    others keep their findings. A head already read in full is read again, file by file,
+    only for the files a changed component could read differently."""
 
     kind = "codecommit"
     facts: dict[str, Any] | None = None
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self,
@@ -136,9 +143,10 @@ class CodeCommitSource:
             self.region, f"codesuite/codecommit/repositories/{q}/browse?region={self.region}"
         )
 
-    def _files(self, commit: str, cov: Coverage) -> list[str]:
-        """Every file path at `commit`, folder by folder, up to the folder cap."""
-        files: list[str] = []
+    def _files(self, commit: str, cov: Coverage) -> list[tuple[str, str]]:
+        """Every file path at `commit` and its blob id, folder by folder, up to the folder
+        cap."""
+        files: list[tuple[str, str]] = []
         folders, walked = ["/"], 0
         while folders and walked < self.max_folders:
             path = folders.pop()
@@ -146,7 +154,9 @@ class CodeCommitSource:
             r = self.client.get_folder(
                 repositoryName=self.repository, commitSpecifier=commit, folderPath=path
             )
-            files.extend(str(f["absolutePath"]) for f in r.get("files", []))
+            files.extend(
+                (str(f["absolutePath"]), str(f.get("blobId") or "")) for f in r.get("files", [])
+            )
             folders.extend(str(f["absolutePath"]) for f in r.get("subFolders", []))
         if folders:
             cov.partial += 1  # more folders than the cap: the sample is of the ones walked
@@ -162,16 +172,28 @@ class CodeCommitSource:
     ) -> SourceRun:
         cov = Coverage(self.kind, self.target)
         seen_at, link = now.isoformat(), self.link()
+        op = ObjectPass(self.indexes, self.id, self.kind, budget=budget)
+        rescan = bool(cursor.get("rescan"))
+        indexed = bool(cursor.get("indexed"))
         try:
             head = self.client.get_branch(repositoryName=self.repository, branchName=self.branch)
             commit = str(head["branch"]["commitId"])
             same = cursor.get("commit") == commit
             if same and cursor.get("done"):
-                cov.pass_complete = True  # the head has not moved since the last full pass
-                return SourceRun(cov, dict(cursor), None, {})
+                if not op.needs_enumeration(indexed=indexed):
+                    cov.pass_complete = True  # the head has not moved since the last full pass
+                    op.settle(cov)
+                    return SourceRun(cov, dict(cursor), None, {})
+                # The same head again, for the files a changed component could read
+                # differently (#67): a pass that carries every other file's findings.
+                same, rescan = False, True
+            elif not same:
+                rescan = False
             pass_id = str(cursor.get("passId")) if same else secrets.token_hex(8)
             after = int(cursor.get("after") or 0) if same else 0
-            paths = self._files(commit, cov)
+            listed = self._files(commit, cov)
+            blobs = dict(listed)
+            paths = [p for p, _ in listed]
             cov.listed = len(paths)
             # Every file is a candidate: what it is is decided by its bytes, not its name.
             readable = paths
@@ -185,8 +207,18 @@ class CodeCommitSource:
             for i in range(after, len(sample)):
                 if not budget.has(0):
                     break
+                path = sample[i]
+                blob = blobs.get(path) or None
+                # A new head's files changed as far as the listing says; a rescan pass's did not.
+                decision = op.decide(path, changed=not rescan, marker=blob)
+                if not (decision.read or decision.rescan):
+                    op.carry(store, f"{self.id}\n{path}", pass_id)  # the same blob, current
+                    continue
+                if decision.why is not None and not op.rescans.admit():
+                    op.rescans.miss(decision.why)
+                    break  # the cap is spent: the pass goes on here next run
                 self._read(
-                    sample[i],
+                    path,
                     commit,
                     cov=cov,
                     budget=budget,
@@ -195,6 +227,9 @@ class CodeCommitSource:
                     seen_at=seen_at,
                     link=link,
                     pass_id=pass_id,
+                    op=op,
+                    blob=blob,
+                    why=decision.why,
                 )
             else:
                 i = len(sample)
@@ -204,14 +239,20 @@ class CodeCommitSource:
                 cov.kms_denied += 1
             log_event("source.failed", source=self.target, error=cov.error)
             return SourceRun(cov, dict(cursor), None, {})
+        index = {"indexed": True} if op.index is not None else {}
         if i >= len(sample):
             cov.pass_complete = True
             gone = drop_other_passes(store, self.id, pass_id)
             if gone:
                 log_event("finding.gone", source=self.target, count=gone)
-            return SourceRun(cov, {"commit": commit, "done": True}, None, {})
+            op.settle(cov)
+            return SourceRun(cov, {"commit": commit, "done": True, **index}, None, {})
         cov.backlog = True
-        return SourceRun(cov, {"commit": commit, "passId": pass_id, "after": i}, None, {})
+        op.settle(cov)
+        out = {"commit": commit, "passId": pass_id, "after": i, "rescan": rescan}
+        if indexed:
+            out["indexed"] = True
+        return SourceRun(cov, out, None, {})
 
     def _read(
         self,
@@ -225,12 +266,17 @@ class CodeCommitSource:
         seen_at: str,
         link: str,
         pass_id: str,
+        op: ObjectPass | None = None,
+        blob: str | None = None,
+        why: Stale | None = None,
     ) -> None:
         try:
             r = self.client.get_file(
                 repositoryName=self.repository, commitSpecifier=commit, filePath=path
             )
         except Exception as err:  # one file must not stop the pass
+            if op is not None:
+                op.record(path, marker=blob, unreadable=True)
             cov.unreadable += 1
             log_event("item.unreadable", source=self.target, error=error_name(err))
             return
@@ -257,6 +303,9 @@ class CodeCommitSource:
             facts=self.facts,
             offsets=False,
         )
+        if op is not None:
+            op.record(path, marker=blob, fingerprint=f"git:{blob}" if blob else None, got=got)
+            op.rescanned(findings, why)
         for f in findings or []:
             merge(store, f"{self.id}\n{path}", f, pass_id)
 

@@ -162,6 +162,7 @@ class Settings:
     # #67: the per-object index beside the state (`OBJECT_INDEX`, on), and its cap per source.
     object_index: bool = True
     index_max_objects: int = 10_000_000
+    rescan_percent: int = 25  # the share of each source's budget rescans may use (0: none)
     max_objects_per_run: int = 0
     state_bucket: str | None = None
     https_url: Secret | None = field(default=None, repr=False)
@@ -372,6 +373,7 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         object_index=(e.get("OBJECT_INDEX") or "on").strip().lower()
         not in ("off", "false", "0", "no"),
         index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
+        rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
         max_objects_per_run=_int(e.get("MAX_OBJECTS_PER_RUN"), 0, 0, 10_000_000),
         state_bucket=state,
         https_url=https_url,

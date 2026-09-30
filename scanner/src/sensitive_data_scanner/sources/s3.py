@@ -65,7 +65,7 @@ from typing import TYPE_CHECKING, Any
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, finding_json
-from sensitive_data_core.index import Indexes, ObjectPass
+from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.columnar import (
     TableResult,
@@ -321,7 +321,14 @@ class S3Source:
         # Each listing pass is a generation of the index: a complete pass drops the rows of
         # objects it did not list (gone from the bucket).
         generation = int(cursor.get("indexPass") or 0) + (0 if cursor.get("passStartedAt") else 1)
-        op = ObjectPass(self.indexes, self.id, self.kind, generation=generation)
+        op = ObjectPass(
+            self.indexes,
+            self.id,
+            self.kind,
+            generation=generation,
+            columnar=self.columnar,
+            budget=budget,
+        )
         try:
             while not done and budget.time_left():
                 args: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
@@ -341,29 +348,41 @@ class S3Source:
                     key = obj["Key"]
                     cov.listed += 1
                     op.seen(key)
-                    modified = obj.get("LastModified")
-                    if since is not None and modified is not None and modified <= since:
-                        start_after = key
-                        continue
                     if key.endswith("/") or obj.get("Size", 0) == 0:
                         start_after = key
                         continue
                     if self.exclude_prefixes and key.startswith(self.exclude_prefixes):
                         start_after = key  # a catalog table's own source reads it
                         continue
-                    cov.eligible += 1
+                    modified = obj.get("LastModified")
+                    changed = since is None or modified is None or modified > since
+                    decision = op.decide(key, changed=changed, marker=object_marker(obj))
+                    if not (decision.read or decision.rescan):
+                        start_after = key  # unchanged, and read with what it would be now
+                        continue
+                    cov.eligible += int(decision.read)
                     if sample_point(key) >= self.sample_percent:
-                        cov.sampled_out += 1
+                        cov.sampled_out += int(decision.read)
                         start_after = key
                         continue
                     directory = key.rsplit("/", 1)[0] if "/" in key else ""
-                    if self.max_per_prefix:
+                    # A rescan of an object read before was in its directory's sample; one
+                    # the index never saw takes its place in the sample like a new object.
+                    counted = decision.read or (
+                        decision.why is not None and decision.why.reason == UNINDEXED
+                    )
+                    if self.max_per_prefix and counted:
                         if directory != cur_dir:
                             cur_dir, cur_n = directory, 0
                         if cur_n >= self.max_per_prefix:
-                            cov.sampled_out += 1
+                            cov.sampled_out += int(decision.read)
                             start_after = key
                             continue
+                    if decision.rescan:
+                        op.offer(obj, decision)  # read after this run's changes, if it fits
+                        cur_n += int(counted)
+                        start_after = key
+                        continue
                     size = planned_bytes(key, obj.get("Size", 0), self.max_object_bytes)
                     if not budget.has(size):
                         cov.backlog = True
@@ -371,25 +390,8 @@ class S3Source:
                         break
                     budget.take(size)
                     cur_n += 1
-                    try:
-                        self._scan_object(
-                            key,
-                            size=obj.get("Size", 0),
-                            cov=cov,
-                            detector=detector,
-                            store=store,
-                            seen_at=seen_at,
-                            op=op,
-                            listed=obj,
-                        )
-                    except Exception as err:  # one bad object must not stop the pass
-                        op.record(key, marker=object_marker(obj), unreadable=True)
-                        cov.unreadable += 1
-                        if is_kms_denial(err):
-                            cov.kms_denied += 1
-                        name = error_name(err)
-                        first_read_error = first_read_error or name
-                        log_event("item.unreadable", source=self.target, error=name)
+                    error = self._read_one(obj, cov, detector, store, seen_at, op)
+                    first_read_error = first_read_error or error
                     start_after = key
                 if stop:
                     if self.express:
@@ -403,6 +405,13 @@ class S3Source:
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
             log_event("source.failed", source=self.target, error=cov.error)
+        if cov.error is None:
+            # Then the rescans this run met, within their capped share (#67).
+            for obj, why in op.rescans.drain(
+                budget, lambda o: planned_bytes(o["Key"], o.get("Size", 0), self.max_object_bytes)
+            ):
+                error = self._read_one(obj, cov, detector, store, seen_at, op, why)
+                first_read_error = first_read_error or error
         if done and cov.error is None:
             cov.pass_complete = True
             op.complete()
@@ -426,9 +435,45 @@ class S3Source:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
         new_cursor["indexPass"] = generation
+        op.settle(cov)
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_read_error
         return SourceRun(cov, new_cursor)
+
+    def _read_one(  # noqa: PLR0917 - one object of the pass
+        self,
+        obj: Mapping[str, Any],
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+        op: ObjectPass,
+        why: Stale | None = None,
+    ) -> str | None:
+        """One listed object read (a change, or a rescan for `why`); the error's name when it
+        could not be."""
+        key = obj["Key"]
+        try:
+            self._scan_object(
+                key,
+                size=obj.get("Size", 0),
+                cov=cov,
+                detector=detector,
+                store=store,
+                seen_at=seen_at,
+                op=op,
+                listed=obj,
+                why=why,
+            )
+        except Exception as err:  # one bad object must not stop the pass
+            op.record(key, marker=object_marker(obj), unreadable=True)
+            cov.unreadable += 1
+            if is_kms_denial(err):
+                cov.kms_denied += 1
+            name = error_name(err)
+            log_event("item.unreadable", source=self.target, error=name)
+            return name
+        return None
 
     def _scan_object(
         self,
@@ -441,6 +486,7 @@ class S3Source:
         seen_at: str,
         op: ObjectPass | None = None,
         listed: Mapping[str, Any] | None = None,
+        why: Stale | None = None,
     ) -> None:
         """One object, read by the core's reader (`read_object`) through ranged GETs of one
         version: the first GET's version is pinned for the rest, and its encryption headers
@@ -453,6 +499,8 @@ class S3Source:
                                seen_at=seen_at)  # fmt: skip
             if op is not None:
                 op.record(key, marker=object_marker(obj), readers=("columnar",), text=True)
+                location = f"{self.id}\n{key}"
+                op.rescanned([f for f in store.items.values() if f["_location"] == location], why)
             return
         version: str | None = None
         headers: dict[str, Any] | None = None
@@ -498,6 +546,8 @@ class S3Source:
             facts=self._facts(),
             connect=True,
         )
+        if op is not None:
+            op.rescanned(findings, why)
         if findings is None:
             return
         store.replace_location(f"{self.id}\n{key}", findings)

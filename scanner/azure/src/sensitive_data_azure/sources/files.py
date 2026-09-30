@@ -37,7 +37,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
-from sensitive_data_core.index import Indexes, ObjectPass
+from sensitive_data_core.index import Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.objects import (
@@ -198,22 +198,35 @@ class FilesSource:
         seen_at = now.isoformat()
         done = True
         generation = int(cursor.get("indexPass") or 0) + (0 if cursor.get("passStartedAt") else 1)
-        op = ObjectPass(self.indexes, self.id, self.kind, generation=generation)
-        for path, size, changed in files:
+        op = ObjectPass(
+            self.indexes,
+            self.id,
+            self.kind,
+            generation=generation,
+            columnar=self.columnar,
+            budget=budget,
+        )
+        for path, size, when in files:
             if after is not None and path <= after:
                 continue
             cov.listed += 1
             op.seen(path)
-            marker = f"{size}|{changed.isoformat() if changed else ''}"
-            if since is not None and changed is not None and changed <= since:
-                after = path
-                continue
             if size == 0:
                 after = path
                 continue
-            cov.eligible += 1
+            marker = f"{size}|{when.isoformat() if when else ''}"
+            changed = since is None or when is None or when > since
+            decision = op.decide(path, changed=changed, marker=marker)
+            if not (decision.read or decision.rescan):
+                after = path  # unchanged, and read with what it would be now
+                continue
+            cov.eligible += int(decision.read)
             if sample_point(path) >= self.sample_percent:
-                cov.sampled_out += 1
+                cov.sampled_out += int(decision.read)
+                after = path
+                continue
+            if decision.rescan:
+                op.offer((path, size, marker), decision)  # after this run's changes
                 after = path
                 continue
             want = planned_bytes(path, size, self.max_object_bytes)
@@ -221,16 +234,14 @@ class FilesSource:
                 done = False
                 break
             budget.take(want)
-            try:
-                got = self._read(
-                    path, size, cov=cov, detector=detector, store=store, seen_at=seen_at
-                )
-                op.record(path, marker=marker, got=got)
-            except Exception as err:  # one bad file must not stop the pass
-                op.record(path, marker=marker, unreadable=True)
-                cov.unreadable += 1
-                log_event("item.unreadable", source=self.target, error=error_name(err))
+            self._guarded(path, size, marker, op, cov, detector, store, seen_at)
             after = path
+        # Then the rescans this run met, within their capped share (#67).
+        for (path, size, marker), why in op.rescans.drain(
+            budget, lambda c: planned_bytes(c[0], c[1], self.max_object_bytes)
+        ):
+            self._guarded(path, size, marker, op, cov, detector, store, seen_at, why)
+        op.settle(cov)
         if done:
             cov.pass_complete = True
             op.complete()
@@ -248,6 +259,30 @@ class FilesSource:
             },
         )
 
+    def _guarded(  # noqa: PLR0917 - one file of the pass
+        self,
+        path: str,
+        size: int,
+        marker: str,
+        op: ObjectPass,
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+        why: Stale | None = None,
+    ) -> None:
+        """One file read (a change, or a rescan for `why`) and recorded in the index."""
+        try:
+            got, findings = self._read(
+                path, size, cov=cov, detector=detector, store=store, seen_at=seen_at, why=why
+            )
+            op.record(path, marker=marker, got=got)
+            op.rescanned(findings, why)
+        except Exception as err:  # one bad file must not stop the pass
+            op.record(path, marker=marker, unreadable=True)
+            cov.unreadable += 1
+            log_event("item.unreadable", source=self.target, error=error_name(err))
+
     def _read(
         self,
         path: str,
@@ -257,7 +292,8 @@ class FilesSource:
         detector: Detector,
         store: FindingStore,
         seen_at: str,
-    ) -> ObjectResult:
+        why: Stale | None = None,
+    ) -> tuple[ObjectResult, list[dict[str, Any]] | None]:
         client = self.share.get_file_client(path)
 
         def fetch(start: int, end: int) -> bytes:
@@ -284,8 +320,10 @@ class FilesSource:
             facts=facts,
         )
         if findings is not None:
+            for f in findings:
+                f.update(why.fields() if why is not None else {})
             store.replace_location(f"{self.id}\n{path}", findings)
-        return got
+        return got, findings
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:
         """Drop stored findings whose file is gone."""
