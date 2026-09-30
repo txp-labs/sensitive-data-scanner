@@ -34,7 +34,14 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
-from sensitive_data_core.index import Indexes, index_salt, listed_with, relist
+from sensitive_data_core.index import (
+    FORGET_KEY,
+    Indexes,
+    forget_absent,
+    index_salt,
+    listed_with,
+    relist,
+)
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
@@ -281,6 +288,9 @@ def _scan(
         not in vendor_only
     ]
     in_scope = {s.id for s in sources} | {imp.id for imp in running}
+    forget = forget_absent(
+        cursors, saved.get("findings") or [], in_scope, indexes, saved.get(FORGET_KEY)
+    )
     findings = FindingStore(started.isoformat())
     for f in saved.get("findings") or []:
         if isinstance(f, dict) and str(f.get("_location", "")).split("\n", 1)[0] in in_scope:
@@ -363,6 +373,8 @@ def _scan(
         if indexes is not None:
             indexes.save()
             new_state["indexSalt"] = indexes.salt
+        if forget:
+            new_state[FORGET_KEY] = forget
         try:
             state.save(new_state)
         except Exception as err:  # the findings still go out; the next run starts afresh

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "11779444587685286898"
+      "templateHash": "10213771761692270377"
     }
   },
   "parameters": {
@@ -115,6 +115,15 @@
     "findingsEventGridEndpoint": {
       "type": "string",
       "defaultValue": ""
+    },
+    "blobInventoryMinObjects": {
+      "type": "int",
+      "defaultValue": 1000000,
+      "minValue": 0,
+      "maxValue": 10000000000,
+      "metadata": {
+        "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: a container whose last complete pass listed at least this many blobs is named in the run summary (recommendation: blob_inventory); 0 never names one."
+      }
     },
     "infrastructureSubnetId": {
       "type": "string",
@@ -263,6 +272,9 @@
           "readFileShares": {
             "value": "[parameters('readFileShares')]"
           },
+          "blobInventoryMinObjects": {
+            "value": "[parameters('blobInventoryMinObjects')]"
+          },
           "findingsHttpsUrl": {
             "value": "[parameters('findingsHttpsUrl')]"
           },
@@ -286,7 +298,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7323159116458964652"
+              "templateHash": "17934717672359237149"
             }
           },
           "parameters": {
@@ -343,6 +355,14 @@
             "readFileShares": {
               "type": "bool",
               "defaultValue": false
+            },
+            "blobInventoryMinObjects": {
+              "type": "int",
+              "defaultValue": 1000000,
+              "minValue": 0,
+              "metadata": {
+                "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container's last complete pass listed that name it in the run summary; 0 never."
+              }
             },
             "findingsHttpsUrl": {
               "type": "securestring",
@@ -467,7 +487,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
@@ -623,6 +643,9 @@
           "readFileShares": {
             "value": "[parameters('readFileShares')]"
           },
+          "blobInventoryMinObjects": {
+            "value": "[parameters('blobInventoryMinObjects')]"
+          },
           "findingsHttpsUrl": {
             "value": "[parameters('findingsHttpsUrl')]"
           },
@@ -643,7 +666,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7323159116458964652"
+              "templateHash": "17934717672359237149"
             }
           },
           "parameters": {
@@ -700,6 +723,14 @@
             "readFileShares": {
               "type": "bool",
               "defaultValue": false
+            },
+            "blobInventoryMinObjects": {
+              "type": "int",
+              "defaultValue": 1000000,
+              "minValue": 0,
+              "metadata": {
+                "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container's last complete pass listed that name it in the run summary; 0 never."
+              }
             },
             "findingsHttpsUrl": {
               "type": "securestring",
@@ -824,7 +855,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }

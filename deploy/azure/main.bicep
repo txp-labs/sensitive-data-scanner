@@ -50,6 +50,10 @@ param findingsHttpsUrl string = ''
 @secure()
 param findingsHmacKey string = ''
 param findingsEventGridEndpoint string = ''
+@description('AZURE_BLOB_INVENTORY_MIN_OBJECTS: a container whose last complete pass listed at least this many blobs is named in the run summary (recommendation: blob_inventory); 0 never names one.')
+@minValue(0)
+@maxValue(10000000000)
+param blobInventoryMinObjects int = 1000000
 @description('A subnet delegated to Microsoft.App/environments, to reach private endpoints (central mode).')
 param infrastructureSubnetId string = ''
 param tags object = {}
@@ -100,6 +104,7 @@ module centralJob 'modules/job.bicep' = if (central) {
     readDatabases: readDatabases
     readKeyVaultSecrets: readKeyVaultSecrets
     readFileShares: readFileShares
+    blobInventoryMinObjects: blobInventoryMinObjects
     findingsHttpsUrl: findingsHttpsUrl
     findingsHmacKey: findingsHmacKey
     findingsEventGridEndpoint: findingsEventGridEndpoint
@@ -153,6 +158,7 @@ module jobs 'modules/job.bicep' = [
       readDatabases: readDatabases
       readKeyVaultSecrets: readKeyVaultSecrets
       readFileShares: readFileShares
+      blobInventoryMinObjects: blobInventoryMinObjects
       findingsHttpsUrl: findingsHttpsUrl
       findingsHmacKey: findingsHmacKey
       findingsEventGridEndpoint: findingsEventGridEndpoint

@@ -234,6 +234,23 @@ def test_the_job_runs_as_the_scanner_account_and_every_setting_it_sets_is_read()
     assert "@sha256:" in str(image["validation"])
 
 
+def test_the_gcs_inventory_threshold_is_a_variable_that_reaches_the_job() -> None:
+    """GCS_INVENTORY_MIN_OBJECTS is set from `gcs_inventory_min_objects`: the scanner's own
+    default and bounds, 0 to never name a bucket (`terraform test` plans both)."""
+    t = load()
+    v = t["variable"]["gcs_inventory_min_objects"]
+    assert v["type"] == "number"
+    assert v["default"] == 1_000_000
+    assert "10000000000" in str(v["validation"])
+    source = (DEPLOY / "main.tf").read_text()
+    assert re.search(
+        r"^\s+GCS_INVENTORY_MIN_OBJECTS\s+= tostring\(var\.gcs_inventory_min_objects\)$",
+        source,
+        re.M,
+    )
+    assert "1_000_000, 0, 10_000_000_000" in CONFIG.read_text()
+
+
 def test_the_scheduler_account_can_only_start_the_job() -> None:
     r = load()["resource"]
     uses = [

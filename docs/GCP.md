@@ -486,6 +486,7 @@ terraform -chdir=deploy/gcp apply \
 | `schedule`, `task_timeout_seconds` | daily 06:00 UTC, 3600 | When it runs, and for how long at most |
 | `site`, `discover` | `org-<organization_id>`, every kind | `SCANNER_SITE`, `DISCOVER` |
 | `read_databases`, `read_private_logs`, `read_secrets` | off, off, off | `GCP_DB_READ=all` (with `GCP_DB_PRINCIPAL` the service account), `LOGGING_PRIVATE_READ`, `SECRET_MANAGER_READ`; each adds its own role |
+| `gcs_inventory_min_objects` | 1,000,000 | `GCS_INVENTORY_MIN_OBJECTS`: a bucket whose last complete pass listed at least this many objects is named in the run summary (`recommendation: storage_insights`); 0: never |
 | `findings_https_url`, `findings_hmac_key` | | The signed push; both go into Secret Manager secrets of the job's own |
 | `findings_pubsub_topic` | | The Pub/Sub push; the topic's owner grants the service account Pub/Sub Publisher on it |
 | `network`, `subnetwork` | | Direct VPC egress, so the job reaches private IPs (Cloud SQL, AlloyDB) |

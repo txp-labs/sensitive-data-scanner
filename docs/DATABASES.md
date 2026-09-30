@@ -185,6 +185,11 @@ The rules:
 - A table read with a component that has since changed and could change its
   result is sampled again within `RESCAN_PERCENT` of the budget
   ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)).
+- A database taken out of the configuration loses its carried findings and
+  its table index together, so if it is added back its tables are sampled
+  again and its findings return. An index the state location would not let
+  the runner remove is named in the document (`forget`) and removed on the
+  next run.
 - A catalog view the user may not read means no markers, and every table is
   sampled, as before. `OBJECT_INDEX=off` turns this off.
 

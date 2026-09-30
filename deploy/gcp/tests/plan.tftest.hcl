@@ -43,6 +43,33 @@ run "defaults_read_only" {
     condition     = google_storage_bucket.state.public_access_prevention == "enforced" && google_storage_bucket.state.uniform_bucket_level_access
     error_message = "The state bucket is private."
   }
+  assert {
+    condition     = one([for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.value if e.name == "GCS_INVENTORY_MIN_OBJECTS"]) == "1000000"
+    error_message = "GCS_INVENTORY_MIN_OBJECTS is the scanner's own default unless set."
+  }
+}
+
+run "inventory_threshold_set" {
+  command = plan
+
+  variables {
+    gcs_inventory_min_objects = 0
+  }
+
+  assert {
+    condition     = one([for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.value if e.name == "GCS_INVENTORY_MIN_OBJECTS"]) == "0"
+    error_message = "gcs_inventory_min_objects = 0 reaches the job, so no bucket is named."
+  }
+}
+
+run "inventory_threshold_is_a_whole_count" {
+  command = plan
+
+  variables {
+    gcs_inventory_min_objects = -1
+  }
+
+  expect_failures = [var.gcs_inventory_min_objects]
 }
 
 run "opt_ins_and_folders" {

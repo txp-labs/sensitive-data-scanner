@@ -44,7 +44,7 @@ from sensitive_data_core.findings import (
     findings_document,
     store_field_resource,
 )
-from sensitive_data_core.index import Indexes, ObjectPass, index_salt
+from sensitive_data_core.index import FORGET_KEY, Indexes, ObjectPass, forget_absent, index_salt
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import TableResult
@@ -65,18 +65,30 @@ def source_id(db: Database) -> str:
     return f"{db.engine}:{db.name}"
 
 
-def carry(findings: FindingStore, backend: Any, in_scope: set[str]) -> None:
+def carry(
+    findings: FindingStore,
+    backend: Any,
+    in_scope: set[str],
+    indexes: Indexes | None = None,
+    pending: Any = None,
+) -> list[str]:
     """The findings of the last run, for the databases still configured: a table skipped as
-    unchanged keeps them; a table read again replaces its own."""
+    unchanged keeps them; a table read again replaces its own. A database no longer
+    configured loses its findings and its table index with them, so if it comes back its
+    tables are read again (`forget_absent`). Returns the databases whose index is still to
+    be removed (the state's `forget`)."""
     try:
         raw = backend.get_bytes(CARRIED)
         items = json.loads(gzip.decompress(raw)) if raw else []
     except Exception as err:  # none carried: every finding is this run's
         log_event("index.failed", error=error_name(err))
-        return
-    for f in items if isinstance(items, list) else []:
+        items = []
+    items = items if isinstance(items, list) else []
+    forget = forget_absent({}, items, in_scope, indexes, pending)
+    for f in items:
         if isinstance(f, dict) and str(f.get("_location", "")).split("\n", 1)[0] in in_scope:
             findings.items[str(f.get("id"))] = f
+    return forget
 
 
 def keep(findings: FindingStore, backend: Any) -> None:
@@ -238,8 +250,11 @@ def run(
         if backend is not None
         else None
     )
+    forget: list[str] = []
     if indexes is not None:
-        carry(findings, backend, {source_id(d) for d in ordered})
+        forget = carry(
+            findings, backend, {source_id(d) for d in ordered}, indexes, saved.get(FORGET_KEY)
+        )
     today = (started.date() - _dt.date(1970, 1, 1)).days
     names = [d.name for d in ordered]
     if start in names:
@@ -292,7 +307,9 @@ def run(
     if indexes is not None and backend is not None:
         indexes.save()
         keep(findings, backend)
-    save_rotation(state, settings.site, deferred, salt=indexes.salt if indexes else None)
+    save_rotation(
+        state, settings.site, deferred, salt=indexes.salt if indexes else None, forget=forget
+    )
     failed = 0
     for sink in sinks:
         try:

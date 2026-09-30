@@ -6,7 +6,7 @@ never reaches is `deferred` every time. With it, the runner reads, before the ru
 writes, after it, a small JSON document:
 
     {"version": 1, "site": "dc-1", "rotation": "<the first database deferred>",
-     "indexSalt": "<random hex>"}
+     "indexSalt": "<random hex>", "forget": ["<a database whose index is still to remove>"]}
 
 It holds no value, no connection string and no finding: only the name the customer gave
 a database, and the salt of the table index (#67), which lives beside it with the
@@ -118,13 +118,19 @@ def load_rotation(store: StateStore | None, site: str) -> str | None:
 
 
 def save_rotation(
-    store: StateStore | None, site: str, rotation: str | None, salt: str | None = None
+    store: StateStore | None,
+    site: str,
+    rotation: str | None,
+    salt: str | None = None,
+    forget: list[str] | None = None,
 ) -> None:
     if store is None:
         return
     doc: dict[str, Any] = {"version": STATE_VERSION, "site": site, "rotation": rotation}
     if salt is not None:
         doc["indexSalt"] = salt
+    if forget:
+        doc["forget"] = forget
     try:
         store.save(doc)
     except Exception as err:  # the findings still go out; the next run starts from the top

@@ -22,6 +22,12 @@ The components (docs/ARCHITECTURE.md, "How rescans are chosen"):
   `kind = "..."` literals in every platform's `sources/` modules, plus the kinds
   named below that a module sets at run time;
 - `listing:<kind>`: the split adapters' other modules;
+- shared read helpers (`SHARED_READ`): code in a `sources/` helper module that
+  reads for the adapters (the SaaS sources' `ItemReader`, Azure's queue message
+  text), hashed into the `adapter:<kind>` of every kind whose modules import it,
+  so a change to it rescans what it read. A name an adapter's read path imports
+  from a helper module is either a shared read helper or named as plumbing
+  (`PLUMBING`: the context, gaps, encryption facts), or the check fails;
 - `reader:<name>`: the core's readers, and the kinds of object each reads;
 - `sniffer`: what an object is (`scan/sniff.py`) and the routing that sends it
   to a reader;
@@ -203,6 +209,47 @@ HELPERS = frozenset(
         "inventory.py",
     }
 )
+_SAAS = "scanner/saas/src/sensitive_data_saas/sources"
+_AZURE = "scanner/azure/src/sensitive_data_azure/sources"
+_GCP = "scanner/gcp/src/sensitive_data_gcp/sources"
+_AWS = "scanner/src/sensitive_data_scanner/sources"
+# Code in a helper module that reads for the adapters: each entry is hashed into the
+# `adapter:<kind>` of every kind whose modules (read path or listing) import one of its
+# names, so a change to it rescans what it read (#67).
+SHARED_READ: tuple[str, ...] = (
+    # How every SaaS source reads an item's text and a file: the core's readers, the findings
+    # made of what they found, and an attachment's findings put back in place.
+    f"{_SAAS}/base.py::ItemReader",
+    f"{_SAAS}/base.py::_Text,html_text",
+    f"{_SAAS}/base.py::bytes_fetch",
+    # A stored value, a queue message's text, and a queue's findings added up.
+    f"{_AZURE}/common.py::plain",
+    f"{_AZURE}/common.py::_printable,message_text",
+    f"{_AZURE}/common.py::_CONF_RANK,merge_items",
+    # An export's (a layer's, a repository's) findings for one column added up across files.
+    f"{_AWS}/exports.py::merge",
+)
+# Names an adapter's read path imports from a helper module that decide nothing a read finds:
+# the context, a refused call as a gap, encryption facts, settings, time stamps, the export
+# state machine. A name in neither this nor SHARED_READ fails the check (`uncovered`).
+PLUMBING: dict[str, frozenset[str]] = {
+    f"{_AWS}/base.py": frozenset({"Context"}),
+    f"{_AWS}/encryption.py": frozenset(
+        {"KeyClassifier", "classifier", "log_group_facts", "s3_object_facts"}
+    ),
+    f"{_AWS}/exports.py": frozenset(
+        {"ExportQuota", "delete_prefix", "drop_other_passes", "due", "list_keys"}
+    ),
+    f"{_AZURE}/base.py": frozenset({"Context", "key_facts"}),
+    f"{_AZURE}/common.py": frozenset({"http_gap"}),
+    f"{_GCP}/base.py": frozenset({"Context", "kms_facts", "labels"}),
+    f"{_GCP}/common.py": frozenset({"call_gap"}),
+    f"{_SAAS}/base.py": frozenset({"Context", "call_gap", "parse_time", "vendor_facts"}),
+    f"{_SAAS}/gws.py": frozenset({"VENDOR", "facts_of", "settings_of", "tenant_of"}),
+    f"{_SAAS}/m365.py": frozenset(
+        {"Person", "facts_of", "fields_of", "people", "settings_of", "tenant_of"}
+    ),
+}
 _KIND = re.compile(r'^\s*(?:self\.)?(?:kind|KIND)\s*(?::\s*str\s*)?=\s*"([a-z0-9_]+)"', re.M)
 
 
@@ -266,6 +313,37 @@ def _reads(path: Path) -> tuple[str, ...]:
     raise SystemExit(f"components: {path} has no READS tuple")
 
 
+def _shared_read() -> dict[str, list[tuple[str, frozenset[str]]]]:
+    """SHARED_READ by helper module: each entry, and the names that bring it in."""
+    out: dict[str, list[tuple[str, frozenset[str]]]] = {}
+    for entry in SHARED_READ:
+        path, _, names = entry.partition("::")
+        out.setdefault(path, []).append((entry, frozenset(n.strip() for n in names.split(","))))
+    return out
+
+
+def helper_imports(root: Path, rel: str) -> set[tuple[str, str]]:
+    """What a `sources/` module imports from the helper modules beside it: (the helper's
+    path, the name). `from . import base` is the name `*`: every name is its to use."""
+    f = root / rel
+    out: set[tuple[str, str]] = set()
+    for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.ImportFrom) or node.level != 1:
+            continue
+        if node.module is None:
+            for alias in node.names:
+                if alias.name + ".py" in HELPERS:
+                    out.add(((f.parent / (alias.name + ".py")).relative_to(root).as_posix(), "*"))
+        elif "." not in node.module and node.module + ".py" in HELPERS:
+            helper = (f.parent / (node.module + ".py")).relative_to(root).as_posix()
+            out.update((helper, alias.name) for alias in node.names)
+    return out
+
+
+def _in_sources(rel: str) -> bool:
+    return any(rel.startswith(d + "/") for d in SOURCE_DIRS)
+
+
 def _modules(root: Path) -> list[Path]:
     return [f for d in SOURCE_DIRS for f in sorted((root / d).glob("*.py"))]
 
@@ -305,6 +383,16 @@ def components_of(root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]
         for rel in files:
             if kind in split_kinds and rel not in listing.setdefault(kind, []):
                 listing[kind].append(rel)
+    # A shared read helper is part of the read path of every kind whose modules use it.
+    shared = _shared_read()
+    for kind, files in read.items():
+        modules = {e for e in files + listing.get(kind, []) if "::" not in e and _in_sources(e)}
+        used = set().union(*(helper_imports(root, rel) for rel in modules)) if modules else set()
+        for helper, entries in shared.items():
+            names = {n for h, n in used if h == helper}
+            for entry, brings in entries:
+                if names & brings and entry not in files:
+                    files.append(entry)
     return dict(sorted(read.items())), dict(sorted(listing.items()))
 
 
@@ -317,7 +405,9 @@ def uncovered(root: Path) -> list[str]:
     """`sources/` modules that belong to no component: a module that names no kind, is not an
     extra adapter's or listing's, and is no helper; a read module with no module beside it;
     and a module that records objects in the index (`ObjectPass(`) without a read module of
-    its own, so its listing would move its objects' versions."""
+    its own, so its listing would move its objects' versions; and a name a read path imports
+    from a helper module that is neither a shared read helper nor named as plumbing, so a
+    change to it would rescan nothing."""
     read, listing = components_of(root)
     named = {
         e.partition("::")[0] for group in (read, listing) for files in group.values() for e in files
@@ -334,6 +424,15 @@ def uncovered(root: Path) -> list[str]:
             out.append(rel)
         elif "ObjectPass(" in f.read_text(encoding="utf-8") and not _split(f):
             out.append(f"{rel} (records objects in the index: its read path needs a {READ_SUFFIX})")
+    shared = {h: set().union(*(b for _, b in entries)) for h, entries in _shared_read().items()}
+    reads = sorted({e for files in read.values() for e in files if "::" not in e and _in_sources(e)})
+    for rel in reads:
+        for helper, name in sorted(helper_imports(root, rel)):
+            if name not in shared.get(helper, set()) and name not in PLUMBING.get(helper, ()):
+                out.append(
+                    f"{rel} (imports {name} from {helper}: a shared read helper belongs to a"
+                    " component, SHARED_READ, or is named as plumbing, PLUMBING)"
+                )
     return out
 
 

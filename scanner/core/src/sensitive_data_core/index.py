@@ -52,7 +52,7 @@ import secrets
 import sqlite3
 import time
 import urllib.request
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from functools import cache
 from importlib import resources
@@ -1103,6 +1103,46 @@ class Indexes:
             self._open[name] = got
         return got
 
+    def drop(self, source_id: str) -> bool:
+        """Remove a source's index: its meta first (without it the index is no index, and
+        the source's next pass starts a fresh one), then its shards. Where the meta cannot be
+        deleted (a state location that grants writes but not deletes), an empty one is
+        written over it, which is no index either. True when it is gone or there was none;
+        False when neither worked (logged, never raised)."""
+        name = self.name_of(source_id)
+        opened = self._open.pop(name, None)
+        if opened is not None:
+            opened.close()
+        meta_file = f"{name}/meta.json"
+        try:
+            raw = self.backend.get_bytes(meta_file)
+        except Exception as err:
+            log_event("index.failed", error=error_name(err))
+            return False
+        if raw is None:
+            return True
+        try:
+            meta = json.loads(raw)
+            shards = int(meta.get("shards") or 0) if isinstance(meta, dict) else 0
+        except (ValueError, TypeError):
+            shards = 0
+        try:
+            self.backend.delete(meta_file)
+        except Exception as err:
+            log_event("index.failed", error=error_name(err))
+            try:
+                self.backend.put_bytes(meta_file, b"{}")
+            except Exception as again:
+                log_event("index.failed", error=error_name(again))
+                return False
+        for i in range(shards if 0 < shards <= MAX_SHARDS else 0):
+            try:
+                self.backend.delete(f"{name}/{i:03d}.db.gz")
+            except Exception as err:  # an orphan shard: overwritten or never read again
+                log_event("index.failed", error=error_name(err))
+        log_event("index.dropped", shards=shards)
+        return True
+
     def fingerprints(self, scope: str) -> Fingerprints:
         """The shared fingerprint table of one account, subscription or project (#67)."""
         name = "fp-" + self.hasher.name(scope)
@@ -1237,6 +1277,50 @@ def stale(profile: Profile, flags: int, manifest: Manifest, *, columnar: bool) -
 
 # The cursor key that records the `listing:<kind>` version a source's position was reached with.
 LISTING_KEY = "listing"
+
+
+# The state document's list of sources whose index a run could not remove (`forget_absent`).
+FORGET_KEY = "forget"
+
+
+def forget_absent(
+    cursors: dict[str, Any],
+    findings: Iterable[Any],
+    in_scope: set[str],
+    indexes: Indexes | None,
+    pending: Any = None,
+) -> list[str]:
+    """The sources the last run kept state for that this run does not have (dropped from the
+    configuration, no longer discovered, or left to a vendor's findings): their carried
+    findings are not carried, so their cursor and object index go too (#67). A source that
+    comes back then reads its store as a new one does. Were its index kept, its unchanged
+    objects would be skipped as already read, and their findings would never come back.
+
+    `findings` are the last run's (their `_location` starts with the source's id); `pending`
+    is the last run's `forget` list: sources whose index could not be removed then, removed
+    first now, whether or not they are back. Returns the ids still to remove (a failed
+    delete), for the state's `forget`. Without an index (`OBJECT_INDEX` off) there is nothing
+    to remove: the salt is not kept, so an index made before is never opened again."""
+    absent = {sid for sid in cursors if sid not in in_scope}
+    for f in findings:
+        if isinstance(f, Mapping):
+            sid = str(f.get("_location", "")).split("\n", 1)[0]
+            if sid and sid not in in_scope:
+                absent.add(sid)
+    again = (
+        {str(x) for x in pending} if isinstance(pending, list) and indexes is not None else set()
+    )
+    for sid in absent | again:
+        cursors.pop(sid, None)
+    if indexes is None:
+        return []
+    left: list[str] = []
+    for sid in sorted(absent | again):
+        if not indexes.drop(sid):
+            left.append(sid)
+    if absent:
+        log_event("state.forgotten", sources=len(absent))
+    return left
 
 
 def relist(source: Any, cursor: Mapping[str, Any], indexes: Indexes | None) -> dict[str, Any]:
