@@ -351,6 +351,74 @@ to be masked.
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
 `FINDINGS_EVENT_GRID_ENDPOINT` and `FINDINGS_FILE` is required.
 
+## Deploying
+
+`deploy/azure/main.bicep` deploys at a **management group**; the release
+attaches it compiled (`sensitive-data-scanner-azure.json`, the same as
+`deploy/azure/main.json`).
+
+```sh
+az deployment mg create --management-group-id <mg> --location <region> \
+  --template-file deploy/azure/main.bicep \
+  --parameters scannerSubscriptionId=<subscription> \
+               image=ghcr.io/txp-labs/sensitive-data-scanner-azure@sha256:<digest> \
+               findingsHttpsUrl=<url> findingsHmacKey=<key>
+```
+
+| Parameter | Default | What |
+|---|---|---|
+| `mode` | `central` | `central`: one job in `scannerSubscriptionId` that discovers every subscription under the management group, with its read roles assigned once, at the management group. `perSubscription`: a job in each of `subscriptionIds`, each reading only its own subscription, with the roles at that subscription |
+| `scannerSubscriptionId`, `subscriptionIds`, `resourceGroupName`, `location` | | Where the job (or each job) and its state storage go |
+| `image` | (required) | The image, pinned by digest (`AZURE_IMAGE_DIGEST` in a release) |
+| `jobName` | `sds-scanner-job` | The job, and so the identity's name: what the database users above are created as |
+| `schedule`, `replicaTimeoutSeconds` | daily 06:00 UTC, 3600 | When it runs, and for how long at most |
+| `site` | the management group, lower case | `SCANNER_SITE` |
+| `discover`, `readDatabases`, `readKeyVaultSecrets` | every kind; off; off | `DISCOVER`, `AZURE_DB_READ` (with `AZURE_DB_PRINCIPAL` set to the job's name), `KEYVAULT_SECRETS_READ` |
+| `cosmosAccountIds` | | Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on (central mode) |
+| `findingsHttpsUrl`, `findingsHmacKey` | | The signed push; both are Container Apps secrets |
+| `findingsEventGridEndpoint` | | The Event Grid push; the topic's owner grants the job's identity EventGrid Data Sender on it |
+| `infrastructureSubnetId` | | A subnet delegated to `Microsoft.App/environments`, so the job reaches private endpoints (central mode) |
+
+**What it creates:**
+- a resource group;
+- a Container Apps environment (Consumption) and a scheduled Container Apps
+  job with a system-assigned identity and `parallelism: 1`;
+- a storage account for the job's state, with shared keys and public blob
+  access off, and its `scanner` container.
+
+**The roles it assigns** to the job's identity are all read-only, and
+`scanner/tests/test_azure_template.py` fails on any other:
+
+| Role | Where | Why |
+|---|---|---|
+| Reader | the management group (or subscription) | Resource Graph, the stores' configuration, Log Analytics queries (`workspaces/query/read`) |
+| Storage Blob Data Reader | the same | List Blobs, Get Blob |
+| Storage Table Data Reader | the same | Query Entities |
+| Storage Queue Data Reader | the same | Peek Messages (dequeuing needs `messages/process/action`, which it does not have) |
+| Key Vault Secrets User | the same, **only with `readKeyVaultSecrets`** | Get Secret, secrets' metadata |
+| Storage Blob Data Contributor | **the job's own state container only** | Its findings, cursors and lock |
+| Cosmos DB Built-in Data Reader (a Cosmos DB role) | each account in `cosmosAccountIds` | NoSQL queries |
+
+**Log Analytics Reader is not assigned.** Its actions over Reader are two
+legacy search actions and `Microsoft.Support/*`, which can open support
+requests. The scanner's queries need `Microsoft.OperationalInsights/workspaces/query/read`,
+which Reader's `*/read` already grants.
+
+**What it cannot grant:**
+- The databases' users for the identity (the T-SQL and SQL above).
+- Cosmos DB roles on accounts it is not given.
+- Event Grid Data Sender on the consumer's topic.
+- Access policies on vaults that do not use Azure RBAC.
+
+The test also holds these:
+- Every role in the template is one of the roles above, and each of their
+  actions reads.
+- The one write role is scoped to the state container.
+- No custom role, no `listKeys`, and no shared-key access on the job's storage.
+- Every environment variable the job sets is one the code reads.
+
+CI rebuilds `main.json` with a pinned Bicep and fails if it differs.
+
 ## Running it
 
 ```sh

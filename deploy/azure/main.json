@@ -1,0 +1,983 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "15271230207868155297"
+    }
+  },
+  "parameters": {
+    "mode": {
+      "type": "string",
+      "defaultValue": "central",
+      "allowedValues": [
+        "central",
+        "perSubscription"
+      ]
+    },
+    "scannerSubscriptionId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Central mode: the subscription the job runs in."
+      }
+    },
+    "subscriptionIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Per-subscription mode: the subscriptions that each get a job."
+      }
+    },
+    "location": {
+      "type": "string"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "sensitive-data-scanner"
+    },
+    "jobName": {
+      "type": "string",
+      "defaultValue": "sds-scanner-job",
+      "metadata": {
+        "description": "The job name; for PostgreSQL and MySQL, the database user of its identity."
+      }
+    },
+    "image": {
+      "type": "string",
+      "metadata": {
+        "description": "The image, pinned by digest: ghcr.io/txp-labs/sensitive-data-scanner-azure@sha256:..."
+      }
+    },
+    "schedule": {
+      "type": "string",
+      "defaultValue": "0 6 * * *",
+      "metadata": {
+        "description": "When the job runs (cron, UTC). Daily by default."
+      }
+    },
+    "replicaTimeoutSeconds": {
+      "type": "int",
+      "defaultValue": 3600
+    },
+    "site": {
+      "type": "string",
+      "defaultValue": "[toLower(managementGroup().name)]",
+      "metadata": {
+        "description": "The site findings name (lower case, digits, ., _, -); the management group by default."
+      }
+    },
+    "discover": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "DISCOVER: the kinds to discover; empty for every kind."
+      }
+    },
+    "readDatabases": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AZURE_DB_READ: the database kinds read (off by default); each needs the identity as a user."
+      }
+    },
+    "readKeyVaultSecrets": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Key Vault secrets: off by default. On grants Key Vault Secrets User and reads values (counts only)."
+      }
+    },
+    "cosmosAccountIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on."
+      }
+    },
+    "findingsHttpsUrl": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "findingsHmacKey": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "findingsEventGridEndpoint": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "infrastructureSubnetId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "A subnet delegated to Microsoft.App/environments, to reach private endpoints (central mode)."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {}
+    }
+  },
+  "variables": {
+    "readRoles": [
+      "acdd72a7-3b69-4de9-b1f8-e1ede9c4a46c",
+      "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+      "76199698-9eea-4c19-bc75-cec21354c6b6",
+      "19e7f393-937e-4f77-808e-94535e297925"
+    ],
+    "vaultReadRole": "4633458b-17de-408a-b874-0445c86b69e6",
+    "roles": "[concat(variables('readRoles'), if(parameters('readKeyVaultSecrets'), createArray(variables('vaultReadRole')), createArray()))]",
+    "central": "[equals(parameters('mode'), 'central')]"
+  },
+  "resources": [
+    {
+      "copy": {
+        "name": "centralRead",
+        "count": "[length(variables('roles'))]"
+      },
+      "condition": "[variables('central')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, parameters('jobName'), variables('roles')[copyIndex()])]",
+      "properties": {
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles')[copyIndex()])]",
+        "principalId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central'), '2025-04-01').outputs.principalId.value]",
+        "principalType": "ServicePrincipal",
+        "description": "sensitive-data-scanner: read-only"
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central')]"
+      ]
+    },
+    {
+      "condition": "[variables('central')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "sds-rg-central",
+      "subscriptionId": "[parameters('scannerSubscriptionId')]",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[parameters('resourceGroupName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "13048503866275887107"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Resources/resourceGroups",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "condition": "[variables('central')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "sds-job-central",
+      "subscriptionId": "[parameters('scannerSubscriptionId')]",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "jobName": {
+            "value": "[parameters('jobName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "image": {
+            "value": "[parameters('image')]"
+          },
+          "schedule": {
+            "value": "[parameters('schedule')]"
+          },
+          "replicaTimeoutSeconds": {
+            "value": "[parameters('replicaTimeoutSeconds')]"
+          },
+          "site": {
+            "value": "[parameters('site')]"
+          },
+          "managementGroup": {
+            "value": "[managementGroup().name]"
+          },
+          "discover": {
+            "value": "[parameters('discover')]"
+          },
+          "readDatabases": {
+            "value": "[parameters('readDatabases')]"
+          },
+          "readKeyVaultSecrets": {
+            "value": "[parameters('readKeyVaultSecrets')]"
+          },
+          "findingsHttpsUrl": {
+            "value": "[parameters('findingsHttpsUrl')]"
+          },
+          "findingsHmacKey": {
+            "value": "[parameters('findingsHmacKey')]"
+          },
+          "findingsEventGridEndpoint": {
+            "value": "[parameters('findingsEventGridEndpoint')]"
+          },
+          "infrastructureSubnetId": {
+            "value": "[parameters('infrastructureSubnetId')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "7985067989259499409"
+            }
+          },
+          "parameters": {
+            "jobName": {
+              "type": "string",
+              "metadata": {
+                "description": "The job name; also the identity name that databases know the scanner by."
+              }
+            },
+            "location": {
+              "type": "string"
+            },
+            "image": {
+              "type": "string"
+            },
+            "schedule": {
+              "type": "string",
+              "metadata": {
+                "description": "Cron (UTC) for the scheduled runs."
+              }
+            },
+            "replicaTimeoutSeconds": {
+              "type": "int"
+            },
+            "site": {
+              "type": "string"
+            },
+            "managementGroup": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AZURE_MANAGEMENT_GROUP for a central job; empty for a per-subscription job."
+              }
+            },
+            "subscriptionIds": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "AZURE_SUBSCRIPTIONS for a per-subscription job; empty for a central job."
+              }
+            },
+            "discover": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "readDatabases": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "readKeyVaultSecrets": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "findingsHttpsUrl": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "findingsHmacKey": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "findingsEventGridEndpoint": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "infrastructureSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "A subnet (/27 or larger, delegated to Microsoft.App/environments) to reach private endpoints; empty for none."
+              }
+            },
+            "stateAccountName": {
+              "type": "string",
+              "defaultValue": "[format('sds{0}', uniqueString(resourceGroup().id))]"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            }
+          },
+          "variables": {
+            "blobDataContributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+            "stateContainerName": "scanner",
+            "pushSecrets": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'findings-https-url', 'value', parameters('findingsHttpsUrl')), createObject('name', 'findings-hmac-key', 'value', parameters('findingsHmacKey'))))]",
+            "pushEnv": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'FINDINGS_HTTPS_URL', 'secretRef', 'findings-https-url'), createObject('name', 'FINDINGS_HMAC_KEY', 'secretRef', 'findings-hmac-key')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('stateAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "properties": {
+                "allowSharedKeyAccess": false,
+                "allowBlobPublicAccess": false,
+                "defaultToOAuthAuthentication": true,
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('stateAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('stateAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}-env', parameters('jobName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "workloadProfiles": [
+                  {
+                    "name": "Consumption",
+                    "workloadProfileType": "Consumption"
+                  }
+                ],
+                "vnetConfiguration": "[if(empty(parameters('infrastructureSubnetId')), null(), createObject('infrastructureSubnetId', parameters('infrastructureSubnetId'), 'internal', true()))]"
+              }
+            },
+            {
+              "type": "Microsoft.App/jobs",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('jobName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "environmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('jobName')))]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "triggerType": "Schedule",
+                  "replicaTimeout": "[parameters('replicaTimeoutSeconds')]",
+                  "replicaRetryLimit": 0,
+                  "scheduleTriggerConfig": {
+                    "cronExpression": "[parameters('schedule')]",
+                    "parallelism": 1,
+                    "replicaCompletionCount": 1
+                  },
+                  "secrets": "[variables('pushSecrets')]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "scanner",
+                      "image": "[parameters('image')]",
+                      "args": [
+                        "scan"
+                      ],
+                      "resources": {
+                        "cpu": "[json('1.0')]",
+                        "memory": "2Gi"
+                      },
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('jobName')))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName')), resourceId('Microsoft.App/jobs', parameters('jobName')), variables('blobDataContributor'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributor'))]",
+                "principalId": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal",
+                "description": "sensitive-data-scanner: its own findings, cursors and lock"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/jobs', parameters('jobName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]"
+            },
+            "stateContainerUrl": {
+              "type": "string",
+              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId(parameters('scannerSubscriptionId'), 'Microsoft.Resources/deployments', 'sds-rg-central')]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "groups",
+        "count": "[length(parameters('subscriptionIds'))]"
+      },
+      "condition": "[not(variables('central'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sds-rg-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()]))]",
+      "subscriptionId": "[parameters('subscriptionIds')[copyIndex()]]",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[parameters('resourceGroupName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "13048503866275887107"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Resources/resourceGroups",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "copy": {
+        "name": "jobs",
+        "count": "[length(parameters('subscriptionIds'))]"
+      },
+      "condition": "[not(variables('central'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sds-job-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()]))]",
+      "subscriptionId": "[parameters('subscriptionIds')[copyIndex()]]",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "jobName": {
+            "value": "[parameters('jobName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "image": {
+            "value": "[parameters('image')]"
+          },
+          "schedule": {
+            "value": "[parameters('schedule')]"
+          },
+          "replicaTimeoutSeconds": {
+            "value": "[parameters('replicaTimeoutSeconds')]"
+          },
+          "site": {
+            "value": "[parameters('site')]"
+          },
+          "subscriptionIds": {
+            "value": [
+              "[parameters('subscriptionIds')[copyIndex()]]"
+            ]
+          },
+          "discover": {
+            "value": "[parameters('discover')]"
+          },
+          "readDatabases": {
+            "value": "[parameters('readDatabases')]"
+          },
+          "readKeyVaultSecrets": {
+            "value": "[parameters('readKeyVaultSecrets')]"
+          },
+          "findingsHttpsUrl": {
+            "value": "[parameters('findingsHttpsUrl')]"
+          },
+          "findingsHmacKey": {
+            "value": "[parameters('findingsHmacKey')]"
+          },
+          "findingsEventGridEndpoint": {
+            "value": "[parameters('findingsEventGridEndpoint')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "7985067989259499409"
+            }
+          },
+          "parameters": {
+            "jobName": {
+              "type": "string",
+              "metadata": {
+                "description": "The job name; also the identity name that databases know the scanner by."
+              }
+            },
+            "location": {
+              "type": "string"
+            },
+            "image": {
+              "type": "string"
+            },
+            "schedule": {
+              "type": "string",
+              "metadata": {
+                "description": "Cron (UTC) for the scheduled runs."
+              }
+            },
+            "replicaTimeoutSeconds": {
+              "type": "int"
+            },
+            "site": {
+              "type": "string"
+            },
+            "managementGroup": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AZURE_MANAGEMENT_GROUP for a central job; empty for a per-subscription job."
+              }
+            },
+            "subscriptionIds": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "AZURE_SUBSCRIPTIONS for a per-subscription job; empty for a central job."
+              }
+            },
+            "discover": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "readDatabases": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "readKeyVaultSecrets": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "findingsHttpsUrl": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "findingsHmacKey": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "findingsEventGridEndpoint": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "infrastructureSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "A subnet (/27 or larger, delegated to Microsoft.App/environments) to reach private endpoints; empty for none."
+              }
+            },
+            "stateAccountName": {
+              "type": "string",
+              "defaultValue": "[format('sds{0}', uniqueString(resourceGroup().id))]"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            }
+          },
+          "variables": {
+            "blobDataContributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+            "stateContainerName": "scanner",
+            "pushSecrets": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'findings-https-url', 'value', parameters('findingsHttpsUrl')), createObject('name', 'findings-hmac-key', 'value', parameters('findingsHmacKey'))))]",
+            "pushEnv": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'FINDINGS_HTTPS_URL', 'secretRef', 'findings-https-url'), createObject('name', 'FINDINGS_HMAC_KEY', 'secretRef', 'findings-hmac-key')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('stateAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "properties": {
+                "allowSharedKeyAccess": false,
+                "allowBlobPublicAccess": false,
+                "defaultToOAuthAuthentication": true,
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('stateAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('stateAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}-env', parameters('jobName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "workloadProfiles": [
+                  {
+                    "name": "Consumption",
+                    "workloadProfileType": "Consumption"
+                  }
+                ],
+                "vnetConfiguration": "[if(empty(parameters('infrastructureSubnetId')), null(), createObject('infrastructureSubnetId', parameters('infrastructureSubnetId'), 'internal', true()))]"
+              }
+            },
+            {
+              "type": "Microsoft.App/jobs",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('jobName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "environmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('jobName')))]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "triggerType": "Schedule",
+                  "replicaTimeout": "[parameters('replicaTimeoutSeconds')]",
+                  "replicaRetryLimit": 0,
+                  "scheduleTriggerConfig": {
+                    "cronExpression": "[parameters('schedule')]",
+                    "parallelism": 1,
+                    "replicaCompletionCount": 1
+                  },
+                  "secrets": "[variables('pushSecrets')]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "scanner",
+                      "image": "[parameters('image')]",
+                      "args": [
+                        "scan"
+                      ],
+                      "resources": {
+                        "cpu": "[json('1.0')]",
+                        "memory": "2Gi"
+                      },
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('jobName')))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName')), resourceId('Microsoft.App/jobs', parameters('jobName')), variables('blobDataContributor'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributor'))]",
+                "principalId": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal",
+                "description": "sensitive-data-scanner: its own findings, cursors and lock"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/jobs', parameters('jobName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]"
+            },
+            "stateContainerUrl": {
+              "type": "string",
+              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId(parameters('subscriptionIds')[copyIndex()], 'Microsoft.Resources/deployments', format('sds-rg-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()])))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "subscriptionRead",
+        "count": "[length(parameters('subscriptionIds'))]"
+      },
+      "condition": "[not(variables('central'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sds-read-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()]))]",
+      "subscriptionId": "[parameters('subscriptionIds')[copyIndex()]]",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('subscriptionIds')[copyIndex()], parameters('resourceGroupName')), 'Microsoft.Resources/deployments', format('sds-job-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()]))), '2025-04-01').outputs.principalId.value]"
+          },
+          "roles": {
+            "value": "[variables('roles')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "4182979936167021088"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string"
+            },
+            "roles": {
+              "type": "array"
+            }
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "read",
+                "count": "[length(parameters('roles'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, parameters('principalId'), parameters('roles')[copyIndex()])]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roles')[copyIndex()])]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "description": "sensitive-data-scanner: read-only"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('subscriptionIds')[copyIndex()], parameters('resourceGroupName')), 'Microsoft.Resources/deployments', format('sds-job-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()])))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "cosmosReaders",
+        "count": "[length(parameters('cosmosAccountIds'))]"
+      },
+      "condition": "[variables('central')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('sds-cosmos-{0}', uniqueString(parameters('cosmosAccountIds')[copyIndex()]))]",
+      "subscriptionId": "[split(parameters('cosmosAccountIds')[copyIndex()], '/')[2]]",
+      "resourceGroup": "[split(parameters('cosmosAccountIds')[copyIndex()], '/')[4]]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "accountName": {
+            "value": "[last(split(parameters('cosmosAccountIds')[copyIndex()], '/'))]"
+          },
+          "principalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central'), '2025-04-01').outputs.principalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16787977761516115870"
+            }
+          },
+          "parameters": {
+            "accountName": {
+              "type": "string"
+            },
+            "principalId": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "builtInDataReader": "00000000-0000-0000-0000-000000000001"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+              "apiVersion": "2024-11-15",
+              "name": "[format('{0}/{1}', parameters('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), parameters('principalId'), variables('builtInDataReader')))]",
+              "properties": {
+                "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/{1}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), variables('builtInDataReader'))]",
+                "principalId": "[parameters('principalId')]",
+                "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "principalId": {
+      "type": "string",
+      "value": "[if(variables('central'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central'), '2025-04-01').outputs.principalId.value, '')]"
+    }
+  }
+}

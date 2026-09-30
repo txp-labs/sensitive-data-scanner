@@ -3,7 +3,7 @@
 docs/release-notes/v<version>.md if present (what is proven, what is not),
 then the images' digests.
 
-    scripts/release-notes.py <version> <image-digest> [<databases-image-digest>]
+    scripts/release-notes.py <version> <image-digest> [<databases-image-digest> [<azure-image-digest>]]
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ def section(version: str) -> str:
 def main() -> None:
     version, digest = sys.argv[1], sys.argv[2]
     db_digest = sys.argv[3] if len(sys.argv) > 3 else None
+    azure_digest = sys.argv[4] if len(sys.argv) > 4 else None
     parts = []
     extra = ROOT / "docs" / "release-notes" / f"v{version}.md"
     if extra.is_file():
@@ -38,12 +39,22 @@ def main() -> None:
         if db_digest
         else ""
     )
+    azure = (
+        "- Azure scanner image: "
+        f"`ghcr.io/txp-labs/sensitive-data-scanner-azure@{azure_digest}` "
+        f"(tag `{version}`; docs/AZURE.md), and its deployment, "
+        "`sensitive-data-scanner-azure.json` (deploy/azure/main.bicep, compiled)\n"
+        if azure_digest
+        else ""
+    )
     parts.append(
         "## Artifacts\n\n"
         f"- Container image: `ghcr.io/txp-labs/sensitive-data-scanner@{digest}` "
         f"(tag `{version}`)\n"
         f"{db}"
-        "- Lambda zip (python3.12, x86_64) and the wheels (scanner, core, databases runner) "
+        f"{azure}"
+        "- Lambda zip (python3.12, x86_64) and the wheels (scanner, core, databases runner, "
+        "Azure scanner) "
         "attached below\n"
         "- SPDX SBOMs for the zip and the images, and `SHA256SUMS` for every file\n"
         "- Not signed yet: see docs/RELEASING.md"
