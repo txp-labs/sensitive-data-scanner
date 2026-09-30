@@ -955,6 +955,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- What has run on a real account, corrected: the v0.2.0 run of 29 Sep read
+  one DynamoDB table only (S3 and CloudWatch Logs did not run), and one
+  SharePoint site was read in a test Microsoft 365 tenant on 30 Sep. The
+  `README.md` status table and `docs/release-notes/v0.3.0.md` had claimed S3
+  and CloudWatch Logs too; everything else is tested against simulated
+  services.
 - **`docs/THREAT-MODEL.md`** ([#76](https://github.com/txp-labs/sensitive-data-scanner/issues/76)). It covers:
   - the assets;
   - four trust boundaries: the object and the runner, the runner and the
@@ -1317,7 +1323,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Fixed
 From the first run in a real account (stugum-dev,
-[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)):
+[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)), which read
+one DynamoDB table only; S3 and CloudWatch Logs did not run:
 - **A missing state file on the first run.** Without `s3:ListBucket`, S3
   answers a missing object with 403, not 404, and the first run failed.
   - The runner now counts a 403 on the state file as "no state yet" when the
