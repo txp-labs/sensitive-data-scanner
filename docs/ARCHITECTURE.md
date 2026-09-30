@@ -132,7 +132,7 @@ One run:
 | `DYNAMODB_MAX_PAGES` | Pages per table per run (the page cap) | 200 |
 | `SCAN_MODE` | Who finds the data (#55): `scanner` (this scanner reads), `vendor` (Amazon Macie's own findings are imported, S3 only; nothing is read), or `both` (findings at the same object and class are linked) ([FINDINGS.md](FINDINGS.md#sources-and-modes-18)) | `scanner` |
 | `MACIE_LOOKBACK_DAYS` | How far back the first Macie import goes | 90 |
-| `DISCOVER` | Kinds of store to discover: `all`, or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)) | off |
+| `DISCOVER` | Kinds of store to discover: `all` (or `true`), or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)); `none` or `false` is off | off |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | Allow and deny rules for discovered stores, comma-separated | none |
 | `DISCOVER_SAMPLING` | Per-store sampling rules, as a JSON list | none |
 | `S3_MAX_OBJECTS_PER_PREFIX` | Objects read per "directory" per pass (0: no cap) | 0 |
@@ -1803,6 +1803,26 @@ management or delegated-admin account
    StackSet. If it holds data, deploy `scanner.yaml` there as an ordinary
    stack.
 
+**The template goes through S3.** `scanner.yaml` is larger than the 51,200
+bytes CloudFormation accepts inline (`--template-body`), so every deploy
+names it in S3: the StackSet by `ScannerTemplateUrl` (`--template-url`), and
+an ordinary stack by uploading it first. `aws cloudformation deploy` does
+the upload when given a bucket:
+
+```sh
+aws cloudformation deploy --stack-name sensitive-data-scanner \
+  --template-file deploy/scanner.yaml \
+  --s3-bucket example-templates-bucket \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides ImageUri=111122223333.dkr.ecr.us-east-1.amazonaws.com/sensitive-data-scanner@sha256:…
+```
+
+Or copy it with `aws s3 cp deploy/scanner.yaml s3://example-templates-bucket/`
+and pass `--template-url https://example-templates-bucket.s3.<region>.amazonaws.com/scanner.yaml`
+to `create-stack`. A test (`scanner/tests/test_iam_limits.py`) keeps the
+template under the 1 MB an S3 template may be, and this step documented while
+it is over 51,200 bytes.
+
 **Per account and region.**
 
 - `ImageUri` must name the region's own registry (`<account>.dkr.ecr.<region>.amazonaws.com/…`).
@@ -1813,8 +1833,14 @@ management or delegated-admin account
   usually set per account. Without it, RDS and Aurora are discovered and
   reported as `export_not_configured`.
 - IAM resources have no fixed names, so one account holds a stack in many
-  regions without collisions. The results bucket is
-  `sds-results-<account>-<region>`, and its policy refuses anything but TLS.
+  regions without collisions. The results bucket has no fixed name either:
+  CloudFormation names it from the stack (the `ResultsBucket` output gives
+  it), and its policy refuses anything but TLS. It is kept when the stack is
+  deleted (`DeletionPolicy: Retain`, the findings history). Because its name
+  is generated, a bucket kept from a failed first create never blocks the
+  next create; delete such a leftover bucket by hand when it is not wanted.
+  (Up to fb9097a the name was fixed, `sds-results-<account>-<region>`, and
+  a failed first create left a bucket that made every later create fail.)
 - There is no reserved concurrency: the results bucket's lock allows one run
   at a time, and reserving concurrency would fail in accounts still at the
   default Lambda quota.
@@ -1822,7 +1848,8 @@ management or delegated-admin account
 ### IAM per source
 
 The scanner's role (`ScannerRole` in `scanner.yaml`) holds exactly this,
-statement by statement. A test (`scanner/tests/test_template.py`) checks
+statement by statement, across its inline policy and the managed policies
+attached to it ([Policy sizes](#policy-sizes)). A test (`scanner/tests/test_template.py`) checks
 several things:
 - every allowed action is a read, or a write aimed at the scanner's own
   bucket, log group, bus or exports;
@@ -1896,7 +1923,7 @@ several things:
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And eight explicit denies, as defense in depth against any other policy the
-role might gain:
+role might gain (managed policies attached to the role, [Policy sizes](#policy-sizes)):
 
 | Deny | What |
 |---|---|
@@ -1924,6 +1951,59 @@ else. The schedule's role can invoke the function, nothing else.
 boundary. To keep the scanner out of a store for certain, add an explicit
 `Deny` for the scanner's role in that bucket's, table's or key's own
 policy; the store is then reported as `access_denied`.
+
+### Policy sizes
+
+IAM allows a role **10,240 characters of inline policy in all** (white space
+not counted), each **managed policy 6,144**, and **10 managed policies** per
+role by default. The role's statements come to about 22,900 characters with
+every opt-in on, and the explicit denies alone to about 7,800
+(`NoDataStoreWrites` about 6,100), so up to fb9097a IAM refused the role
+(`ServiceLimitExceeded`, "Maximum policy size of 10240 bytes exceeded") and
+the template could not deploy. Since then:
+
+| Policy | Kind | Holds |
+|---|---|---|
+| `scanner` | inline | the Allows every deployment has: its own bucket and logs, and discovery and reads of every store |
+| `DataStoreWriteDenyPolicy` | managed | `NoDataStoreWrites`, alone (it is most of a managed policy's 6,144) |
+| `GuardDenyPolicy` | managed | the other seven denies |
+| `StoreReadPolicy` | managed | the opt-in store reads and their keys, the config parameter, the bus and the Macie import, with the Parameter Store listing and `kms:ListAliases`, so it is never empty |
+| `BrokerImageGraphReadPolicy` | managed | brokers, images, graphs and archives: discovery and the opt-in reads |
+| `RdsExportPermissions`, `DynamoDBExportPermissions`, `DataApiPermissions`, `RedshiftReadPermissions` | managed, each only with its parameter | the export and SQL permissions |
+
+The denies are managed policies because they are the bulk; they and the
+opt-in Allows are attached by the role itself (`ManagedPolicyArns`), so the
+role never exists without its denies, and the function also `DependsOn`
+every policy the role always holds. Moving them changed no permission: every
+statement keeps its `Effect`, `Action`, `NotAction`, `Resource`, `Condition`
+and `Sid`, under the same parameter.
+
+`scanner/tests/test_iam_limits.py` holds this:
+- every statement the role can hold, with the conditions it comes under, is
+  exactly the reviewed snapshot (`scanner/tests/fixtures/scanner_role_statements.json`,
+  taken from fb9097a); a change to the role's permissions changes the
+  snapshot in the same pull request;
+- every role in every CloudFormation template (`scanner.yaml`,
+  `estate-stackset.yaml`, which holds none, and `saas/ecs.yaml`) fits the
+  limits with every opt-in on: the longest partition and region, generated
+  names at their longest, and three ARNs of realistic maximum length in each
+  list parameter (`DataApiClusterArns`, `DataApiSecretArns`, `MqSecretArns`).
+  With every opt-in on, the inline policy is about 4,600 characters, the
+  largest managed policy about 6,100, and 8 managed policies are attached;
+- each attached policy keeps a statement whatever the opt-ins are (IAM
+  refuses an empty policy).
+
+Longer lists than three ARNs could pass 6,144 in `DataApiPermissions` or
+`BrokerImageGraphReadPolicy`; the deploy then fails with the same
+`ServiceLimitExceeded`, and the fix is a wildcard ARN in place of the list.
+
+Azure and Google Cloud have no such problem, and tests say so. The Azure
+deployment makes no custom role definition, only built-in role assignments
+(`test_azure_template.py`), so a custom role's limits (5,000 actions, 2 MB)
+do not apply. Google Cloud's custom roles hold up to 3,000 permissions and 64
+KB of title, description and permission names each, and an organization up to
+300 of them; with every opt-in on, the deployment makes 5 roles, the largest
+far under both (`test_gcp_template.py`).
 
 ## Event-driven mode (phase 2, design only)
 

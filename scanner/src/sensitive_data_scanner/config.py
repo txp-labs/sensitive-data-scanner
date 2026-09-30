@@ -228,12 +228,13 @@ _KIND_ALIASES = {
 
 
 def discover_kinds(raw: str | None) -> frozenset[str]:
-    """`DISCOVER`: `all`, or a comma-separated list of the kinds in DISCOVER_KINDS (`s3`,
-    `logs`, `dynamodb`, `glue`, `rds`, `redshift`, ...). Empty: off."""
+    """`DISCOVER`: `all` (or `true`), or a comma-separated list of the kinds in
+    DISCOVER_KINDS (`s3`, `logs`, `dynamodb`, `glue`, `rds`, `redshift`, ...). Empty,
+    `none` or `false`: off."""
     names = [n.lower() for n in _list(raw)]
-    if not names or names == ["none"]:
+    if not names or names in (["none"], ["false"]):
         return frozenset()
-    if "all" in names:
+    if "all" in names or names == ["true"]:
         return frozenset(DISCOVER_KINDS.values())
     out = set()
     for n in names:
