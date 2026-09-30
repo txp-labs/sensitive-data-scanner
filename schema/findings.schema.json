@@ -48,6 +48,40 @@
       "additionalProperties": { "type": "integer", "minimum": 0 }
     },
     "discovery": { "$ref": "#/$defs/discovery" },
+    "scanMode": {
+      "description": "The mode each platform ran in (1.8, #55): scanner (this scanner reads), vendor (the vendor's own detection, imported), or both.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]{1,40}$" },
+      "additionalProperties": { "enum": ["scanner", "vendor", "both"] }
+    },
+    "vendorCoverage": {
+      "description": "Each importer's run (1.8, #55): whether it read the vendor's findings, how many, which kinds the vendor covers, and what it does not (limits).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vendor", "platform", "mode", "status", "findings", "covers", "limits"],
+        "properties": {
+          "vendor": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$" },
+          "platform": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$" },
+          "mode": { "enum": ["vendor", "both"] },
+          "status": { "enum": ["read", "not_enabled", "access_denied", "error", "throttled"] },
+          "error": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,80}$" },
+          "findings": { "type": "integer", "minimum": 0 },
+          "covers": { "type": "array", "items": { "$ref": "#/$defs/storeKind" } },
+          "limits": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "s3_only", "profiled_stores_only", "sampled_by_vendor", "profiles_not_items",
+                "policy_matches_only", "alerts_only", "item_not_linkable", "counts_not_distinct",
+                "enterprise_grid_only"
+              ]
+            }
+          }
+        }
+      }
+    },
     "part": { "type": "integer", "minimum": 1 },
     "parts": { "type": "integer", "minimum": 1 }
   },
@@ -426,7 +460,7 @@
           "enum": [
             "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
             "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro", "sql", "block", "cql", "rdb",
-            "kql", "docx", "xlsx", "pptx"
+            "kql", "docx", "xlsx", "pptx", "vendor"
           ]
         },
         "class": { "$ref": "#/$defs/class" },
@@ -443,7 +477,7 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "enum": ["prompt", "shape", "context"] }
+          "items": { "enum": ["prompt", "shape", "context", "vendor"] }
         },
         "offsets": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/offset" } },
         "offsetsTruncated": { "type": "boolean" },
@@ -464,6 +498,27 @@
         "lastSeenAt": { "type": "string", "format": "date-time" },
         "atRestEncryption": { "$ref": "#/$defs/atRestEncryption" },
         "atRestKeyHash": { "$ref": "#/$defs/atRestKeyHash" },
+        "source": {
+          "description": "Who found it (1.8, #55): this scanner, or a vendor's own detection an importer read (vendor:macie, vendor:google_sdp, vendor:purview, vendor:google_workspace_dlp, vendor:slack_dlp). A vendor's finding has no offsets (format vendor, via vendor).",
+          "type": "string",
+          "pattern": "^(scanner|vendor:[a-z][a-z0-9_]{1,40})$"
+        },
+        "vendorType": {
+          "description": "The vendor's own detector type (1.8), its name only, masked: CREDIT_CARD_NUMBER, US_SOCIAL_SECURITY_NUMBER. A type that maps to no spec class makes the class 'other'.",
+          "type": "string",
+          "maxLength": 80
+        },
+        "vendorFindingId": {
+          "description": "The vendor's id for its finding or alert (1.8), masked like a key.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "linked": {
+          "description": "In both mode (1.8): the ids of findings of another source at the same location and class. Linked, never merged.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
+        },
         "pciNote": {
           "description": "Guidance for the customer's QSA, never a verdict (1.5): 3.3.1 for any cvv finding, whatever the encryption; 3.5.1.2 for a card finding under storage-level encryption (service_managed or customer_managed_key).",
           "type": "object",
@@ -531,7 +586,7 @@
         "archive_retrieval", "network", "needs_sas_export",
         "requester_pays", "row_level_policy", "authorized_view", "needs_subscription",
         "needs_disk_restore", "scope_unverified", "unscoped_grant", "protected_api",
-        "not_provisioned", "throttled", "not_a_member"
+        "not_provisioned", "throttled", "not_a_member", "vendor_mode", "vendor_not_covered"
       ]
     },
     "discovery": {

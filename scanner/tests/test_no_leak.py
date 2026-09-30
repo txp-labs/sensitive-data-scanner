@@ -2617,3 +2617,50 @@ def test_no_value_leaves_the_saas_scanner_atlassian(
         assert leaks(blob) == [], where
         for secret in (SSN_A, SSN_B, CARDS["visa"], EMAIL, API_TOKEN):
             assert secret not in blob, where
+
+
+# ------------------------------------------------------------ vendor importers (#55)
+
+
+def test_no_vendor_snippet_or_matched_text_passes_through_macie(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Macie's findings carry occurrences (cells named by a column that holds a value, line
+    ranges), a title and a description that quote values, and custom identifier names with
+    digits: none of it reaches the findings, the logs, the state or the events; the keys and
+    names that are kept are masked."""
+    from test_modes_macie import Macie, macie_finding
+
+    f = macie_finding(
+        f"m-{SSN_A}",
+        f"exports/{CARDS['visa']}.csv",
+        types={"CREDIT_CARD_NUMBER": 2, f"CUSTOM_{CARDS['amex']}": 1},
+    )
+    f["classificationDetails"]["result"]["sensitiveData"][0]["detections"][0]["occurrences"][
+        "records"
+    ] = [{"recordIndex": 0, "jsonPath": f"$.card.{CARDS['jcb']}"}]
+    f["classificationDetails"]["result"]["customDataIdentifiers"]["detections"][0]["name"] = (
+        f"ssn-{dashed(SSN_B)}"
+    )
+    env.clients.services["macie2"] = Macie([f])
+    sent = _bus(env)
+    capsys.readouterr()
+    doc = env.run(
+        config(
+            scan_mode="vendor", event_bus_arn="arn:aws:events:us-west-2:123456789012:event-bus/b"
+        )
+    )
+    assert doc is not None
+    assert {x["source"] for x in doc["findings"]} == {"vendor:macie"}
+    out = capsys.readouterr().out
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        "state": json.dumps(env.state()),
+        "events": json.dumps(sent),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        for value in (CARDS["visa"], CARDS["amex"], CARDS["jcb"], SSN_A, SSN_B):
+            assert value not in blob, where
+        assert "The S3 object contains" not in blob, where

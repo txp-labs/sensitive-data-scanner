@@ -421,6 +421,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
   Cloud Storage state volume) and Kubernetes (a CronJob, a projected token,
   Secret files, a persistent volume). docs/SAAS.md gains Deploying, and every
   grant by vendor in one table.
+- **Scanner, vendor or both, and Amazon Macie's findings** ([#55](https://github.com/txp-labs/sensitive-data-scanner/issues/55)):
+  the core's modes (`sensitive_data_core.modes`: `scanner`, `vendor`,
+  `both`), and a finding's `source` on every finding. `SCAN_MODE` (and the
+  template's `ScanMode`) chooses for AWS: `vendor` imports Amazon Macie's
+  classification findings (`macie2:ListFindings`, `GetFindings`, incremental)
+  and reads nothing (stores are `vendor_mode` for S3, `vendor_not_covered`
+  for every other kind); `both` reads and imports, and links a finding of one
+  to the other's at the same object and class. A Macie finding keeps the
+  object's masked key, each detection's type and count, the object's
+  encryption and Macie's id; its occurrences, title and description are never
+  read into it. Macie's managed identifiers map to the spec's classes; any
+  other type is `other`. The document names the mode (`scanMode`) and the
+  import's coverage and limits (`vendorCoverage`, `s3_only`).
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -450,6 +463,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   that were skipped before.
 
 ### Security
+- (#55) Macie is read only with `ScanMode` `vendor` or `both`
+  (`macie2:GetMacieSession`, `ListFindings`, `GetFindings`), and a new deny,
+  `NeverRevealOrChangeMacie`, keeps the scanner's role from Macie's occurrence
+  samples (`GetSensitiveDataOccurrences*`), its reveal configuration and every
+  Macie change, whatever the mode.
 - The SaaS scanner's grants are held to read-only by a strict test
   (`scanner/tests/test_saas_scopes.py`): every permission or scope it requests,
   or that its code, docs/SAAS.md or deploy/saas names, is on its vendor's
@@ -536,7 +554,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   and `pptx` formats, the `encrypted`, `too_large` and `linked_item` skip kinds,
   the `scope_unverified`, `unscoped_grant`, `protected_api`,
   `not_provisioned`, `throttled` and `not_a_member` reasons, and Outlook on the web,
-  SharePoint, Teams, Google Drive, Slack, Jira and Confluence links.
+  SharePoint, Teams, Google Drive, Slack, Jira and Confluence links; and (#55)
+  `source`, `vendorType`, `vendorFindingId` and `linked` on a finding, the
+  `vendor` format and `via`, the `other` class, `scanMode` and
+  `vendorCoverage` on the document, and the `vendor_mode` and
+  `vendor_not_covered` reasons.
 - `schemaVersion` is now **1.7**, additive: Azure Files' `azure_files` kind
   and `azure_file` resource, and the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and

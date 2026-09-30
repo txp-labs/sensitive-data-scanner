@@ -101,7 +101,8 @@ READ = re.compile(
     r"|kafka-cluster:(Connect|DescribeCluster|DescribeTopic|ReadData|DescribeGroup)$"
     r"|ecr:(Describe|ListTagsForResource$|BatchGetImage$|GetDownloadUrlForLayer$)"
     r"|sagemaker:(List|DescribeFeatureGroup$)|neptune-graph:(List|GetExportTask$)"
-    r"|events:(ListArchives|DescribeArchive|DescribeReplay)$|glacier:List)"
+    r"|events:(ListArchives|DescribeArchive|DescribeReplay)$|glacier:List"
+    r"|macie2:(GetMacieSession|ListFindings|GetFindings)$)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -349,6 +350,7 @@ SERVICES = {
     "sagemaker": "sagemaker",
     "neptune-graph": "neptune-graph",
     "glacier": "glacier",
+    "macie2": "macie2",
 }
 
 
@@ -685,3 +687,24 @@ def test_images_graphs_and_archives_write_only_their_own() -> None:
     source = (PACKAGE / "sources" / "archives.py").read_text()
     assert '"FilterArns": [rule_arn]' in source
     assert "delete_message(\n                    QueueUrl=self.queue_url" in source
+
+
+def test_macie_is_imported_only_in_vendor_or_both_and_never_revealed() -> None:
+    """#55: the Macie reads sit under MacieImport (SCAN_MODE vendor or both); the samples
+    Macie can reveal, its reveal settings and every Macie change are denied always."""
+    reads = next(s for s in statements() if s.get("Sid") == "ReadMacieFindings")
+    assert actions(reads) == ["macie2:GetMacieSession", "macie2:ListFindings", "macie2:GetFindings"]
+    wrapped = [
+        s["Fn::If"]
+        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        if isinstance(s, dict) and "Fn::If" in s
+    ]
+    assert [c for c, st, _ in wrapped if st.get("Sid") == "ReadMacieFindings"] == ["MacieImport"]
+    assert SCANNER["Parameters"]["ScanMode"]["Default"] == "scanner"
+    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
+    assert {
+        "macie2:GetSensitiveDataOccurrences*",
+        "macie2:UpdateRevealConfiguration",
+        "macie2:Update*",
+        "macie2:Create*",
+    } <= denied

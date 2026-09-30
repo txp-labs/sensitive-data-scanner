@@ -119,6 +119,8 @@ One run:
 | `SCAN_DYNAMODB` | DynamoDB tables to read, as a JSON list (below) | none |
 | `DYNAMODB_PAGE_SIZE` | Items per Query or Scan page (`Limit`) | 100 |
 | `DYNAMODB_MAX_PAGES` | Pages per table per run (the page cap) | 200 |
+| `SCAN_MODE` | Who finds the data (#55): `scanner` (this scanner reads), `vendor` (Amazon Macie's own findings are imported, S3 only; nothing is read), or `both` (findings at the same object and class are linked) ([FINDINGS.md](FINDINGS.md#sources-and-modes-18)) | `scanner` |
+| `MACIE_LOOKBACK_DAYS` | How far back the first Macie import goes | 90 |
 | `DISCOVER` | Kinds of store to discover: `all`, or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)) | off |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | Allow and deny rules for discovered stores, comma-separated | none |
 | `DISCOVER_SAMPLING` | Per-store sampling rules, as a JSON list | none |
@@ -1454,6 +1456,7 @@ several things:
 | EventBridge replays (opt-in) | `events:PutRule`, `events:PutTargets`, `events:RemoveTargets`, `events:DeleteRule` | this account's `rule/sensitive-data-scanner-replay-*` and `rule/*/sensitive-data-scanner-replay-*` | only with `EventBridgeReplay`; `NoRulesButOwnReplayRules` denies every other rule |
 | | `events:StartReplay`, `events:DescribeReplay` | this account's `replay/sds-*` | `NoReplaysButOwn` denies any other replay |
 | | `sqs:ReceiveMessage`, `sqs:DeleteMessage` | the scanner's own queue, `sensitive-data-scanner-replay` | `NoMessageDeletesButOwnQueue` denies deletes anywhere else |
+| Amazon Macie findings (#55) | `macie2:GetMacieSession`, `macie2:ListFindings`, `macie2:GetFindings` | `*` | only with `ScanMode` `vendor` or `both`; `NeverRevealOrChangeMacie` denies `macie2:GetSensitiveDataOccurrences*` (the value samples Macie can reveal), the reveal configuration and every Macie change |
 | KMS aliases (1.5) | `kms:ListAliases` | `*` | The one KMS action with no `kms:ViaService`: it lists names and names no key material (`ListKmsAliases`) |
 | Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
 | RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
@@ -1489,11 +1492,12 @@ several things:
 | Keyspaces | `cassandra:Select` (listing, through the system keyspaces, and reading) | this account's `/keyspace/*` in the region | |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
-And seven explicit denies, as defense in depth against any other policy the
+And eight explicit denies, as defense in depth against any other policy the
 role might gain:
 
 | Deny | What |
 |---|---|
+| `NeverRevealOrChangeMacie` | (#55) Macie's occurrence samples (`GetSensitiveDataOccurrences*`) and reveal configuration, and every Macie create, update, delete, put, enable, disable, invitation and tag |
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
 | `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner`; (#35) Step Functions `Start*`, `Stop*`, `SendTask*`, `RedriveExecution`, `Publish*`, create, update, delete and tags; Lambda `Invoke*`, create, update, delete, `Put*`, `Publish*`, permissions and tags; X-Ray `Put*`, create, update, delete and tags; CodeCommit `GitPush`, `Put*`, `Merge*`, `Post*`, `Override*`, associations, create, update, delete and tags; S3 directory bucket create, delete, policy, encryption and lifecycle changes; MSK `WriteData`, `WriteDataIdempotently`, `AlterGroup`, `DeleteGroup`, topic and cluster create, alter and delete, `AlterTransactionalId`, and cluster create, update, reboot and tags; Amazon MQ create, update, delete, reboot and promote; ECR pushes, image deletes, uploads, create, delete, set, start, replicate and tags; SageMaker create, update, delete, put (feature records included), start, stop and tags; Neptune Analytics create, update, delete, reset, restore, import, export cancel, `WriteDataViaQuery`, `DeleteDataViaQuery` and tags; EventBridge archive create, update and delete, replay cancel, bus create, update and delete, and bus permissions; Glacier `InitiateJob` (retrieval), uploads, deletes, vault locks, notifications and tags |
 | `NoMessageDeletesButOwnQueue` | `sqs:DeleteMessage*` anywhere but the scanner's own replay queue (every other queue's messages stay; the dead-letter reads never delete) |

@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from sensitive_data_core.modes import SCANNER, read_mode
 from sensitive_data_core.rules import SamplingRule, StoreRule, sampling_for
 from sensitive_data_core.rules import parse_rule as _parse_rule
 from sensitive_data_core.rules import sampling_rules as _sampling_rules
@@ -504,6 +505,10 @@ class Config:
     eventbridge_replay_queue_arn: str | None = None
     eventbridge_replay_hours: int = 24
     eventbridge_replay_max_events: int = 1000
+    # #55: who finds the data: this scanner (`scanner`), Amazon Macie's findings imported
+    # (`vendor`), or both, linked. `MACIE_LOOKBACK_DAYS`: how far back the first import goes.
+    scan_mode: str = SCANNER
+    macie_lookback_days: int = 90
 
     @property
     def exports_prefix(self) -> str:
@@ -610,6 +615,8 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         eventbridge_replay_max_events=_int(
             e.get("EVENTBRIDGE_REPLAY_MAX_EVENTS"), 1000, 1, 100_000
         ),
+        scan_mode=read_mode(e.get("SCAN_MODE")),
+        macie_lookback_days=_int(e.get("MACIE_LOOKBACK_DAYS"), 90, 1, 3650),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn
