@@ -20,7 +20,7 @@ This document covers:
 | AWS scanner | `scanner/` | `sensitive_data_scanner`, built on the core: every boto3 adapter, discovery, the batch runner, the Lambda handler, EventBridge as the findings sink; and `deploy/` |
 | Databases runner | `scanner/db/` | `sensitive_data_db`, built on the core: a container that samples PostgreSQL, MySQL and MariaDB, SQL Server, Oracle, MongoDB, Snowflake and Databricks SQL with a read-only user it checks first ([DATABASES.md](DATABASES.md)); its own image target (`docker build --target db`) |
 | Azure scanner | `scanner/azure/` | `sensitive_data_azure`, built on the core: a Container Apps job with a managed identity that discovers every subscription under a management group (Resource Graph) and reads its stores read-only ([AZURE.md](AZURE.md)); its own image target (`docker build --target azure`), and `deploy/azure/` (Bicep at a management group) |
-| Google Cloud scanner | `scanner/gcp/` | `sensitive_data_gcp`, built on the core: a Cloud Run job with its own service account that discovers every project under an organization or folder (Cloud Asset Inventory) and reads its stores read-only over REST ([GCP.md](GCP.md)); its own image target (`docker build --target gcp`) |
+| Google Cloud scanner | `scanner/gcp/` | `sensitive_data_gcp`, built on the core: a Cloud Run job with its own service account that discovers every project under an organization or folder (Cloud Asset Inventory) and reads its stores read-only over REST ([GCP.md](GCP.md)); its own image target (`docker build --target gcp`), and `deploy/gcp/` (Terraform at an organization or folders) |
 
 The TypeScript package and the Python runner implement the same algorithm.
 Both pass every vector, and a parity test fails if they disagree on any of

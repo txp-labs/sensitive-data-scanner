@@ -183,6 +183,18 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - Secret Manager (`secret_manager`), **off by default**
     (`read_not_configured`): with `SECRET_MANAGER_READ=on`, each secret's
     latest version is read and reported as counts only.
+- **Google Cloud, step 6: deployment and release** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 5):
+  `deploy/gcp`, a Terraform module at an organization (or its folders, or
+  projects): the scanner's service account (no key), read-only custom roles
+  bound at the scope, a Cloud Run job (one task, no retries) that runs as it,
+  a Cloud Scheduler job whose own account may only start the job, the job's
+  own state bucket (uniform access, public access prevention), the push's URL
+  and key in Secret Manager secrets of its own, optional Direct VPC egress,
+  and the APIs it calls. Opt-ins (`read_databases`, `read_private_logs`,
+  `read_secrets`) each add their own role. Releases publish
+  `ghcr.io/txp-labs/sensitive-data-scanner-gcp:X.Y.Z` (with its SBOM and
+  `GCP_IMAGE_DIGEST`), the Google Cloud wheel and the module
+  (`sensitive-data-scanner-gcp-terraform.tar.gz`).
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -324,6 +336,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
   docs show the one-line `REVOKE`.
 
 ### Security
+- The Google Cloud deployment's roles are read-only, held so by a strict test
+  (`scanner/tests/test_gcp_template.py`): every permission in its custom roles
+  reads by its verb, or is a named exception with its reason
+  (`spanner.sessions.create` and `.delete`,
+  `alloydb.clusters.generateClientCertificate`, `serviceusage.services.use`);
+  secret access and database logins sit only in opt-in roles, off by
+  default; the only predefined roles are Storage Object User on the job's own
+  bucket, Secret Accessor on its own two secrets and Run Invoker on the job
+  for the schedule's account; nothing is bound authoritatively and no key is
+  made. Predefined viewer roles are not used, since several carry writes
+  (`bigquery.tables.export`, `bigquery.tables.createSnapshot`).
 - The Azure deployment's roles are all read-only, held so by a strict test
   (`scanner/tests/test_azure_template.py`) that checks every role id in the
   template against the built-in roles' published actions and allows one write
@@ -411,6 +434,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- CI checks the Google Cloud deployment: `terraform fmt`, `validate` and
+  `terraform test` (offline plans and applies against a mock provider) with a
+  pinned, checksum-verified Terraform and the provider pinned by its lock
+  file. `python-hcl2` joins the dev dependencies, for the strict test.
 - CI builds the `gcp` image and smoke-tests it with no network (a wrong
   setting by its code, no gRPC, AWS or Azure SDK in it). The no-leak suite
   covers the Google Cloud scanner, with values in project, bucket, object,

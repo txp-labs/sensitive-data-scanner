@@ -404,6 +404,103 @@ masked.
 At least one of `STATE_BUCKET`, `FINDINGS_HTTPS_URL`, `FINDINGS_PUBSUB_TOPIC`
 and `FINDINGS_FILE` is required.
 
+## Deploying
+
+`deploy/gcp` is a Terraform module (Terraform 1.9 or later, the Google
+provider pinned by its lock file); a release attaches it as
+`sensitive-data-scanner-gcp-terraform.tar.gz`. It needs, from whoever applies
+it, Organization Role Administrator (for the custom roles), the IAM admin role
+at the scope it binds at, and owner-level rights in the job's project.
+
+Cloud Run pulls images from Artifact Registry, so mirror the release image
+there first (or create a remote repository whose upstream is `ghcr.io`), and
+give the mirrored path, pinned by digest:
+
+```sh
+terraform -chdir=deploy/gcp init
+terraform -chdir=deploy/gcp apply \
+  -var organization_id=123456789012 -var project_id=acme-sds \
+  -var image=us-docker.pkg.dev/acme-sds/ghcr/txp-labs/sensitive-data-scanner-gcp@sha256:<digest> \
+  -var findings_https_url=<url> -var findings_hmac_key=<key>
+```
+
+| Variable | Default | What |
+|---|---|---|
+| `organization_id` | (required) | The organization's number. The custom roles are defined here |
+| `scope`, `folder_ids`, `project_ids` | `organization` | What the scanner reads, and where its roles are bound: the organization, the folders, or the projects |
+| `project_id`, `region` | (required), `us-central1` | Where the job, its service accounts, its state bucket and its schedule go |
+| `image` | (required) | The image, pinned by digest (`GCP_IMAGE_DIGEST` in a release) |
+| `job_name` | `sds-scanner` | The job, and the service account's name: `sds-scanner@<project>.iam.gserviceaccount.com`, what the IAM database users are created for |
+| `schedule`, `task_timeout_seconds` | daily 06:00 UTC, 3600 | When it runs, and for how long at most |
+| `site`, `discover` | `org-<organization_id>`, every kind | `SCANNER_SITE`, `DISCOVER` |
+| `read_databases`, `read_private_logs`, `read_secrets` | off, off, off | `GCP_DB_READ=all` (with `GCP_DB_PRINCIPAL` the service account), `LOGGING_PRIVATE_READ`, `SECRET_MANAGER_READ`; each adds its own role |
+| `findings_https_url`, `findings_hmac_key` | | The signed push; both go into Secret Manager secrets of the job's own |
+| `findings_pubsub_topic` | | The Pub/Sub push; the topic's owner grants the service account Pub/Sub Publisher on it |
+| `network`, `subnetwork` | | Direct VPC egress, so the job reaches private IPs (Cloud SQL, AlloyDB) |
+| `state_bucket_name`, `runs_retention_days` | `<project_id>-sds-state`, 90 | The job's own bucket, and how long run documents are kept |
+| `enable_apis` | true | Enable, in `project_id`, the APIs the job calls: a service account's calls count against its own project |
+
+**What it creates:**
+- the scanner's service account, with no key, and a second one for the
+  schedule;
+- the custom roles, at the organization, bound at the scope;
+- a Cloud Run job (one task, no retries) that runs as the scanner's account,
+  and a Cloud Scheduler job that starts it;
+- the job's own state bucket, with uniform access and public access
+  prevention, and run documents deleted after `runs_retention_days`;
+- with a push URL, two Secret Manager secrets for it and its key.
+
+**The roles.** Predefined viewer roles are not used: several carry writes
+(BigQuery Data Viewer holds `bigquery.tables.export` and
+`bigquery.tables.createSnapshot`; Cloud Asset Viewer can start exports). The
+scanner gets custom roles instead, each permission named, and
+`scanner/tests/test_gcp_template.py` fails on any that does not read:
+
+| Role | Made when | Permissions |
+|---|---|---|
+| `sdsScannerReader` | always | `cloudasset.assets.searchAllResources`; `storage.objects.get`, `.list`; `bigquery.datasets.get`, `bigquery.tables.get`, `.list`, `.getData`, `bigquery.rowAccessPolicies.list`; `datastore.databases.getMetadata`, `datastore.entities.get`, `.list`; `spanner.databases.get`, `.select`, `.beginReadOnlyTransaction`, `spanner.sessions.create`, `.delete`; `bigtable.clusters.list`, `bigtable.tables.readRows`; `logging.buckets.list`, `logging.logs.list`, `logging.logEntries.list`; `pubsub.subscriptions.list`; `compute.snapshots.list`; `cloudsql.instances.get`, `cloudsql.databases.list`; `alloydb.clusters.get`, `alloydb.instances.list` |
+| `sdsScannerPrivateLogs` | `read_private_logs` | `logging.privateLogEntries.list` |
+| `sdsScannerSecrets` | `read_secrets` | `secretmanager.secrets.get`, `secretmanager.versions.access` |
+| `sdsScannerDatabases` | `read_databases` | `cloudsql.instances.login`, `alloydb.users.login`, `alloydb.clusters.generateClientCertificate`, `serviceusage.services.use` |
+
+Every permission's verb reads (`get`, `list`, `getData`, `getMetadata`,
+`searchAllResources`, `readRows`, `select`, `beginReadOnlyTransaction`), or
+is `access` or `login` in an opt-in role, or is one of these, each allowed
+for its reason:
+
+- `spanner.sessions.create`, `.delete`: a session holds no data, and every
+  statement in it is a single-use read-only transaction; the scanner deletes
+  its own session after its pass.
+- `alloydb.clusters.generateClientCertificate`: returns the cluster's CA,
+  which TLS is verified against, with a short-lived client certificate; it
+  changes nothing on the cluster.
+- `serviceusage.services.use`: lets the calls count against a project's
+  quota, which AlloyDB's IAM login needs.
+
+The only predefined roles bound are on the job's own resources:
+
+| Role | On | Why |
+|---|---|---|
+| Storage Object User | the job's own state bucket | Its findings, cursors and lock |
+| Secret Manager Secret Accessor | the job's two push secrets | The push's URL and key |
+| Cloud Run Invoker | the job, for the schedule's own account | Starting the job |
+
+The test also holds these: nothing is bound authoritatively (no
+`_iam_binding` or `_iam_policy`), no service account key is made, no basic
+role appears, every opt-in role is off by default, and every environment
+variable the job sets is one the code reads. CI runs `terraform fmt`,
+`validate` and `terraform test` (offline plans and applies against a mock
+provider) with a pinned, checksum-verified Terraform.
+
+**What it cannot grant:**
+- the databases' IAM users and their read grants (the `gcloud` and SQL
+  above), and the IAM authentication flags;
+- Pub/Sub Publisher on the consumer's topic;
+- a network path to private databases beyond Direct VPC egress into the
+  subnetwork you name (firewall rules, authorized networks);
+- access inside a VPC Service Controls perimeter: add the scanner's service
+  account to the perimeter's access level, or its stores stay `network`.
+
 ## Running it
 
 ```sh

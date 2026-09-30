@@ -25,3 +25,9 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Terraform's working files (deploy/gcp); .terraform.lock.hcl is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
