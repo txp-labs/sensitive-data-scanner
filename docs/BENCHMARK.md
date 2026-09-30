@@ -124,6 +124,28 @@ Spec 0.4. `medium` is omitted where it equals `low`. The full table is in
 | `dob` | 0.768 | 1.000 | 0.869 | 1.000 | 1.000 | 1.000 |
 | `us_ssn`, `us_itin`, `cvv`, `pin`, `account_number`, `us_ssn_last4` | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
 
+### After the reader fixes
+
+This is the first fix PR, and the spec is unchanged. It fixes four things:
+
+- a CSV column's name is context for its own cells only;
+- a JSON value's context is its own key path and the labels of the objects
+  that hold it;
+- a card is never a slice of a longer run of digit groups, and a card typed
+  with its expiry is found;
+- a DOB word's context stops at the nearest other date.
+
+**objects**:
+
+| Class | P @low | R @low | F1 @low | P @high | R @high | F1 @high |
+|---|---:|---:|---:|---:|---:|---:|
+| `card` | 0.859 | 0.998 | 0.923 | 0.999 | 0.813 | 0.896 |
+| `us_ssn` | 0.781 | 1.000 | 0.877 | 0.749 | 0.837 | 0.790 |
+| `us_itin` | 0.907 | 1.000 | 0.951 | 0.907 | 1.000 | 0.951 |
+| `dob` | 0.978 | 1.000 | 0.989 | 1.000 | 1.000 | 1.000 |
+
+The conversation runner is unchanged: these readers are not the engine.
+
 ## Findings
 
 **Weak classes.** In stored text, `us_ssn` (precision 0.57) and `dob` (0.61)
@@ -173,11 +195,20 @@ class at `low` confidence. The benchmark keeps it visible. The rule is not a
 bug: a consumer that filters to `medium` and above loses none of the
 conversation positives.
 
+The reader fixes removed sources 1, 2, 5 and 6. What is left after them:
+
+- source 3, "social media", which needs a spec change;
+- source 4, Luhn-valid non-cards at `medium`;
+- a card number next to both "CARD PURCHASE" and "ORDER" in a statement line.
+  The card word wins, as the spec says.
+
 **Misses:**
 
 - **A card followed by its expiry was not found** (10 in tickets, 2 in
   emails): "4539 1488 0343 6467 04/29". The spec's weak pattern takes the
   expiry's month as a 17th and 18th digit. Presidio drops the 16-digit match
   inside that longer one before any Luhn check. The longer one then fails
-  Luhn, and nothing is left.
+  Luhn, and nothing is left. Fixed: the longest head of a match, cut at a
+  separator, that passes Luhn and the IIN table is the card, as the spec's
+  shorter heads are.
 - Two cards pasted in chat, suppressed by "invoice" in the previous turn.

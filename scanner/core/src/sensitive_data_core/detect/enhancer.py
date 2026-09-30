@@ -10,7 +10,9 @@ document's own labels):
 - a card number next to a word like "order" or "phone", and no card word, is
   suppressed;
 - a match that needs context (nine bare digits, a date, single spaced
-  digits) and has none is dropped.
+  digits) and has none is dropped;
+- a date's window stops at the nearest other date on each side, so a DOB
+  word gives its context to the date it labels, not to every date after it.
 
 Results from the conversation engine already had their context judged; the
 enhancer only raises a `shape` result to `context` when the caller's
@@ -19,6 +21,7 @@ context names its class.
 
 from __future__ import annotations
 
+import bisect
 import re
 
 from presidio_analyzer import EntityRecognizer, RecognizerResult
@@ -28,6 +31,7 @@ from presidio_analyzer.nlp_engine import NlpArtifacts
 from ..engine.conversation import has_context
 from ..engine.spec import Spec, load_spec
 from .entities import (
+    CLASS_TO_ENTITY,
     COUNT_ONLY_SCORE,
     ENTITY_TO_CLASS,
     META_CONFIDENCE,
@@ -46,6 +50,27 @@ WINDOW_AFTER = 32
 def humanize(s: str) -> str:
     """ "cardNumber", "card_number" -> "card Number", "card number": key names become words."""
     return re.sub(r"([a-z])([A-Z])", r"\1 \2", s).replace("_", " ")
+
+
+DOB_ENTITY = CLASS_TO_ENTITY["dob"]
+
+
+def _between_dates(
+    dates: list[tuple[int, int]], start: int, end: int, lo: int, hi: int
+) -> tuple[int, int]:
+    """The window around the date at `start`-`end`, cut at the nearest other date on each
+    side: in "date of birth 03/14/1985, charged on 09/03/2026" the DOB words belong to the
+    first date, not the second (#75)."""
+    i = bisect.bisect_left(dates, (start, end))
+    for _s, e in reversed(dates[:i]):
+        if e <= start:
+            lo = max(lo, e)
+            break
+    for s, _e in dates[i:]:
+        if s >= end:
+            hi = min(hi, s)
+            break
+    return lo, hi
 
 
 class SpecContextEnhancer(ContextAwareEnhancer):
@@ -67,6 +92,12 @@ class SpecContextEnhancer(ContextAwareEnhancer):
         context: list[str] | None = None,
     ) -> list[RecognizerResult]:
         extra = humanize(" ".join(context or []))
+        # Where each date sits: a date's context window stops at the next date on each side.
+        dates = sorted(
+            (r.start, r.end)
+            for r in raw_results
+            if r.entity_type == DOB_ENTITY and not (r.recognition_metadata or {}).get(META_ENGINE)
+        )
         out: list[RecognizerResult] = []
         for r in raw_results:
             meta = r.recognition_metadata or {}
@@ -80,7 +111,10 @@ class SpecContextEnhancer(ContextAwareEnhancer):
                     self._raise(r)
                 out.append(r)
                 continue
-            window = humanize(text[max(0, r.start - WINDOW_BEFORE) : r.end + WINDOW_AFTER])
+            lo, hi = max(0, r.start - WINDOW_BEFORE), r.end + WINDOW_AFTER
+            if r.entity_type == DOB_ENTITY:
+                lo, hi = _between_dates(dates, r.start, r.end, lo, hi)
+            window = humanize(text[lo:hi])
             around = f"{extra}\n{window}"
             if has_context(cls, around):
                 self._raise(r)

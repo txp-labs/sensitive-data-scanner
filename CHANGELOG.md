@@ -665,6 +665,34 @@ bumps the minor version. Spec changes are listed under **Spec**.
   instead of a sampled `Scan` every pass. Smaller tables, and big ones without
   PITR, keep the sampled `Scan` (never skipped for it). Exports stay within
   `MAX_EXPORTS_PER_RUN`.
+- **Stored text: context goes to the value it labels, and no further**
+  ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the
+  benchmark). Four fixes to the readers; the spec is unchanged:
+  - A CSV object is read as a table is: each column's cells, with that
+    column's name as context. Before, the whole header was context for every
+    cell. With `ssn` and `date_of_birth` columns, every routing number was a
+    high-confidence SSN and every hire date a date of birth. Offsets still
+    point into the object's text.
+  - A JSON value's context is its own key path, plus the labels of the
+    objects that hold it (`{"label": "SSN", "value": ...}` still works). Other
+    keys in the document no longer count, so a `dateOfBirth` key no longer
+    makes a log record's `timestamp` a date of birth.
+  - A card number is never four groups from the middle of a longer run, such
+    as a USPS tracking number or an IBAN. A card typed with its expiry right
+    after it (`4539 1488 0343 6467 04/29`) is now found. Presidio had dropped
+    the 16-digit match inside the longer weak-pattern match before any Luhn
+    check. Now the longest head of a match, cut at a separator, that passes
+    Luhn and the IIN table is the card, as the spec's shorter heads are.
+  - A DOB word's context window stops at the nearest other date, so in "date
+    of birth 03/14/1985, charged on 09/03/2026" only the first date is a
+    birth date.
+  - Benchmark, stored text:
+    - `us_ssn` precision 0.567 to 0.781;
+    - `dob` precision 0.605 to 0.978;
+    - `us_itin` precision 0.883 to 0.907;
+    - `card` precision 0.851 to 0.859, recall 0.985 to 0.998.
+  - The text reader's and the detection's component versions change, so
+    unchanged objects are read again under the rescan budget.
 - **An adapter's version is its read path; a listing change re-lists, never
   re-reads** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
   - Every adapter whose objects the index records (S3, Glue tables and

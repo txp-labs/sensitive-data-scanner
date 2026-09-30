@@ -240,28 +240,28 @@
       },
       "card": {
         "high": {
-          "f1": 0.8856,
-          "fn": 187,
-          "fp": 6,
-          "precision": 0.992,
-          "recall": 0.7998,
-          "tp": 747
+          "f1": 0.8961,
+          "fn": 175,
+          "fp": 1,
+          "precision": 0.9987,
+          "recall": 0.8126,
+          "tp": 759
         },
         "low": {
-          "f1": 0.9132,
-          "fn": 14,
-          "fp": 161,
-          "precision": 0.8511,
-          "recall": 0.985,
-          "tp": 920
+          "f1": 0.9232,
+          "fn": 2,
+          "fp": 153,
+          "precision": 0.859,
+          "recall": 0.9979,
+          "tp": 932
         },
         "medium": {
-          "f1": 0.9223,
-          "fn": 14,
-          "fp": 141,
-          "precision": 0.8671,
-          "recall": 0.985,
-          "tp": 920
+          "f1": 0.9325,
+          "fn": 2,
+          "fp": 133,
+          "precision": 0.8751,
+          "recall": 0.9979,
+          "tp": 932
         }
       },
       "cvv": {
@@ -292,26 +292,26 @@
       },
       "dob": {
         "high": {
-          "f1": 0.7602,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 451,
-          "precision": 0.6132,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 715
         },
         "low": {
-          "f1": 0.7538,
+          "f1": 0.9889,
           "fn": 0,
-          "fp": 467,
-          "precision": 0.6049,
+          "fp": 16,
+          "precision": 0.9781,
           "recall": 1.0,
           "tp": 715
         },
         "medium": {
-          "f1": 0.7602,
+          "f1": 1.0,
           "fn": 0,
-          "fp": 451,
-          "precision": 0.6132,
+          "fp": 0,
+          "precision": 1.0,
           "recall": 1.0,
           "tp": 715
         }
@@ -344,52 +344,52 @@
       },
       "us_itin": {
         "high": {
-          "f1": 0.9379,
+          "f1": 0.951,
           "fn": 0,
-          "fp": 9,
-          "precision": 0.8831,
+          "fp": 7,
+          "precision": 0.9067,
           "recall": 1.0,
           "tp": 68
         },
         "low": {
-          "f1": 0.9379,
+          "f1": 0.951,
           "fn": 0,
-          "fp": 9,
-          "precision": 0.8831,
+          "fp": 7,
+          "precision": 0.9067,
           "recall": 1.0,
           "tp": 68
         },
         "medium": {
-          "f1": 0.9379,
+          "f1": 0.951,
           "fn": 0,
-          "fp": 9,
-          "precision": 0.8831,
+          "fp": 7,
+          "precision": 0.9067,
           "recall": 1.0,
           "tp": 68
         }
       },
       "us_ssn": {
         "high": {
-          "f1": 0.6435,
+          "f1": 0.79,
           "fn": 96,
-          "fp": 448,
-          "precision": 0.5229,
+          "fp": 165,
+          "precision": 0.7485,
           "recall": 0.8365,
           "tp": 491
         },
         "low": {
-          "f1": 0.7238,
+          "f1": 0.8768,
           "fn": 0,
-          "fp": 448,
-          "precision": 0.5671,
+          "fp": 165,
+          "precision": 0.7806,
           "recall": 1.0,
           "tp": 587
         },
         "medium": {
-          "f1": 0.7238,
+          "f1": 0.8768,
           "fn": 0,
-          "fp": 448,
-          "precision": 0.5671,
+          "fp": 165,
+          "precision": 0.7806,
           "recall": 1.0,
           "tp": 587
         }
