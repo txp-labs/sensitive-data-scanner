@@ -74,7 +74,8 @@
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
         "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo",
         "log_analytics", "azure_disk_snapshot", "key_vault",
-        "gcs", "bigquery", "firestore", "datastore", "spanner", "bigtable", "cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver",
+        "gcs", "bigquery", "firestore", "datastore", "spanner", "bigtable", "cloud_logging",
+        "pubsub", "gce_snapshot", "secret_manager", "cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver",
         "alloydb"
       ]
     },
@@ -412,7 +413,7 @@
           "propertyNames": {
             "enum": [
               "audio", "video", "image", "document", "archive", "binary", "columnar",
-              "archive_tier", "billed_plan"
+              "archive_tier", "billed_plan", "private_log"
             ]
           },
           "additionalProperties": { "type": "integer", "minimum": 0 }
@@ -441,7 +442,8 @@
         "no_s3_destination", "in_memory", "no_read_path",
         "db_user_can_write", "grants_unverifiable", "driver_missing", "user_can_write",
         "archive_retrieval", "network", "needs_sas_export",
-        "requester_pays", "row_level_policy", "authorized_view"
+        "requester_pays", "row_level_policy", "authorized_view", "needs_subscription",
+        "needs_disk_restore"
       ]
     },
     "discovery": {

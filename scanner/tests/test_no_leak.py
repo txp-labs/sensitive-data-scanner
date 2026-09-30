@@ -2216,3 +2216,68 @@ def test_no_value_leaves_firestore_spanner_or_bigtable(capsys: pytest.CaptureFix
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob and SSN_A not in blob and CARDS["amex"] not in blob, where
+
+
+def test_no_value_leaves_logging_topics_snapshots_or_secrets(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Values in log entries and secrets, and in project, log, payload field, topic, disk,
+    snapshot and secret names, and Google's error messages: none of them leave."""
+    from gcp_fakes import NOW, Cloud, Ops, asset, error, project_row, settings
+    from sensitive_data_gcp.runner import run_scan
+
+    project, number = f"p-{SSN_A}", "421000000080"
+    c = Cloud()
+    ops = Ops(c)
+    c.assets["cloudresourcemanager.googleapis.com/Project"] = [project_row(project, number)]
+    ops.logs[project] = {
+        f"app-{CARDS['visa']}": [
+            {"textPayload": f"card {CARDS['mastercard']}"},
+            {"jsonPayload": {f"ssn_{SSN_B}": dashed(SSN_A)}},
+        ],
+        f"broken-{SSN_B}": [],
+    }
+    real_entries = ops.entries
+
+    def entries(req: Any) -> Any:
+        if "broken" in req.body["filter"]:
+            return error(500, "INTERNAL", message=f"failed on {req.body['filter']}")
+        return real_entries(req)
+
+    c.routes = [r for r in c.routes if "entries:list" not in r[1].pattern]
+    c.route("POST", r"entries:list", entries)
+    topic, snap, secret = f"t-{SSN_A}", f"s-{CARDS['visa']}", f"k-{SSN_A}"
+    tt, st, kt = (
+        "pubsub.googleapis.com/Topic",
+        "compute.googleapis.com/Snapshot",
+        "secretmanager.googleapis.com/Secret",
+    )
+    c.assets[tt] = [asset(tt, f"//pubsub.googleapis.com/projects/{project}/topics/{topic}", number)]
+    ops.subscriptions[project] = [
+        {"deadLetterPolicy": {"deadLetterTopic": f"projects/{project}/topics/{topic}"}}
+    ]
+    c.assets[st] = [
+        asset(st, f"//compute.googleapis.com/projects/{project}/global/snapshots/{snap}", number)
+    ]
+    disk = f"projects/{project}/zones/z/disks/d-{dashed(SSN_B)}"
+    ops.snapshots[project] = [
+        {"name": snap, "sourceDisk": disk, "creationTimestamp": "2026-09-28T00:00:00Z"}
+    ]
+    c.assets[kt] = [
+        asset(kt, f"//secretmanager.googleapis.com/projects/{project}/secrets/{secret}", number)
+    ]
+    ops.secrets[(project, secret)] = f"card {CARDS['amex']} ssn {dashed(SSN_B)}".encode()
+    opt_in = {"SECRET_MANAGER_READ": "on"}
+    s = settings(DISCOVER="logging,pubsub,snapshots,secrets", **opt_in)
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, c.clients(), detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    services = {f["resource"]["service"] for f in doc["findings"]}
+    assert services == {"cloud_logging", "secret_manager"}
+    reasons = {x.get("reason") for x in doc["discovery"]["stores"]}
+    assert {"needs_subscription", "needs_disk_restore"} <= reasons
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob and SSN_A not in blob and CARDS["amex"] not in blob, where

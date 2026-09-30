@@ -164,6 +164,25 @@ bumps the minor version. Spec changes are listed under **Spec**.
     latest cell per column), by `family:qualifier`, the row key read too.
   - `atRestEncryption` from each database's (or Bigtable cluster's) Cloud
     KMS key.
+- **Google Cloud, step 5: Cloud Logging, Pub/Sub, disk snapshots, Secret Manager** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 5):
+  - Cloud Logging (`cloud_logging`, one store per project), read by default
+    with Logs Viewer: one `entries.list` per log (`LOGGING_LOOKBACK_DAYS`,
+    `LOGGING_MAX_ENTRIES_PER_LOG`, `LOGGING_MAX_LOGS`), the log's name quoted
+    in the filter, read by column. Data Access audit logs need Private Logs
+    Viewer and are opt-in (`LOGGING_PRIVATE_READ`); otherwise skipped
+    `private_log` (new skip kind). The read quota stops a pass, which resumes
+    at that log.
+  - Pub/Sub topics (`pubsub`), coverage only: dead-letter topics are
+    `needs_subscription` (new reason; reading needs a subscription, a write),
+    other topics `live_queue`. The opt-in dead-letter reader (a subscription
+    the deployment creates, pulled only by the scanner) is designed in
+    docs/GCP.md, not built.
+  - Persistent disk snapshots (`gce_snapshot`), coverage only, grouped by
+    disk: `needs_disk_restore` (new reason; reading needs a disk made from the
+    snapshot, a write).
+  - Secret Manager (`secret_manager`), **off by default**
+    (`read_not_configured`): with `SECRET_MANAGER_READ=on`, each secret's
+    latest version is read and reported as counts only.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -350,10 +369,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `platform: gcp`, the `gcs_object` resource, `project` and
   `resourceNameHash` (the SHA-256 of the store's full resource name) on
   Google Cloud findings and stores, the `gcs`, `bigquery`, `firestore`,
-  `datastore`, `spanner`, `bigtable`,
+  `datastore`, `spanner`, `bigtable`, `cloud_logging`, `pubsub`, `gce_snapshot`,
+  `secret_manager`,
   `cloudsql_postgresql`, `cloudsql_mysql`, `cloudsql_sqlserver` and `alloydb`
   kinds, the
-  `requester_pays`, `row_level_policy` and `authorized_view` reasons, the
+  `requester_pays`, `row_level_policy`, `authorized_view`,
+  `needs_subscription` and `needs_disk_restore` reasons, the `private_log`
+  skip kind, the
   store fields `tableType` and `protectedColumns`, and Google Cloud console
   links.
 - Version **1.6**, additive: the Azure scanner's

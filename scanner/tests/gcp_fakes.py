@@ -700,3 +700,82 @@ class NoSql:
         # Two messages, as the stream sends them.
         half = len(chunks) // 2
         return Resp(200, [{"chunks": chunks[:half]}, {"chunks": chunks[half:]}])
+
+
+# ------------------------------------------------------ Logging, Pub/Sub, snapshots, secrets
+
+
+class Ops:
+    """Cloud Logging, Pub/Sub subscriptions, Compute snapshots and Secret Manager for `Cloud`."""
+
+    def __init__(self, cloud: Cloud) -> None:
+        # Logging: project -> {log name: entries}; the _Default bucket's key by project.
+        self.logs: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self.log_keys: dict[str, str] = {}
+        self.entries_calls: list[dict[str, Any]] = []
+        self.quota_after: int | None = None
+        # Pub/Sub: project -> subscriptions
+        self.subscriptions: dict[str, list[dict[str, Any]] | Resp] = {}
+        # Compute: project -> snapshots
+        self.snapshots: dict[str, list[dict[str, Any]] | Resp] = {}
+        # Secret Manager: (project, secret) -> value bytes, or an error; and its record.
+        self.secrets: dict[tuple[str, str], bytes | Resp] = {}
+        self.secret_meta: dict[tuple[str, str], dict[str, Any]] = {}
+        self.accessed: list[str] = []
+        cloud.route("GET", r"^https://logging\.googleapis\.com/", self.logging_get)
+        cloud.route("POST", r"^https://logging\.googleapis\.com/v2/entries:list", self.entries)
+        cloud.route("GET", r"^https://pubsub\.googleapis\.com/", self.pubsub)
+        cloud.route("GET", r"^https://compute\.googleapis\.com/", self.compute)
+        cloud.route("GET", r"^https://secretmanager\.googleapis\.com/", self.secret)
+
+    def _parts(self, req: Req) -> list[str]:
+        path = urllib.parse.urlsplit(req.url).path
+        return [urllib.parse.unquote(p) for p in path.split("/")]
+
+    def logging_get(self, req: Req) -> Resp:
+        parts = self._parts(req)  # /v2/projects/p/logs | /v2/projects/p/locations/-/buckets
+        project = parts[3]
+        if parts[-1] == "buckets":
+            bucket: dict[str, Any] = {
+                "name": f"projects/{project}/locations/global/buckets/_Default"
+            }
+            if project in self.log_keys:
+                bucket["cmekSettings"] = {"kmsKeyName": self.log_keys[project]}
+            return Resp(200, {"buckets": [bucket]})
+        names = [
+            f"projects/{project}/logs/{urllib.parse.quote(n, safe='')}"
+            for n in self.logs.get(project, {})
+        ]
+        return Resp(200, {"logNames": names})
+
+    def entries(self, req: Req) -> Resp:
+        if self.quota_after is not None and len(self.entries_calls) >= self.quota_after:
+            return error(429, "RESOURCE_EXHAUSTED", message="Quota exceeded for reads")
+        self.entries_calls.append(req.body)
+        project = req.body["resourceNames"][0].split("/", 1)[1]
+        m = re.match(r'logName="([^"]+)"', req.body["filter"])
+        assert m, req.body["filter"]
+        name = urllib.parse.unquote(m[1].rsplit("/logs/", 1)[1])
+        found = self.logs[project][name][: req.body["pageSize"]]
+        return Resp(200, {"entries": found})
+
+    def pubsub(self, req: Req) -> Resp:
+        got = self.subscriptions.get(self._parts(req)[3], [])
+        return got if isinstance(got, Resp) else Resp(200, {"subscriptions": got})
+
+    def compute(self, req: Req) -> Resp:
+        got = self.snapshots.get(self._parts(req)[4], [])
+        return got if isinstance(got, Resp) else Resp(200, {"items": got})
+
+    def secret(self, req: Req) -> Resp:
+        parts = self._parts(req)  # /v1/projects/p/secrets/s[/versions/latest:access]
+        key = (parts[3], parts[5])
+        if len(parts) == 6:
+            return Resp(200, self.secret_meta.get(key, {"replication": {"automatic": {}}}))
+        self.accessed.append(parts[5])
+        got = self.secrets.get(key)
+        if got is None:
+            return error(404, "NOT_FOUND")
+        if isinstance(got, Resp):
+            return got
+        return Resp(200, {"payload": {"data": base64.b64encode(got).decode()}})
