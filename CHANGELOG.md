@@ -6,6 +6,27 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Spec
+- **Spec 0.5** ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the accuracy benchmark;
+  every change is listed for consumers in `spec/README.md`, "Changes from
+  0.4"):
+  - `us_ssn` and `us_itin` gain the context exclusion `social[- ]media`.
+    "Shared on social media, post 512437788" matches nothing; in 0.4 it was
+    a high-confidence SSN. "social" outside "social media" is still context,
+    and a `ddd-dd-dddd` value is still an SSN by its shape.
+  - `specVersion` is `"0.5"`; the JSON Schemas follow. An implementation of
+    0.4 refuses the files.
+  - Vectors: `vectors/benchmark.jsonl`, ten cases, passed by the Python
+    engine, the Presidio path and the TypeScript package alike. Five are the
+    0.5 change and its near-misses. Five pin what the benchmark measured in
+    conversations and 0.4 already did: a card's last four and a birth year
+    after a prompt at `low`, a card two turns late at `medium`, and callback
+    and confirmation numbers as nothing.
+  - `@txp-labs/sensitive-data-spec`: `SPEC_VERSION` is `'0.5'`; `dist/` is
+    rebuilt. Stugum, which mirrors the spec, needs the new exclusion.
+  - Benchmark, stored text: `us_ssn` precision 0.781 to 1.000, `us_itin`
+    0.907 to 1.000.
+
 ### Feature
 - **Azure, step 1: the package, Blob Storage and ADLS Gen2** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
   `sensitive-data-scanner-azure` (`scanner/azure`), a Container Apps job's

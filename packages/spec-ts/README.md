@@ -1,6 +1,6 @@
 # @txp-labs/sensitive-data-spec
 
-The [sensitive-data spec](../../spec/README.md) (version 0.4) and a classifier
+The [sensitive-data spec](../../spec/README.md) (version 0.5) and a classifier
 for conversation turns, for **in-memory redaction** in a call engine. It has
 no runtime dependencies. It never logs, stores or returns a detected value:
 results are classes and offsets.
