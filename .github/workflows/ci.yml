@@ -387,3 +387,47 @@ jobs:
               assert importlib.util.find_spec(mod) is None, mod
           print("ok")
           '
+
+      - name: Build the SaaS scanner image
+        run: |
+          set -euo pipefail
+          docker build --target saas -t sensitive-data-scanner-saas:ci .
+          docker image ls sensitive-data-scanner-saas:ci --format 'saas image size: {{.Size}}'
+
+      - name: Smoke test the SaaS scanner image (no network)
+        run: |
+          set -euo pipefail
+          # A wrong setting is reported by its code, and nothing else is printed.
+          out=$(docker run --rm --network none -e SCANNER_SITE=ci \
+            -e M365_TENANT_ID=0f0e0d0c-0b0a-4909-8807-060504030201 \
+            -e M365_CLIENT_ID=a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d \
+            -e M365_CLIENT_SECRET=made-up-secret-in-env -e FINDINGS_FILE=/tmp/f.json \
+            sensitive-data-scanner-saas:ci scan || true)
+          echo "${out}"
+          echo "${out}" | grep -q '"error":"m365_credential"\|"error":"m365_client_secret_in_env"'
+          if echo "${out}" | grep -q made-up; then echo "the secret was printed"; exit 1; fi
+          # With no network, signing in fails by name: exit 2 (a listing failed).
+          set +e
+          out=$(docker run --rm --network none -e SCANNER_SITE=ci \
+            -e M365_TENANT_ID=0f0e0d0c-0b0a-4909-8807-060504030201 \
+            -e M365_CLIENT_ID=a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d \
+            -e M365_FEDERATED_TOKEN=file:/etc/hostname -e M365_USERS=a@contoso.example \
+            -e FINDINGS_FILE=/tmp/f.json sensitive-data-scanner-saas:ci check)
+          code=$?
+          set -e
+          echo "${out}"
+          test "${code}" = 1 || test "${code}" = 2
+          echo "${out}" | grep -q '"event":"run.failed"\|"event":"discovery.failed"'
+          docker run --rm --network none --entrypoint python sensitive-data-scanner-saas:ci -c '
+          import requests, cryptography, boto3
+          from sensitive_data_core.scan.columnar import pyarrow_available
+          assert pyarrow_available()
+          import sensitive_data_saas.runner
+          from sensitive_data_saas.sources.saas import ADAPTERS
+          assert "m365_mail" in ADAPTERS
+          # No vendor SDK and no other cloud in the image.
+          import importlib.util
+          for mod in ("msal", "msgraph", "azure", "google", "grpc", "slack_sdk"):
+              assert importlib.util.find_spec(mod) is None, mod
+          print("ok")
+          '

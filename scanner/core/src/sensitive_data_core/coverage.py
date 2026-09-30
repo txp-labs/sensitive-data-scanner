@@ -31,6 +31,10 @@ ACCESS_DENIED = frozenset(
         "Forbidden",
         # Google Cloud (1.7): a permission the service account lacks.
         "PERMISSION_DENIED",
+        # SaaS (1.8): Microsoft Graph's codes for a permission or a scope the app lacks.
+        "ErrorAccessDenied",
+        "Authorization_RequestDenied",
+        "accessDenied",
     }
 )
 MAX_STORES_IN_SUMMARY = 5000
@@ -54,7 +58,7 @@ _INTERNAL = frozenset(
 
 
 # Store fields that are SHA-256 hex digests, never masked.
-_HASHES = frozenset({"resourceIdHash", "resourceNameHash"})
+_HASHES = frozenset({"resourceIdHash", "resourceNameHash", "tenantHash", "ownerHash"})
 
 
 @dataclass
@@ -181,6 +185,14 @@ NOTES = {
     # (1.7) A BigQuery table with row-level access policies: a sample would hold only the rows
     # the scanner is granted.
     "row_level_policy": ("skipped", "row_level_policy"),
+    # (1.8) SaaS: a grant the scanner could not prove is scoped (a mailbox read without the
+    # scope check), or one it proved is not; an API the vendor has not approved the app for;
+    # a user with no mailbox or drive; and a vendor that kept throttling past the budget.
+    "scope_unverified": ("skipped", "scope_unverified"),
+    "unscoped_grant": ("skipped", "unscoped_grant"),
+    "protected_api": ("skipped", "protected_api"),
+    "not_provisioned": ("skipped", "not_provisioned"),
+    "throttled": ("deferred", "throttled"),
 }
 
 

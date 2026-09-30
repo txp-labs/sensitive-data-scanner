@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.7",
-  "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
+  "title": "Sensitive-data scanner findings, version 1.8",
+  "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site, or (1.8) in the SaaS tenants of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,24 +12,24 @@
   ],
   "allOf": [
     {
-      "description": "An AWS run names its account and region; a databases run (1.4), an Azure run (1.6) and a Google Cloud run (1.7) name their site instead.",
-      "if": { "required": ["platform"], "properties": { "platform": { "enum": ["database", "azure", "gcp"] } } },
+      "description": "An AWS run names its account and region; a databases run (1.4), an Azure run (1.6), a Google Cloud run (1.7) and a SaaS run (1.8) name their site instead.",
+      "if": { "required": ["platform"], "properties": { "platform": { "enum": ["database", "azure", "gcp", "saas"] } } },
       "then": { "required": ["site"] },
       "else": { "required": ["account", "region"] }
     }
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.7" },
+    "schemaVersion": { "const": "1.8" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
     "platform": {
-      "description": "Where the scanner ran (1.4). Absent: AWS, and the document names its account and region. 'database': the databases-anywhere container; 'azure' (1.6): the Azure scanner, whose findings and stores each name their subscription; 'gcp' (1.7): the Google Cloud scanner, whose findings and stores each name their project. Each names its site instead of an account and region.",
-      "enum": ["aws", "database", "azure", "gcp"]
+      "description": "Where the scanner ran (1.4). Absent: AWS, and the document names its account and region. 'database': the databases-anywhere container; 'azure' (1.6): the Azure scanner, whose findings and stores each name their subscription; 'gcp' (1.7): the Google Cloud scanner, whose findings and stores each name their project; 'saas' (1.8): the SaaS scanner, whose findings and stores each name their vendor and the hash of their tenant. Each names its site instead of an account and region.",
+      "enum": ["aws", "database", "azure", "gcp", "saas"]
     },
     "site": {
-      "description": "The name the customer gave the place a non-AWS runner runs in (SCANNER_SITE): a data center, a cluster (1.4), an Azure management group (1.6), a Google Cloud organization or folder (1.7). Never a host or a connection string.",
+      "description": "The name the customer gave the place a non-AWS runner runs in (SCANNER_SITE): a data center, a cluster (1.4), an Azure management group (1.6), a Google Cloud organization or folder (1.7), where the SaaS scanner runs (1.8). Never a host or a connection string.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
     },
@@ -63,7 +63,7 @@
     },
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "storeKind": {
-      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5; the Azure kinds, from azure_blob, are new in 1.6; the Google Cloud kinds, from gcs, are new in 1.7).",
+      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5; the Azure kinds, from azure_blob, are new in 1.6; the Google Cloud kinds, from gcs, are new in 1.7; the SaaS kinds, from m365_mail, are new in 1.8).",
       "enum": [
         "s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift", "opensearch",
         "documentdb", "neptune", "ebs", "backup", "efs", "fsx", "kinesis", "firehose", "sqs",
@@ -76,7 +76,8 @@
         "log_analytics", "azure_disk_snapshot", "key_vault", "azure_files",
         "gcs", "bigquery", "firestore", "datastore", "spanner", "bigtable", "cloud_logging",
         "pubsub", "gce_snapshot", "secret_manager", "cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver",
-        "alloydb"
+        "alloydb",
+        "m365_mail", "m365_onedrive", "m365_sharepoint", "m365_teams_channel", "m365_teams_chat"
       ]
     },
     "azureSubscription": {
@@ -96,6 +97,15 @@
     },
     "resourceNameHash": {
       "description": "The SHA-256 of the store's Google Cloud full resource name, exactly as Cloud Asset Inventory gives it (//storage.googleapis.com/<bucket>, //bigquery.googleapis.com/projects/<project>/datasets/<dataset>/tables/<table>), as lower-case hex (1.7). Never the name itself.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "saasVendor": {
+      "description": "The SaaS vendor whose tenant a finding or store is in (1.8).",
+      "enum": ["m365"]
+    },
+    "saasHash": {
+      "description": "The SHA-256 of a SaaS identifier, as lower-case hex (1.8): tenantHash of the tenant's id (Microsoft 365: the Entra tenant id, lower-case); ownerHash of a mailbox's or drive's owner (the user's principal name or address, lower-case: an address is PII, never written); itemHash of the vendor's id for the item. Hash yours the same way to match.",
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
@@ -337,6 +347,52 @@
             "resourceNameHash": { "$ref": "#/$defs/resourceNameHash" },
             "keyMasked": { "const": true }
           }
+        },
+        {
+          "description": "One item of a SaaS tenant (1.8): a message, a file, a page or an issue, or a part of it (an attachment, a comment). Names are masked like keys; a person is named only by the hash of their address.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "vendor", "service", "tenantHash", "itemHash", "part"],
+          "properties": {
+            "type": { "const": "saas_item" },
+            "vendor": { "$ref": "#/$defs/saasVendor" },
+            "service": {
+              "description": "The vendor's product: exchange, onedrive, sharepoint, teams_channel, teams_chat.",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,39}$"
+            },
+            "tenantHash": { "$ref": "#/$defs/saasHash" },
+            "ownerHash": {
+              "description": "The mailbox's, drive's or chat member's owner, hashed (saasHash).",
+              "$ref": "#/$defs/saasHash"
+            },
+            "container": {
+              "description": "The site, team or channel set the item is in, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "channel": {
+              "description": "The channel or document library within the container, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "itemId": {
+              "description": "The vendor's id for the item (a Graph message or drive item id), masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "itemHash": { "$ref": "#/$defs/saasHash" },
+            "part": {
+              "description": "Which part of the item the values are in: message (a subject and body), attachment, file, reply.",
+              "enum": ["message", "attachment", "file", "reply"]
+            },
+            "name": {
+              "description": "The file's or attachment's name, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "column": {
+              "description": "For a table file (Parquet, ORC or Avro): the column the values are in, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "keyMasked": { "const": true }
+          }
         }
       ]
     },
@@ -368,7 +424,7 @@
           "enum": [
             "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
             "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro", "sql", "block", "cql", "rdb",
-            "kql"
+            "kql", "docx", "xlsx", "pptx"
           ]
         },
         "class": { "$ref": "#/$defs/class" },
@@ -390,9 +446,9 @@
         "offsets": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/offset" } },
         "offsetsTruncated": { "type": "boolean" },
         "link": {
-          "description": "A deep link into the account's own AWS console, (1.6) the resource's page in the Azure portal or (1.7) in the Google Cloud console; null when a name it would carry had to be masked.",
+          "description": "A deep link into the account's own AWS console, (1.6) the resource's page in the Azure portal, (1.7) in the Google Cloud console, or (1.8) the item in its SaaS vendor's own web app, built from ids only (Outlook on the web by message id, a SharePoint document by its unique id, a Teams channel); null when a name it would carry had to be masked.",
           "type": ["string", "null"],
-          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/|console\\.cloud\\.google\\.com/)"
+          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/|console\\.cloud\\.google\\.com/|outlook\\.office365\\.com/|teams\\.microsoft\\.com/|[a-z0-9-]+(?:-my)?\\.sharepoint\\.com/)"
         },
         "connect": {
           "type": "object",
@@ -442,7 +498,7 @@
           "propertyNames": {
             "enum": [
               "audio", "video", "image", "document", "archive", "binary", "columnar",
-              "archive_tier", "billed_plan", "private_log"
+              "archive_tier", "billed_plan", "private_log", "encrypted", "too_large", "linked_item"
             ]
           },
           "additionalProperties": { "type": "integer", "minimum": 0 }
@@ -472,7 +528,8 @@
         "db_user_can_write", "grants_unverifiable", "driver_missing", "user_can_write",
         "archive_retrieval", "network", "needs_sas_export",
         "requester_pays", "row_level_policy", "authorized_view", "needs_subscription",
-        "needs_disk_restore"
+        "needs_disk_restore", "scope_unverified", "unscoped_grant", "protected_api",
+        "not_provisioned", "throttled"
       ]
     },
     "discovery": {
@@ -574,6 +631,9 @@
               "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
               "project": { "$ref": "#/$defs/gcpProject" },
               "resourceNameHash": { "$ref": "#/$defs/resourceNameHash" },
+              "vendor": { "$ref": "#/$defs/saasVendor" },
+              "tenantHash": { "$ref": "#/$defs/saasHash" },
+              "ownerHash": { "$ref": "#/$defs/saasHash" },
               "tableType": {
                 "description": "BigQuery (1.7): the table's type (TABLE, VIEW, MATERIALIZED_VIEW, EXTERNAL, SNAPSHOT); only TABLE and SNAPSHOT are read.",
                 "type": "string",

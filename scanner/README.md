@@ -10,9 +10,11 @@ core imports no cloud SDK, and a test keeps it that way. `db/` is the
 databases-anywhere runner (`sensitive-data-scanner-db`, import
 `sensitive_data_db`), also on the core ([docs/DATABASES.md](../docs/DATABASES.md)),
 `azure/` the Azure scanner (`sensitive-data-scanner-azure`, import
-`sensitive_data_azure`, [docs/AZURE.md](../docs/AZURE.md)), and `gcp/` the
+`sensitive_data_azure`, [docs/AZURE.md](../docs/AZURE.md)), `gcp/` the
 Google Cloud scanner (`sensitive-data-scanner-gcp`, import
-`sensitive_data_gcp`, [docs/GCP.md](../docs/GCP.md)).
+`sensitive_data_gcp`, [docs/GCP.md](../docs/GCP.md)), and `saas/` the SaaS
+scanner (`sensitive-data-scanner-saas`, import `sensitive_data_saas`,
+[docs/SAAS.md](../docs/SAAS.md)).
 
 Detection for the scanner: [Microsoft Presidio](https://github.com/microsoft/presidio)
 Analyzer, with **no NLP model**, and recognizers for the classes in the

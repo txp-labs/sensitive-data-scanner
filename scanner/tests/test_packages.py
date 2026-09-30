@@ -10,6 +10,7 @@ import sensitive_data_azure
 import sensitive_data_core
 import sensitive_data_db
 import sensitive_data_gcp
+import sensitive_data_saas
 import sensitive_data_scanner
 
 SCANNER = Path(__file__).resolve().parents[1]
@@ -26,7 +27,9 @@ CLOUD_MODULES = (
     "sensitive_data_scanner",
     "sensitive_data_azure",
     "sensitive_data_gcp",
+    "sensitive_data_saas",
     "sensitive_data_db",
+    "requests",
 )
 
 
@@ -62,6 +65,7 @@ def test_every_package_has_the_release_version() -> None:
     assert sensitive_data_db.__version__ == root
     assert sensitive_data_azure.__version__ == root
     assert sensitive_data_gcp.__version__ == root
+    assert sensitive_data_saas.__version__ == root
 
 
 def test_azure_sdks_stay_in_the_azure_package() -> None:
@@ -107,3 +111,36 @@ def test_a_store_fact_is_added_to_each_finding_and_never_replaces_a_field() -> N
     assert with_fact == {**plain, "fact": "value"}
     with pytest.raises(ValueError, match="may not replace"):
         finding_json(resource, None, "sql", cf, "2026-09-29T00:00:00+00:00", facts={"class": "x"})
+
+
+def test_the_saas_package_uses_no_vendor_sdk_and_no_cloud_but_its_state() -> None:
+    """The SaaS scanner calls every vendor over HTTPS with `requests`: no Microsoft, Google,
+    Slack or Atlassian SDK. It imports boto3 only for an S3 state and an AWS workload token
+    (the `aws` extra), and nothing of Azure's or Google's; no other package imports it."""
+    saas = SCANNER / "saas" / "src" / "sensitive_data_saas"
+    vendor_sdks = (
+        "msal",
+        "msgraph",
+        "azure",
+        "google",
+        "googleapiclient",
+        "slack",
+        "slack_sdk",
+        "atlassian",
+        "jira",
+    )
+    boto_ok = {"runner.py", "federation.py"}
+    for path in sorted(saas.rglob("*.py")):
+        names = _imports(path)
+        assert not any(n.split(".")[0] in vendor_sdks for n in names), path.name
+        if path.name not in boto_ok:
+            assert not any(n.startswith(("boto3", "botocore")) for n in names), path.name
+    others = (
+        SCANNER / "src" / "sensitive_data_scanner",
+        SCANNER / "db" / "src",
+        SCANNER / "azure" / "src",
+        SCANNER / "gcp" / "src",
+    )
+    for pkg in others:
+        for path in sorted(pkg.rglob("*.py")):
+            assert not any(n.startswith("sensitive_data_saas") for n in _imports(path)), path.name
