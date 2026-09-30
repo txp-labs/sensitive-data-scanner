@@ -35,6 +35,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
+from sensitive_data_core.index import Indexes, S3Backend, index_salt
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
 
@@ -110,6 +111,7 @@ class Keys:
         self.runs = f"{prefix}findings/runs/"
         self.state = f"{prefix}state/scanner-state.json"
         self.lock = f"{prefix}state/lock.json"
+        self.index = f"{prefix}state/index/"
 
 
 def _read_json(s3: S3Client, bucket: str, key: str, *, probe: str | None = None) -> Any:
@@ -408,6 +410,25 @@ def _plan_discovered(
                     add(store, one)
 
 
+def indexes_for(config: Config, clients: Clients, state: dict[str, Any]) -> Indexes | None:
+    """The run's object indexes (#67), in the results bucket under `state/index/`, keyed by
+    the salt in the state document; None with `OBJECT_INDEX` off."""
+    if not config.object_index:
+        return None
+    return Indexes(
+        S3Backend(config.results_bucket, Keys(config.results_prefix).index, clients.s3),
+        index_salt(state),
+        max_rows=config.index_max_objects,
+    )
+
+
+def with_indexes(sources: list[Any], indexes: Indexes | None) -> None:
+    """Every source that keeps an object index gets the run's."""
+    for source in sources:
+        if hasattr(source, "indexes"):
+            source.indexes = indexes
+
+
 def build_sources(config: Config, clients: Clients, region: str) -> list[Any]:
     """The configured sources only (no discovery)."""
     return plan(config, clients, region)[0]
@@ -462,6 +483,8 @@ def run_scan(
             state = {}
         cursors: dict[str, Any] = dict(state.get("cursors") or {})
         sources = rotate(sources, stores, state.get("rotation"))
+        indexes = indexes_for(config, clients, state)
+        with_indexes(sources, indexes)
         mode = config.scan_mode
         importer = (
             MacieImporter(clients, region, mode, lookback_days=config.macie_lookback_days)
@@ -565,18 +588,17 @@ def run_scan(
             scan_mode={"aws": mode},
             vendor_coverage=[v.as_json() for v in vendor_coverage] if importer else None,
         )
-        _put_json(
-            clients.s3,
-            bucket,
-            keys.state,
-            {
-                "version": STATE_VERSION,
-                "cursors": cursors,
-                "findings": list(store.items.values()),
-                "lastRunAt": started.isoformat(),
-                "rotation": deferred,
-            },
-        )
+        new_state: dict[str, Any] = {
+            "version": STATE_VERSION,
+            "cursors": cursors,
+            "findings": list(store.items.values()),
+            "lastRunAt": started.isoformat(),
+            "rotation": deferred,
+        }
+        if indexes is not None:
+            indexes.save()
+            new_state["indexSalt"] = indexes.salt
+        _put_json(clients.s3, bucket, keys.state, new_state)
         _put_json(clients.s3, bucket, f"{keys.runs}{run_id}.json", doc)
         _put_json(clients.s3, bucket, keys.latest, doc)
         if config.event_bus_arn and clients.events is not None:

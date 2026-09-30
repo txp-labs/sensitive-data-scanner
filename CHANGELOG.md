@@ -494,6 +494,30 @@ bumps the minor version. Spec changes are listed under **Spec**.
     core's `record` for coverage and findings; the listing no longer skips by
     extension (`skip_kind` is gone), and a name that says image, audio or
     video is charged to the budget as its sniff only.
+- **Component versions and the per-object index** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 1):
+  - Every adapter, every reader (`text`, `transcript`, `docx`, `xlsx`, `pptx`,
+    `pdf`, `archive-zip`, `archive-tar`, `archive-stream`, `columnar`, `avro`,
+    `rdb`, `sql`, `attributes`), the sniffer, `spec-standalone` (and each
+    class's rules) and `spec-conversation` has a version: a hash of its
+    source, written by `scripts/components.py` into
+    `sensitive_data_core/components.json`, which ships in the core. CI fails
+    when a component's source changes and the manifest is not regenerated.
+  - Each source that reads objects keeps an index in the scanner's own state
+    location (the results bucket's, the Azure state container's or the
+    Google Cloud state bucket's `state/index/`, or beside a container
+    runner's `STATE_LOCATION`). Per object, it holds an HMAC of the key, of
+    the change marker and of the content fingerprint, the detected type, the
+    readers used, the kinds no reader read, the skip reason, and the
+    component-version vector it was read with. It never holds a value. The
+    salt is kept in the state document, not in the index.
+  - SQLite, gzipped, one file per shard; about 35 MB per million objects;
+    `INDEX_MAX_OBJECTS` (10 million) per source; objects gone are swept at the
+    end of a complete pass. `OBJECT_INDEX=off` turns it off.
+  - Recorded today: S3 (with Glue tables and directory buckets), Azure Blob
+    Storage and Files, Cloud Storage, and OneDrive, SharePoint and Drive
+    files. The core's `read_object` now reports the detected type, the
+    readers used, the kinds it could not read and whether any part was a
+    conversation. Nothing changes in what a run reads or finds yet.
 
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
@@ -675,6 +699,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/ARCHITECTURE.md`: the object index and component versions, and its
+  size per million objects; `OBJECT_INDEX` and `INDEX_MAX_OBJECTS` in
+  `docs/AZURE.md`, `docs/GCP.md` and `docs/SAAS.md` ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
 - `docs/FINDINGS.md` (Archives, PDFs and disguised files), `docs/ARCHITECTURE.md`
   (What an object is: content, archives and PDFs), and `docs/AZURE.md`,
   `docs/GCP.md` and `docs/SAAS.md`: objects are read by content, archives by
@@ -691,6 +718,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- CI checks that the component manifest is current (`scripts/components.py
+  --check`, [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)); the no-leak suite
+  plants values in object keys and archive entries' names and searches every
+  byte of the object index, and each shard's SQL dump, for them. New log
+  events: `index.saved`, `index.failed`.
 - The databases runner's state location (a path, S3, signed HTTPS) moved to the
   core (`sensitive_data_core.state`), which the SaaS scanner uses too; the
   databases runner keeps its 64 KiB document and its API.

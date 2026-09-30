@@ -1,0 +1,159 @@
+{
+  "manifestVersion": 1,
+  "generator": "scripts/components.py",
+  "components": {
+    "adapter:alloydb": "8d930c5118b4",
+    "adapter:azure_blob": "310b74e6642c",
+    "adapter:azure_disk_snapshot": "734914ea185d",
+    "adapter:azure_files": "f11aaa751b4b",
+    "adapter:azure_mysql": "b8a7a04c4ff0",
+    "adapter:azure_postgresql": "b8a7a04c4ff0",
+    "adapter:azure_queue": "19e7af57cd17",
+    "adapter:azure_sql": "b8a7a04c4ff0",
+    "adapter:azure_sql_mi": "b8a7a04c4ff0",
+    "adapter:azure_table": "19e7af57cd17",
+    "adapter:backup": "ddd6838065c3",
+    "adapter:bigquery": "cc5f3c21c232",
+    "adapter:bigtable": "691629754c0c",
+    "adapter:cloud_logging": "18dda9144df9",
+    "adapter:cloudsql_mysql": "8d930c5118b4",
+    "adapter:cloudsql_postgresql": "8d930c5118b4",
+    "adapter:cloudsql_sqlserver": "8d930c5118b4",
+    "adapter:cloudwatch_logs": "7c1a15caf5fb",
+    "adapter:codecommit": "0800e1c61c6e",
+    "adapter:confluence_space": "846fced93e32",
+    "adapter:cosmosdb": "193941782002",
+    "adapter:cosmosdb_mongo": "193941782002",
+    "adapter:databricks": "a76d93253447",
+    "adapter:datastore": "ac001f01e9da",
+    "adapter:dynamodb": "31af0680cb86",
+    "adapter:ebs": "ddd6838065c3",
+    "adapter:ecr": "e88c0940adff",
+    "adapter:efs": "05e098ede366",
+    "adapter:elasticache": "b6b2b27f26e7",
+    "adapter:eventbridge_archive": "00246b212674",
+    "adapter:firehose": "1c22631f2e67",
+    "adapter:firestore": "ac001f01e9da",
+    "adapter:fsx": "05e098ede366",
+    "adapter:gce_snapshot": "d4c1a4e8283c",
+    "adapter:gcs": "968142315f12",
+    "adapter:glacier": "00246b212674",
+    "adapter:glue_table": "ff7af0f9e023",
+    "adapter:gws_alerts": "bac675c359c9",
+    "adapter:gws_drive": "ab3700817fa0",
+    "adapter:gws_gmail": "12c184db080c",
+    "adapter:gws_shared_drive": "ab3700817fa0",
+    "adapter:jira_project": "846fced93e32",
+    "adapter:key_vault": "9adeb642f87a",
+    "adapter:keyspaces": "b6b2b27f26e7",
+    "adapter:kinesis": "1c22631f2e67",
+    "adapter:lambda": "f57b1098b710",
+    "adapter:log_analytics": "27fa1124a00f",
+    "adapter:m365_mail": "4e7fcf68c628",
+    "adapter:m365_onedrive": "b294bd4beb56",
+    "adapter:m365_sharepoint": "b294bd4beb56",
+    "adapter:m365_teams_channel": "c6aa17a5aa0e",
+    "adapter:m365_teams_chat": "c6aa17a5aa0e",
+    "adapter:macie": "b2636ac8719b",
+    "adapter:memorydb": "b6b2b27f26e7",
+    "adapter:mongodb": "61d683519075",
+    "adapter:mq": "4c4314194bb7",
+    "adapter:msk": "4c4314194bb7",
+    "adapter:mysql": "57b3a1e521aa",
+    "adapter:neptune_analytics": "5c40aaa3b0c3",
+    "adapter:opensearch": "dae2fd4fd6a0",
+    "adapter:oracle": "1ba7effec627",
+    "adapter:postgresql": "2cbfa5667662",
+    "adapter:pubsub": "9a84b30ec47a",
+    "adapter:purview": "305a57cb9807",
+    "adapter:rds": "5af9dd17618a",
+    "adapter:redshift": "8703bff3df65",
+    "adapter:s3": "ff7af0f9e023",
+    "adapter:s3_directory": "b371ce9f5fdb",
+    "adapter:sagemaker": "5c40aaa3b0c3",
+    "adapter:sdp": "0976d2e20f4f",
+    "adapter:secret_manager": "ed548f116f23",
+    "adapter:secretsmanager": "b4b5ba3deed6",
+    "adapter:slack_audit": "f231f07c1fa1",
+    "adapter:slack_channel": "a073dbd072fd",
+    "adapter:slack_dm": "a073dbd072fd",
+    "adapter:snowflake": "fa7800426292",
+    "adapter:spanner": "a4f4690fd027",
+    "adapter:sqlserver": "6d15c9930c89",
+    "adapter:sqs": "1c22631f2e67",
+    "adapter:ssm": "b4b5ba3deed6",
+    "adapter:stepfunctions": "f57b1098b710",
+    "adapter:synapse_sql": "b8a7a04c4ff0",
+    "adapter:timestream": "b6b2b27f26e7",
+    "adapter:xray": "f57b1098b710",
+    "reader:archive-stream": "8ec019c96ca9",
+    "reader:archive-tar": "c241fb25ed3a",
+    "reader:archive-zip": "b35476aee5d6",
+    "reader:attributes": "e55a70e3ab28",
+    "reader:avro": "8a0e5232eaeb",
+    "reader:columnar": "e059e39c518d",
+    "reader:docx": "a8c2af0b7049",
+    "reader:pdf": "435b1d734a1d",
+    "reader:pptx": "5b91c0639db0",
+    "reader:rdb": "8f659b497d32",
+    "reader:sql": "294b940b2ff8",
+    "reader:text": "aee0554bde89",
+    "reader:transcript": "22ae7786f667",
+    "reader:xlsx": "5eb8e0844139",
+    "sniffer": "669d8dd2d182",
+    "spec-conversation": "cb8fdf2a7fec",
+    "spec-standalone": "e3a35d782e69",
+    "spec-standalone/account_number": "eb6dcbaeebc8",
+    "spec-standalone/card": "590ac475d1d0",
+    "spec-standalone/cvv": "ad65bf9617e8",
+    "spec-standalone/dob": "1b0f574feb9e",
+    "spec-standalone/pin": "16e5c626b930",
+    "spec-standalone/us_itin": "11f212f55261",
+    "spec-standalone/us_ssn": "70d14c2a94de",
+    "spec-standalone/us_ssn_last4": "d8d48d99b482"
+  },
+  "readerKinds": {
+    "archive-stream": [
+      "gzip",
+      "bzip2",
+      "xz",
+      "zstd"
+    ],
+    "archive-tar": [
+      "tar"
+    ],
+    "archive-zip": [
+      "zip"
+    ],
+    "attributes": [],
+    "avro": [
+      "avro"
+    ],
+    "columnar": [
+      "parquet",
+      "orc"
+    ],
+    "docx": [
+      "docx"
+    ],
+    "pdf": [
+      "pdf"
+    ],
+    "pptx": [
+      "pptx"
+    ],
+    "rdb": [
+      "rdb"
+    ],
+    "sql": [],
+    "text": [
+      "text"
+    ],
+    "transcript": [
+      "text"
+    ],
+    "xlsx": [
+      "xlsx"
+    ]
+  }
+}

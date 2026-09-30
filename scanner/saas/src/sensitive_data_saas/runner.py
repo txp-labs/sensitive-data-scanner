@@ -34,10 +34,11 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
+from sensitive_data_core.index import Indexes, index_salt
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
-from sensitive_data_core.state import StateStore, state_location
+from sensitive_data_core.state import StateStore, index_backend, state_location
 
 from . import __version__
 from .clients import Clients
@@ -247,6 +248,15 @@ def _scan(
     saved = _load(state, settings.site)
     cursors: dict[str, Any] = dict(saved.get("cursors") or {})
     sources = rotate(sources, saved.get("rotation"))
+    backend = index_backend(state) if state is not None and settings.object_index else None
+    indexes = (
+        Indexes(backend, index_salt(saved), max_rows=settings.index_max_objects)
+        if backend is not None
+        else None
+    )
+    for source in sources:
+        if hasattr(source, "indexes"):
+            source.indexes = indexes
     modes = dict(settings.modes)
     # #55: a vendor in `vendor` mode is read by its importer only: its stores are the
     # importer's (`vendor_mode`) or what it does not cover (`vendor_not_covered`).
@@ -333,17 +343,19 @@ def _scan(
         vendor_coverage=[v.as_json() for v in vendor_coverage] if running else None,
     )
     if state is not None:
+        new_state: dict[str, Any] = {
+            "version": STATE_VERSION,
+            "site": settings.site,
+            "cursors": cursors,
+            "findings": list(findings.items.values()),
+            "lastRunAt": started.isoformat(),
+            "rotation": deferred,
+        }
+        if indexes is not None:
+            indexes.save()
+            new_state["indexSalt"] = indexes.salt
         try:
-            state.save(
-                {
-                    "version": STATE_VERSION,
-                    "site": settings.site,
-                    "cursors": cursors,
-                    "findings": list(findings.items.values()),
-                    "lastRunAt": started.isoformat(),
-                    "rotation": deferred,
-                }
-            )
+            state.save(new_state)
         except Exception as err:  # the findings still go out; the next run starts afresh
             log_event("source.failed", source="state", error=error_name(err))
     return doc

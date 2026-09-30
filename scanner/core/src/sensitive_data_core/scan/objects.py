@@ -64,7 +64,7 @@ from ..findings import Coverage, finding_json
 from ..safety import redact_digits
 from .avro import UnsupportedCodec
 from .columnar import TableResult, needs_pyarrow, scan_table, zstd_text
-from .item import ItemResult, scan_item_text
+from .item import CONVERSATION_FORMATS, ItemResult, scan_item_text
 from .office import OfficeUnreadable, office_zip_text
 from .pdf import ImageOnly, PdfEncrypted, PdfUnreadable, pdf_text
 from .raw import printable_text
@@ -292,12 +292,28 @@ class ObjectResult:
     entries: list[Entry] = field(default_factory=list)
     inner_skipped: dict[str, int] = field(default_factory=dict)
     disguised: int = 0
+    # For the object index (#67): what the bytes are, the readers that read them (the
+    # object's and its entries'), the kinds met that no reader in this build reads, and
+    # whether any part was a conversation. Names of kinds and readers only.
+    detected: str | None = None
+    readers: frozenset[str] = frozenset()
+    unread: frozenset[str] = frozenset()
+    conversation: bool = False
 
     def __repr__(self) -> str:
         return (
             f"ObjectResult(item={self.item is not None}, table={self.table is not None}, "
             f"entries={len(self.entries)}, read={self.read}, partial={self.partial}, "
             f"skipped={self.skipped!r}, disguised={self.disguised})"
+        )
+
+    @property
+    def text_bearing(self) -> bool:
+        """Some part of the object was read as text or a table (detection ran on it)."""
+        return (
+            self.item is not None
+            or self.table is not None
+            or any(e.item is not None or e.table is not None for e in self.entries)
         )
 
 
@@ -329,9 +345,21 @@ class _Ctx:
         self.entries: list[Entry] = []
         self.skipped: dict[str, int] = {}
         self.disguised = 0
+        self.detected: str | None = None
+        self.readers: set[str] = set()
+        self.unread: set[str] = set()
+        self.conversation = False
 
     def skip(self, kind: str) -> None:
         self.skipped[kind] = self.skipped.get(kind, 0) + 1
+
+    def text_read(self, item: ItemResult, reader: str | None = None) -> None:
+        """An item read as text: `transcript` when it was a conversation, else `reader`."""
+        if item.format in CONVERSATION_FORMATS:
+            self.readers.add("transcript")
+            self.conversation = True
+        else:
+            self.readers.add(reader or "text")
 
 
 def read_object(
@@ -372,6 +400,10 @@ def read_object(
         entries=ctx.entries,
         inner_skipped=ctx.skipped,
         disguised=ctx.disguised,
+        detected=ctx.detected,
+        readers=frozenset(ctx.readers),
+        unread=frozenset(ctx.unread),
+        conversation=ctx.conversation,
     )
 
 
@@ -388,6 +420,8 @@ def _read(
 ) -> _Out:
     """One object or entry, routed by what its first bytes are."""
     kind = sniff(src.head[:SNIFF_BYTES])
+    if ctx.detected is None:
+        ctx.detected = kind
     if kind == "zip":
         return _zip(name, src, ctx, depth=depth, path=path, index=index, outer=outer)
     disguise = _disguise(ctx, name, kind)
@@ -413,22 +447,30 @@ def _leaf(
     outer: Disguise | None,
 ) -> _Out:
     if kind in MEDIA or kind == "binary":
+        ctx.unread.add(kind)
         return _Out(skipped=kind)
     if kind == "parquet_encrypted":
         return _Out(skipped="encrypted")
     if kind == "7z":
+        ctx.unread.add(kind)
         return _Out(skipped="archive_unsupported")
     if kind == "ole":
-        return _Out(skipped="encrypted" if _ole_encrypted(name, src) else "document")
+        if _ole_encrypted(name, src):
+            return _Out(skipped="encrypted")
+        ctx.unread.add(kind)
+        return _Out(skipped="document")
     if kind == "tar":
+        ctx.readers.add("archive-tar")
         return _tar(src, ctx, depth=depth, path=path, index=index, outer=outer)
     if kind == "pdf":
+        ctx.readers.add("pdf")
         return _pdf(name, src, ctx)
     if kind in ("parquet", "orc", "avro"):
         return _table(kind, src, ctx)
     data = src.all()
     if kind == "rdb":
         # A Redis snapshot: its text runs; offsets into them would point nowhere.
+        ctx.readers.add("rdb")
         item = scan_item_text(name, printable_text(data), ctx.detector)
         item.format = "rdb"
         for cf in item.findings.values():
@@ -436,6 +478,7 @@ def _leaf(
         return _Out(item=item, format="rdb")
     text = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
     item = scan_item_text(name, text, ctx.detector)
+    ctx.text_read(item)
     return _Out(item=item, format=item.format)
 
 
@@ -482,12 +525,15 @@ def _pdf(name: str, src: _Src, ctx: _Ctx) -> _Out:
 
 def _table(kind: str, src: _Src, ctx: _Ctx) -> _Out:
     if needs_pyarrow(kind) and not ctx.columnar:
+        ctx.unread.add(kind)
         return _Out(skipped="columnar")
+    ctx.readers.add("avro" if kind == "avro" else "columnar")
     f = src.file()
     try:
         table = scan_table(kind, f, ctx.detector, ctx.max_rows, ctx.columnar)
     except UnsupportedCodec:
         src.settle()
+        ctx.unread.add(kind)
         return _Out(skipped="columnar")
     except Exception:
         src.settle()
@@ -541,10 +587,12 @@ def _stream(
     It is transparent (the object, or the entry, is what it holds), and one level of
     nesting, except around a tar (`.tar.gz` is one archive)."""
     if kind == "zstd" and not ctx.columnar:
+        ctx.unread.add(kind)
         return _Out(skipped="columnar")
     if depth >= MAX_DEPTH:
         ctx.partial = True
         return _Out(skipped="archive")
+    ctx.readers.add("archive-stream")
     data = src.all()
     limit = min(max(0, ctx.inflated_left), max(len(data) * MAX_RATIO, RATIO_FLOOR))
     try:
@@ -596,6 +644,7 @@ def _counted(name: str, head: bytes, ctx: _Ctx) -> bool:
         return False
     _disguise(ctx, name, kind)
     ctx.skip(kind)
+    ctx.unread.add(kind)
     return True
 
 
@@ -637,10 +686,12 @@ def _zip(
             text_name = inner_name(name) + (".csv" if layout == "xlsx" else ".txt")
             item = scan_item_text(text_name, got.text, ctx.detector)
             item.format = layout
+            ctx.readers.add(layout)
             return _Out(item=item, format=layout, disguise=disguise)
         if depth >= MAX_DEPTH:
             ctx.partial = True
             return _Out(skipped="archive", disguise=disguise)
+        ctx.readers.add("archive-zip")
         files = [i for i in infos if not i.is_dir()]
         if files and all(i.flag_bits & 0x1 for i in files):
             return _Out(skipped="encrypted", disguise=disguise)

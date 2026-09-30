@@ -39,6 +39,11 @@ jobs:
       - name: Install
         run: uv sync --locked --python 3.12
 
+      - name: Component manifest is current (#67)
+        # Every adapter, reader, the sniffer and the spec have a version from their source;
+        # a change without a regenerated manifest fails here.
+        run: uv run python ../scripts/components.py --check
+
       - name: Lint
         run: uv run ruff check
 

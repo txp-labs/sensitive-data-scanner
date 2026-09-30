@@ -37,9 +37,16 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
-from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
+from sensitive_data_core.scan.objects import (
+    ObjectResult,
+    planned_bytes,
+    read_object,
+    record,
+    sample_point,
+)
 
 from ..resources import ResourceId, ShareTarget, azure_fields, file_resource, portal_link
 from .base import Context, key_facts
@@ -121,6 +128,7 @@ class FilesSource:
     """One share: its files, listed directory by directory, read in path order."""
 
     kind = KIND
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self,
@@ -189,10 +197,14 @@ class FilesSource:
             return SourceRun(cov, cursor, note=http_gap(err))
         seen_at = now.isoformat()
         done = True
+        generation = int(cursor.get("indexPass") or 0) + (0 if cursor.get("passStartedAt") else 1)
+        op = ObjectPass(self.indexes, self.id, self.kind, generation=generation)
         for path, size, changed in files:
             if after is not None and path <= after:
                 continue
             cov.listed += 1
+            op.seen(path)
+            marker = f"{size}|{changed.isoformat() if changed else ''}"
             if since is not None and changed is not None and changed <= since:
                 after = path
                 continue
@@ -210,17 +222,30 @@ class FilesSource:
                 break
             budget.take(want)
             try:
-                self._read(path, size, cov=cov, detector=detector, store=store, seen_at=seen_at)
+                got = self._read(
+                    path, size, cov=cov, detector=detector, store=store, seen_at=seen_at
+                )
+                op.record(path, marker=marker, got=got)
             except Exception as err:  # one bad file must not stop the pass
+                op.record(path, marker=marker, unreadable=True)
                 cov.unreadable += 1
                 log_event("item.unreadable", source=self.target, error=error_name(err))
             after = path
         if done:
             cov.pass_complete = True
-            return SourceRun(cov, {"watermark": pass_started, "passStartedAt": None})
+            op.complete()
+            return SourceRun(
+                cov, {"watermark": pass_started, "passStartedAt": None, "indexPass": generation}
+            )
         cov.backlog = True
         return SourceRun(
-            cov, {"watermark": watermark, "passStartedAt": pass_started, "after": after}
+            cov,
+            {
+                "watermark": watermark,
+                "passStartedAt": pass_started,
+                "after": after,
+                "indexPass": generation,
+            },
         )
 
     def _read(
@@ -232,7 +257,7 @@ class FilesSource:
         detector: Detector,
         store: FindingStore,
         seen_at: str,
-    ) -> None:
+    ) -> ObjectResult:
         client = self.share.get_file_client(path)
 
         def fetch(start: int, end: int) -> bytes:
@@ -258,9 +283,9 @@ class FilesSource:
             seen_at=seen_at,
             facts=facts,
         )
-        if findings is None:
-            return
-        store.replace_location(f"{self.id}\n{path}", findings)
+        if findings is not None:
+            store.replace_location(f"{self.id}\n{path}", findings)
+        return got
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:
         """Drop stored findings whose file is gone."""

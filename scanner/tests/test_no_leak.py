@@ -1444,6 +1444,53 @@ def test_no_value_leaves_archives_pdfs_or_disguised_files_in_aws(
     assert leaks(json.dumps(doc)) == []
 
 
+def index_text(files: dict[str, bytes]) -> str:
+    """Every byte of an object index, as text: each file's name, its bytes (gunzipped), and
+    each shard's SQL dump (#67)."""
+    import gzip
+    import sqlite3
+
+    parts: list[str] = []
+    for name, data in sorted(files.items()):
+        raw = gzip.decompress(data) if name.endswith(".gz") else data
+        parts += [name, raw.decode("latin-1")]
+        if name.endswith(".db.gz"):
+            conn = sqlite3.connect(":memory:")
+            conn.deserialize(raw)
+            parts += list(conn.iterdump())
+    return "\n".join(parts)
+
+
+def test_no_value_in_the_object_index(env: Env) -> None:
+    """Values planted in object keys, in archive entries' names and in the objects: the
+    object index holds none of them, in any form (#67)."""
+    objects_ = {
+        f"receipts/{CARDS['visa']}.txt": f"card {printed(CARDS['visa'])}".encode(),
+        f"hr/{dashed(SSN_A)}/roster.csv": f"ssn\n{dashed(SSN_A)}\n".encode(),
+        f"people/{SSN_B}.json": json.dumps({"ssn": SSN_B}).encode(),
+        **planted(),
+    }
+    for key, data in objects_.items():
+        env.put(key, data)
+    assert env.run(config()) is not None
+    env.put(f"receipts/{CARDS['visa']}.txt", f"card {spaced(CARDS['visa'])} again".encode())
+    assert env.run(config()) is not None
+    listed = env.clients.s3.list_objects_v2(Bucket="example-scanner-results", Prefix="state/index/")
+    files = {
+        o["Key"]: env.clients.s3.get_object(Bucket="example-scanner-results", Key=o["Key"])[
+            "Body"
+        ].read()
+        for o in listed.get("Contents", [])
+    }
+    assert any(k.endswith(".db.gz") for k in files)
+    text = index_text(files)
+    assert leaks(text) == []
+    for key in objects_:
+        for part in key.replace(".", "/").split("/"):
+            if any(ch.isdigit() for ch in part) and len(part) >= 6:
+                assert part not in text
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

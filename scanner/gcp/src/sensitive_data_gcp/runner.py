@@ -34,6 +34,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
+from sensitive_data_core.index import Indexes, PrefixBackend, index_salt
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
@@ -43,7 +44,7 @@ from .clients import Clients
 from .config import Settings
 from .sources.base import Context
 from .sources.sdp import SdpImporter
-from .state import LATEST, RUNS, STATE, GcsState
+from .state import INDEX, LATEST, RUNS, STATE, GcsState
 
 STATE_VERSION = 1
 # Kinds whose items are counted against MAX_OBJECTS_PER_RUN as well as the run's budget.
@@ -207,6 +208,14 @@ def _scan(
         saved = {}
     cursors: dict[str, Any] = dict(saved.get("cursors") or {})
     sources = rotate(sources, saved.get("rotation"))
+    indexes = (
+        Indexes(PrefixBackend(state, INDEX), index_salt(saved), max_rows=settings.index_max_objects)
+        if state is not None and settings.object_index
+        else None
+    )
+    for source in sources:
+        if hasattr(source, "indexes"):
+            source.indexes = indexes
     mode = settings.scan_mode
     importer = SdpImporter(ctx, mode) if mode != SCANNER else None
     if mode == VENDOR:
@@ -301,16 +310,17 @@ def _scan(
         vendor_coverage=[v.as_json() for v in vendor_coverage] if importer else None,
     )
     if state is not None:
-        state.put_json(
-            STATE,
-            {
-                "version": STATE_VERSION,
-                "cursors": cursors,
-                "findings": list(findings.items.values()),
-                "lastRunAt": started.isoformat(),
-                "rotation": deferred,
-            },
-        )
+        new_state: dict[str, Any] = {
+            "version": STATE_VERSION,
+            "cursors": cursors,
+            "findings": list(findings.items.values()),
+            "lastRunAt": started.isoformat(),
+            "rotation": deferred,
+        }
+        if indexes is not None:
+            indexes.save()
+            new_state["indexSalt"] = indexes.salt
+        state.put_json(STATE, new_state)
         state.put_json(f"{RUNS}{run_id}.json", doc)
         state.put_json(LATEST, doc)
     return doc
