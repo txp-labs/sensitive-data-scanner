@@ -1,4 +1,4 @@
-# The sensitive-data spec, version 0.4
+# The sensitive-data spec, version 0.5
 
 This directory is a **contract**. Three implementations follow it:
 
@@ -319,10 +319,10 @@ classed.
 
 ## Stability
 
-- `specVersion` is `"0.4"`.
+- `specVersion` is `"0.5"`.
 - A version has two parts, `major.minor`, and no patch. The findings schema
   requires `specVersion` to match `^[0-9]+\.[0-9]+$`.
-- Before 1.0, a **breaking change bumps the minor version** (0.3 to 0.4).
+- Before 1.0, a **breaking change bumps the minor version** (0.4 to 0.5).
   A change is breaking if it can change the matches for any input, or if it
   changes a file's shape. Every change is listed in the repository
   CHANGELOG.
@@ -333,6 +333,39 @@ classed.
   change to the contract.
 - An implementation declares the `specVersion` it implements and refuses to
   load a spec file with any other version.
+
+## Changes from 0.4
+
+Version 0.5 settles txp-labs/sensitive-data-scanner#75. The accuracy benchmark
+(`docs/BENCHMARK.md`) found that "social media" gave SSN and ITIN context:
+
+- "Shared on social media, post 512437788" was an SSN with high confidence;
+- in its app logs and tickets, nine-digit post and campaign ids beside
+  "social media" were the largest source of SSN false positives after the
+  reader fixes.
+
+The change can alter matches, so under [Stability](#stability) it is a minor
+bump. Every rule has vectors, near-misses included, in
+`vectors/benchmark.jsonl`.
+
+1. **"social media" is not SSN or ITIN context.** `us_ssn` and `us_itin` gain
+   the context exclusion `social[- ]media`. It is removed from the context
+   before the context words are looked for, as the last-four exclusion is.
+   - "I saw it on social media, post 512437788" matches nothing. In 0.4 it
+     was `us_ssn`, via `context`, with high confidence.
+   - "My social is 512437788, I found you on social media" is still `us_ssn`
+     by context: "social" outside "social media" still counts.
+   - A value written `ddd-dd-dddd` beside "social media" is still `us_ssn`,
+     via `shape`, with medium confidence (`standalone: formatted`).
+   - This matches the prompt side: since 0.4, "nine digit social media
+     account number" arms no SSN prompt.
+2. **`specVersion` is `"0.5"`** in both spec files and schemas. An
+   implementation of 0.4 refuses them.
+
+The other benchmark cases in `vectors/benchmark.jsonl` are already passed by
+0.4 implementations: "the Visa ending in 1784" and "born in 1985" at `low`, a
+card two turns after its prompt at `medium`, and callback and confirmation
+numbers as nothing. They pin that behavior, and are not a change.
 
 ## Changes from 0.3
 

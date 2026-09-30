@@ -6,6 +6,27 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Spec
+- **Spec 0.5** ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the accuracy benchmark;
+  every change is listed for consumers in `spec/README.md`, "Changes from
+  0.4"):
+  - `us_ssn` and `us_itin` gain the context exclusion `social[- ]media`.
+    "Shared on social media, post 512437788" matches nothing; in 0.4 it was
+    a high-confidence SSN. "social" outside "social media" is still context,
+    and a `ddd-dd-dddd` value is still an SSN by its shape.
+  - `specVersion` is `"0.5"`; the JSON Schemas follow. An implementation of
+    0.4 refuses the files.
+  - Vectors: `vectors/benchmark.jsonl`, ten cases, passed by the Python
+    engine, the Presidio path and the TypeScript package alike. Five are the
+    0.5 change and its near-misses. Five pin what the benchmark measured in
+    conversations and 0.4 already did: a card's last four and a birth year
+    after a prompt at `low`, a card two turns late at `medium`, and callback
+    and confirmation numbers as nothing.
+  - `@txp-labs/sensitive-data-spec`: `SPEC_VERSION` is `'0.5'`; `dist/` is
+    rebuilt. Stugum, which mirrors the spec, needs the new exclusion.
+  - Benchmark, stored text: `us_ssn` precision 0.781 to 1.000, `us_itin`
+    0.907 to 1.000.
+
 ### Feature
 - **Azure, step 1: the package, Blob Storage and ADLS Gen2** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
   `sensitive-data-scanner-azure` (`scanner/azure`), a Container Apps job's
@@ -665,6 +686,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
   instead of a sampled `Scan` every pass. Smaller tables, and big ones without
   PITR, keep the sampled `Scan` (never skipped for it). Exports stay within
   `MAX_EXPORTS_PER_RUN`.
+- **The run summary names what an inventory would help, and recommends daily
+  S3 Inventory** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 4 and 9):
+  - A bucket read from a weekly S3 Inventory configuration says
+    `recommendation: s3_inventory_daily`, since a change can wait a week to
+    be seen. `s3_inventory` (no configuration) now means a daily one.
+  - Azure Blob Inventory and Cloud Storage's Storage Insights reports stay
+    designed and built on demand. A container whose last complete pass listed
+    at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000) says
+    `recommendation: blob_inventory`, and a bucket past
+    `GCS_INVENTORY_MIN_OBJECTS` says `recommendation: storage_insights`. The
+    scanner never configures one.
 - **Stored text: context goes to the value it labels, and no further**
   ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the
   benchmark). Four fixes to the readers; the spec is unchanged:
@@ -835,7 +867,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
-  `relisted` in coverage.
+  `relisted` in coverage; the store recommendations `s3_inventory_daily`,
+  `blob_inventory` and `storage_insights`.
 - Version **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
@@ -901,6 +934,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- Rescans ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 1, 7 and 8): `docs/ARCHITECTURE.md` says
+  why the one-time `unindexed` read after an upgrade is kept (within 25% of
+  the budget; it is how objects read before the index get the improved
+  detection), and that stores with no cheap change marker (OpenSearch,
+  Firestore, Cosmos DB, Bigtable, Redshift, Spanner, MongoDB, small DynamoDB
+  tables) keep sampling each pass, as accepted. `docs/DATABASES.md` and
+  `docs/AZURE.md` add `VIEW DATABASE STATE` (`VIEW DATABASE PERFORMANCE STATE`
+  on Azure SQL) to the SQL Server read-only user, so tables unchanged since
+  their last read are skipped; the user check already counts it as a read,
+  and a test now says so.
 - `README.md` rewritten to say what the scanner does, accurately: a capability
   matrix by platform (read by default, opt-in, reported as a gap), what it
   detects, scanner, vendor or both, how it stays safe, efficiency, how to
