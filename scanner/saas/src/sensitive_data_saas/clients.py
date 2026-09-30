@@ -16,6 +16,7 @@ from .federation import workload_token
 from .google import Delegation, GoogleApi, IamSigner, KeySigner
 from .graph import Graph
 from .http import Http
+from .slack import Slack
 
 
 def _session() -> Any:
@@ -25,7 +26,7 @@ def _session() -> Any:
 
 
 class Clients:
-    """The session, Graph as the app, and Google Workspace's delegation."""
+    """The session, Graph as the app, Google Workspace's delegation, and Slack's token."""
 
     def __init__(
         self,
@@ -46,6 +47,7 @@ class Clients:
         self._http: Http | None = None
         self._graph: Graph | None = None
         self._delegation: Delegation | None = None
+        self._slack: Slack | None = None
 
     def __repr__(self) -> str:
         return "Clients()"
@@ -119,3 +121,12 @@ class Clients:
     def google(self, user: str, scopes: tuple[str, ...]) -> GoogleApi:
         """Google's APIs as `user` in scope, for read-only `scopes`."""
         return GoogleApi(self.delegation, user, scopes)
+
+    @property
+    def slack(self) -> Slack:
+        if self._slack is None:
+            sl = self.settings.slack
+            if sl is None:
+                raise RuntimeError("slack is not configured")
+            self._slack = Slack(self.http, sl.token)
+        return self._slack

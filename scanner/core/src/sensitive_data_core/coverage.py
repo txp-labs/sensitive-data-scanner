@@ -193,6 +193,8 @@ NOTES = {
     "protected_api": ("skipped", "protected_api"),
     "not_provisioned": ("skipped", "not_provisioned"),
     "throttled": ("deferred", "throttled"),
+    # (1.8) A Slack channel the app's bot was not invited to (joining would be a write).
+    "not_a_member": ("skipped", "not_a_member"),
 }
 
 

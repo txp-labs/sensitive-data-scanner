@@ -71,6 +71,18 @@ wrong setting is reported by a fixed code, never by its value.
   My Drive are read.
 - `GWS_SHARED_DRIVES`: shared drive ids, or `all` (every shared drive, listed
   with the administrator's domain access).
+
+**Slack** (on when `SLACK_TOKEN_FILE` is set)
+
+- `SLACK_TOKEN_FILE`: the Slack app's token, in a file: a bot token (`xoxb-`,
+  read scopes only), or for the Discovery API an org-level token with
+  `discovery:read`.
+- `SLACK_CHANNELS`: channel ids to read (default: every channel the token can
+  list).
+- `SLACK_EKM_KEY_ID`: the Slack Enterprise Key Management key's id, when the
+  organization uses EKM: findings then say `customer_managed_key`, hashed.
+- `slack_dm` (direct and group messages, through the Discovery API on
+  Enterprise Grid) is opt-in: name it in `DISCOVER`.
 """
 
 from __future__ import annotations
@@ -103,14 +115,17 @@ M365_KINDS: tuple[str, ...] = (
     "m365_teams_chat",
 )
 GWS_KINDS: tuple[str, ...] = ("gws_gmail", "gws_drive", "gws_shared_drive")
-OPT_IN_KINDS: frozenset[str] = frozenset({"m365_teams_channel", "m365_teams_chat"})
-KINDS: tuple[str, ...] = (*M365_KINDS, *GWS_KINDS)
+SLACK_KINDS: tuple[str, ...] = ("slack_channel", "slack_dm")
+OPT_IN_KINDS: frozenset[str] = frozenset({"m365_teams_channel", "m365_teams_chat", "slack_dm"})
+KINDS: tuple[str, ...] = (*M365_KINDS, *GWS_KINDS, *SLACK_KINDS)
 KIND_ALIASES = {
     **{k: k for k in KINDS},
     "gmail": "gws_gmail",
     "drive": "gws_drive",
     "shared_drive": "gws_shared_drive",
     "shared_drives": "gws_shared_drive",
+    "slack": "slack_channel",
+    "dms": "slack_dm",
     "mail": "m365_mail",
     "exchange": "m365_mail",
     "onedrive": "m365_onedrive",
@@ -181,6 +196,16 @@ class GwsSettings:
 
 
 @dataclass(frozen=True)
+class SlackSettings:
+    token: Secret = field(repr=False)
+    channels: tuple[str, ...] = ()
+    ekm_key_id: str | None = field(default=None, repr=False)
+
+    def __repr__(self) -> str:
+        return f"SlackSettings(channels={len(self.channels)})"
+
+
+@dataclass(frozen=True)
 class Settings:
     site: str
     discover: tuple[str, ...] = ()
@@ -205,6 +230,10 @@ class Settings:
     findings_file: str | None = None
     m365: M365Settings | None = None
     gws: GwsSettings | None = None
+    slack: SlackSettings | None = None
+    # Every kind the configured vendors have (an opt-in kind left out of `discover` is
+    # reported `read_not_configured`).
+    configured: tuple[str, ...] = ()
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -401,6 +430,24 @@ def _gws(e: Mapping[str, str]) -> GwsSettings | None:
     )
 
 
+def _slack(e: Mapping[str, str]) -> SlackSettings | None:
+    path = _file(e.get("SLACK_TOKEN_FILE"), "slack_token_file")
+    if path is None:
+        if e.get("SLACK_TOKEN") or e.get("SLACK_BOT_TOKEN"):
+            raise ConfigError("slack_token_in_env")
+        return None
+    token = read_secret(Path(path))
+    if not re.match(r"^xox[bpe]-[A-Za-z0-9-]{10,400}$", token):
+        raise ConfigError("slack_token")
+    channels = _list(e.get("SLACK_CHANNELS"))
+    if any(not re.match(r"^[CG][A-Z0-9]{6,20}$", c) for c in channels):
+        raise ConfigError("slack_channels")
+    ekm = (e.get("SLACK_EKM_KEY_ID") or "").strip() or None
+    if ekm is not None and not re.match(r"^[A-Za-z0-9._:/-]{1,300}$", ekm):
+        raise ConfigError("slack_ekm_key_id")
+    return SlackSettings(Secret(token), channels, ekm)
+
+
 def default_kinds(configured: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(k for k in configured if k not in OPT_IN_KINDS)
 
@@ -432,9 +479,11 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         raise ConfigError("scanner_site")
     m365 = _m365(e)
     gws = _gws(e)
+    slack = _slack(e)
     configured: tuple[str, ...] = (
         *(M365_KINDS if m365 is not None else ()),
         *(GWS_KINDS if gws is not None else ()),
+        *(SLACK_KINDS if slack is not None else ()),
     )
     if not configured:
         raise ConfigError("no_vendor")
@@ -493,4 +542,6 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         findings_file=findings_file,
         m365=m365,
         gws=gws,
+        slack=slack,
+        configured=configured,
     )

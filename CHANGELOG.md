@@ -382,6 +382,21 @@ bumps the minor version. Spec changes are listed under **Spec**.
     owner's store; shared drives read as a member administrator.
   - Every Gmail and Drive call is to `users/me`: no address in a URL, a
     cursor or a log. Links to Drive files by id; Gmail has none.
+- **SaaS, step 3: Slack** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
+  channels (`slack_channel`), with their threads, legacy attachments' text and
+  files, read with a Slack app of the customer's own holding only
+  `channels:read`, `groups:read`, `channels:history`, `groups:history` and
+  `files:read` (docs/SAAS.md has the manifest). The bot reads the channels it
+  was invited to; the others are `not_a_member` (joining would be a write).
+  Direct and group messages (`slack_dm`, opt-in) through the Discovery API on
+  Enterprise Grid (`discovery:read`). The token comes from a mounted file only
+  (`SLACK_TOKEN_FILE`) and goes to `slack.com` and `files.slack.com` only;
+  Slack's `{"ok": false, "error"}` names a failure; `Retry-After` is honored;
+  channels are read newest first down to the last complete read, capped per
+  channel and resumed below where a run stopped. `SLACK_EKM_KEY_ID` (Slack
+  EKM) makes findings `customer_managed_key`, hashed. An opt-in kind of a
+  configured vendor left out of `DISCOVER` is now reported
+  `read_not_configured` (one store, `*`), not left silent.
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -481,12 +496,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `tenantHash`, `ownerHash`, `container`, `channel`, `itemId`, `itemHash`,
   `part`, `name`, `column`), `vendor`, `tenantHash` and `ownerHash` on a
   store, the `m365_mail`, `m365_onedrive`, `m365_sharepoint`,
-  `m365_teams_channel`, `m365_teams_chat`, `gws_gmail`, `gws_drive` and
-  `gws_shared_drive` kinds, the `google_workspace` vendor, the `docx`, `xlsx`
+  `m365_teams_channel`, `m365_teams_chat`, `gws_gmail`, `gws_drive`,
+  `gws_shared_drive`, `slack_channel` and `slack_dm` kinds, the
+  `google_workspace` and `slack` vendors, the `docx`, `xlsx`
   and `pptx` formats, the `encrypted`, `too_large` and `linked_item` skip kinds,
   the `scope_unverified`, `unscoped_grant`, `protected_api`,
-  `not_provisioned` and `throttled` reasons, and Outlook on the web,
-  SharePoint, Teams and Google Drive links.
+  `not_provisioned`, `throttled` and `not_a_member` reasons, and Outlook on the web,
+  SharePoint, Teams, Google Drive and Slack links.
 - `schemaVersion` is now **1.7**, additive: Azure Files' `azure_files` kind
   and `azure_file` resource, and the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and

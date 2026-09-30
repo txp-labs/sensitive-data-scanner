@@ -40,7 +40,7 @@ from sensitive_data_core.state import StateStore, state_location
 
 from . import __version__
 from .clients import Clients
-from .config import Settings
+from .config import OPT_IN_KINDS, Settings
 from .sources.base import Context
 
 STATE_VERSION = 1
@@ -83,6 +83,11 @@ def discover(ctx: Context) -> Discovery:
     from .sources.saas import ADAPTERS  # noqa: PLC0415 - the adapters import the runner's parts
 
     out = Discovery()
+    for kind in ctx.settings.configured:
+        if kind not in ctx.settings.discover and kind in OPT_IN_KINDS:
+            off = Store(kind, "*", origin="config")
+            off.skip("read_not_configured")
+            out.stores.append(off)
     for kind in ctx.settings.discover:
         adapter = ADAPTERS.get(kind)
         if adapter is None:

@@ -10,6 +10,8 @@ only read (`tests/test_saas_scopes.py`, with the release).
 - **Google Workspace**: OAuth scopes the Admin console's domain-wide
   delegation grants the service account's client id, and the scanner requests
   per user.
+- **Slack**: the scopes of the customer's own Slack app (its manifest), which
+  its token carries.
 """
 
 from __future__ import annotations
@@ -32,6 +34,11 @@ GWS_DIRECTORY = (
 GWS_GMAIL = ("https://www.googleapis.com/auth/gmail.readonly",)
 GWS_DRIVE = ("https://www.googleapis.com/auth/drive.readonly",)
 
+# Slack: the app's bot token scopes, and the org-level Discovery API's (opt-in).
+SLACK_CHANNELS = ("channels:read", "groups:read", "channels:history", "groups:history")
+SLACK_FILES = ("files:read",)
+SLACK_DISCOVERY = ("discovery:read",)
+
 REQUESTED: dict[str, tuple[str, ...]] = {
     "m365": (
         *M365_PEOPLE,
@@ -44,4 +51,5 @@ REQUESTED: dict[str, tuple[str, ...]] = {
         *M365_TEAMS_CHATS,
     ),
     "google_workspace": (*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE),
+    "slack": (*SLACK_CHANNELS, *SLACK_FILES, *SLACK_DISCOVERY),
 }
