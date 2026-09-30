@@ -10,6 +10,7 @@ any other API (`Cloud.route`).
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import re
@@ -495,3 +496,207 @@ class Databases:
     def alloy_post(self, req: Req) -> Resp:
         self.certificates.append(req.url)
         return Resp(200, {"caCert": CA, "pemCertificateChain": []})
+
+
+# ------------------------------------------------------ Firestore, Datastore, Spanner, Bigtable
+
+
+def fs_value(v: Any) -> dict[str, Any]:
+    """A plain value as a Firestore (or Datastore) `Value`."""
+    if isinstance(v, bytes):
+        return {"bytesValue": base64.b64encode(v).decode()}
+    if isinstance(v, bool):
+        return {"booleanValue": v}
+    if isinstance(v, int):
+        return {"integerValue": str(v)}
+    if isinstance(v, dict):
+        return {"mapValue": {"fields": {k: fs_value(x) for k, x in v.items()}}}
+    if isinstance(v, list):
+        return {"arrayValue": {"values": [fs_value(x) for x in v]}}
+    if v is None:
+        return {"nullValue": None}
+    return {"stringValue": str(v)}
+
+
+def asset(kind: str, name: str, number: str = PROJECT_NUMBER) -> dict[str, Any]:
+    return {"name": name, "assetType": kind, "project": f"projects/{number}"}
+
+
+def b64(v: Any) -> str:
+    return base64.b64encode(v if isinstance(v, bytes) else str(v).encode()).decode()
+
+
+class NoSql:
+    """Firestore, Datastore, Spanner and Bigtable's REST APIs for `Cloud`."""
+
+    def __init__(self, cloud: Cloud) -> None:
+        # Firestore databases: (project, database) -> {"type", "kms", "collections": {name: docs}}
+        self.firestore: dict[tuple[str, str], dict[str, Any]] = {}
+        # Spanner databases: path -> {"dialect", "kms", "tables": {name: rows}, "bytes": col}
+        self.spanner: dict[str, dict[str, Any]] = {}
+        # Bigtable tables: path -> rows {key: {"family:qualifier": value}}
+        self.bigtable: dict[str, dict[str, dict[str, Any]]] = {}
+        self.bigtable_keys: dict[str, str] = {}
+        self.sql: list[dict[str, Any]] = []
+        self.sessions: list[str] = []
+        self.deleted: list[str] = []
+        self.queries: list[dict[str, Any]] = []
+        self.fail: dict[str, Resp] = {}
+        cloud.route("GET", r"^https://firestore\.googleapis\.com/", self.firestore_get)
+        cloud.route("POST", r"^https://firestore\.googleapis\.com/", self.firestore_post)
+        cloud.route("POST", r"^https://datastore\.googleapis\.com/", self.datastore_post)
+        cloud.route("GET", r"^https://spanner\.googleapis\.com/", self.spanner_get)
+        cloud.route("POST", r"^https://spanner\.googleapis\.com/", self.spanner_post)
+        cloud.route("DELETE", r"^https://spanner\.googleapis\.com/", self.spanner_delete)
+        cloud.route("GET", r"^https://bigtableadmin\.googleapis\.com/", self.bigtable_admin)
+        cloud.route("POST", r"^https://bigtable\.googleapis\.com/", self.bigtable_read)
+
+    def _path(self, req: Req) -> list[str]:
+        path = urllib.parse.urlsplit(req.url).path
+        return [urllib.parse.unquote(p) for p in path.split("/")]
+
+    def _failed(self, req: Req) -> Resp | None:
+        return next((r for k, r in self.fail.items() if k in urllib.parse.unquote(req.url)), None)
+
+    # ------------------------------------------------------------------ Firestore
+
+    def firestore_get(self, req: Req) -> Resp:
+        if (got := self._failed(req)) is not None:
+            return got
+        parts = self._path(req)  # /v1/projects/p/databases/d
+        db = self.firestore.get((parts[3], parts[5]))
+        if db is None:
+            return error(404, "NOT_FOUND")
+        meta: dict[str, Any] = {"type": db["type"]}
+        if db.get("kms"):
+            meta["cmekConfig"] = {"kmsKeyName": db["kms"]}
+        return Resp(200, meta)
+
+    def firestore_post(self, req: Req) -> Resp:
+        if (got := self._failed(req)) is not None:
+            return got
+        parts = self._path(req)
+        db = self.firestore[(parts[3], parts[5])]
+        self.queries.append(req.body)
+        if req.url.endswith(":listCollectionIds"):
+            return Resp(200, {"collectionIds": sorted(db["collections"])})
+        name = req.body["structuredQuery"]["from"][0]["collectionId"]
+        limit = req.body["structuredQuery"]["limit"]
+        docs = db["collections"][name][:limit]
+        return Resp(
+            200,
+            [
+                {"document": {"name": f"x/{i}", "fields": {k: fs_value(v) for k, v in d.items()}}}
+                for i, d in enumerate(docs)
+            ]
+            or [{"readTime": "2026-09-29T00:00:00Z"}],
+        )
+
+    def datastore_post(self, req: Req) -> Resp:
+        if (got := self._failed(req)) is not None:
+            return got
+        project = self._path(req)[3].removesuffix(":runQuery")
+        database = req.body.get("databaseId") or "(default)"
+        db = self.firestore[(project, database)]
+        self.queries.append(req.body)
+        kind = req.body["query"]["kind"][0]["name"]
+        limit = req.body["query"]["limit"]
+        if kind == "__kind__":
+            names = [*sorted(db["collections"]), "__Stat_Total__"]
+            results: list[dict[str, Any]] = [
+                {"entity": {"key": {"path": [{"kind": "__kind__", "name": n}]}}} for n in names
+            ]
+        else:
+            results = [
+                {"entity": {"properties": {k: fs_value(v) for k, v in e.items()}}}
+                for e in db["collections"][kind][:limit]
+            ]
+        return Resp(200, {"batch": {"entityResults": results}})
+
+    # ------------------------------------------------------------------ Spanner
+
+    def _spanner_db(self, parts: list[str]) -> tuple[str, dict[str, Any]] | None:
+        path = "/".join(parts[2:8])
+        db = self.spanner.get(path)
+        return (path, db) if db is not None else None
+
+    def spanner_get(self, req: Req) -> Resp:
+        if (got := self._failed(req)) is not None:
+            return got
+        found = self._spanner_db(self._path(req))
+        if found is None:
+            return error(404, "NOT_FOUND")
+        db = found[1]
+        meta: dict[str, Any] = {"state": db.get("state", "READY"), "databaseDialect": db["dialect"]}
+        if db.get("kms"):
+            meta["encryptionConfig"] = {"kmsKeyName": db["kms"]}
+        return Resp(200, meta)
+
+    def spanner_post(self, req: Req) -> Resp:
+        if (got := self._failed(req)) is not None:
+            return got
+        parts = self._path(req)
+        if parts[-1] == "sessions":
+            name = "/".join(parts[2:]) + f"/s{len(self.sessions)}"
+            self.sessions.append(name)
+            return Resp(200, {"name": name})
+        found = self._spanner_db(parts)
+        assert found is not None and parts[-1].endswith(":executeSql")
+        db = found[1]
+        self.sql.append(req.body)
+        sql = req.body["sql"]
+        if "information_schema.tables" in sql:
+            schema = "public" if db["dialect"] == "POSTGRESQL" else ""
+            names = ["table_schema", "table_name"]
+            rows = [[schema, t] for t in sorted(db["tables"])]
+        else:
+            m = re.search(r'[`"]([^`"]+)[`"] LIMIT (\d+)$', sql)
+            assert m, sql
+            data = db["tables"][m[1]][: int(m[2])]
+            names = list(dict.fromkeys(k for r in data for k in r))
+            rows = [[r.get(n) for n in names] for r in data]
+        fields = [
+            {"name": n, "type": {"code": "BYTES" if n == db.get("bytes") else "STRING"}}
+            for n in names
+        ]
+        return Resp(200, {"metadata": {"rowType": {"fields": fields}}, "rows": rows})
+
+    def spanner_delete(self, req: Req) -> Resp:
+        self.deleted.append(urllib.parse.urlsplit(req.url).path)
+        return Resp(200, {})
+
+    # ------------------------------------------------------------------ Bigtable
+
+    def bigtable_admin(self, req: Req) -> Resp:
+        parts = self._path(req)  # /v2/projects/p/instances/i/clusters
+        key = self.bigtable_keys.get("/".join(parts[2:6]))
+        cluster: dict[str, Any] = {"name": "c1"}
+        if key:
+            cluster["encryptionConfig"] = {"kmsKeyName": key}
+        return Resp(200, {"clusters": [cluster]})
+
+    def bigtable_read(self, req: Req) -> Resp:
+        if (got := self._failed(req)) is not None:
+            return got
+        path = urllib.parse.unquote(urllib.parse.urlsplit(req.url).path)
+        table = path.removeprefix("/v2/").removesuffix(":readRows")
+        self.queries.append(req.body)
+        rows = self.bigtable[table]
+        chunks: list[dict[str, Any]] = []
+        for key, cells in list(rows.items())[: int(req.body["rowsLimit"])]:
+            for i, (column, v) in enumerate(cells.items()):
+                family, qualifier = column.split(":", 1)
+                chunk: dict[str, Any] = {
+                    "familyName": family,
+                    "qualifier": b64(qualifier),
+                    "timestampMicros": "1",
+                    "value": b64(v),
+                }
+                if i == 0:
+                    chunk["rowKey"] = b64(key)
+                if i == len(cells) - 1:
+                    chunk["commitRow"] = True
+                chunks.append(chunk)
+        # Two messages, as the stream sends them.
+        half = len(chunks) // 2
+        return Resp(200, [{"chunks": chunks[:half]}, {"chunks": chunks[half:]}])

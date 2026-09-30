@@ -15,6 +15,10 @@ its value.
 - `DISCOVER`: the kinds to discover (`gcs`, `bigquery`, ...; `all`); by default,
   every kind.
 - `BIGQUERY_MAX_ROWS`: rows read per BigQuery table (`tabledata.list`).
+- `DOCUMENTS_MAX_PER_COLLECTION`, `DOCUMENTS_MAX_COLLECTIONS`: Firestore
+  documents (Datastore entities) sampled per collection (kind), and the
+  collections (kinds) read per database.
+- `BIGTABLE_MAX_ROWS`: rows sampled per Bigtable table.
 - `GCP_DB_READ`: the database kinds that are read (`cloudsql_postgresql`,
   `cloudsql_mysql`, `alloydb`, or `all`); off by default, since each database
   needs an IAM database user for the service account.
@@ -66,7 +70,15 @@ DATABASE_KINDS: tuple[str, ...] = (
     "alloydb",
 )
 # Every kind this package discovers, and the ones discovered by default.
-KINDS: tuple[str, ...] = ("gcs", "bigquery", *DATABASE_KINDS)
+KINDS: tuple[str, ...] = (
+    "gcs",
+    "bigquery",
+    "firestore",
+    "datastore",
+    "spanner",
+    "bigtable",
+    *DATABASE_KINDS,
+)
 DEFAULT_KINDS: tuple[str, ...] = KINDS
 # Rule and DISCOVER prefixes: each kind, and shorter names for it.
 KIND_ALIASES = {
@@ -81,6 +93,7 @@ KIND_ALIASES = {
     "mysql": "cloudsql_mysql",
     "sqlserver": "cloudsql_sqlserver",
     "alloy": "alloydb",
+    "documents": "firestore",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -132,6 +145,11 @@ class Settings:
     findings_file: str | None = None
     # BigQuery: rows read per table with tabledata.list.
     bigquery_max_rows: int = 1000
+    # Firestore and Datastore: documents (entities) sampled per collection (kind), and how
+    # many collections; Bigtable: rows sampled per table.
+    documents_max: int = 500
+    documents_max_collections: int = 200
+    bigtable_max_rows: int = 1000
     # Cloud SQL and AlloyDB (opt-in): which kinds are read, as whom, and how much.
     db_read: tuple[str, ...] = ()
     db_principal: str | None = None
@@ -300,6 +318,9 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         pubsub_topic=topic,
         findings_file=findings_file,
         bigquery_max_rows=_int(e.get("BIGQUERY_MAX_ROWS"), 1000, 1, 100_000),
+        documents_max=_int(e.get("DOCUMENTS_MAX_PER_COLLECTION"), 500, 1, 10_000),
+        documents_max_collections=_int(e.get("DOCUMENTS_MAX_COLLECTIONS"), 200, 1, 5000),
+        bigtable_max_rows=_int(e.get("BIGTABLE_MAX_ROWS"), 1000, 1, 100_000),
         db_read=db_read,
         db_principal=principal,
         db_schemas=_list(e.get("DB_SCHEMAS")),

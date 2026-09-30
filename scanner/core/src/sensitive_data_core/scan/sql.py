@@ -39,6 +39,9 @@ SYSTEM_SCHEMAS = {
     "sqlserver": ("sys", "INFORMATION_SCHEMA"),
     "snowflake": ("INFORMATION_SCHEMA",),
     "databricks": ("information_schema",),
+    # Spanner: GoogleSQL's default schema is the empty name; its catalogs are these.
+    "spanner": ("INFORMATION_SCHEMA", "SPANNER_SYS"),
+    "spanner_pg": ("information_schema", "spanner_sys", "pg_catalog"),
 }
 
 
@@ -72,6 +75,10 @@ SQLSERVER = Dialect("sqlserver", "[", "%({name})s", quote_end="]", limit="top")
 ORACLE = Dialect("oracle", '"', ":{name}", limit="fetch")
 SNOWFLAKE = Dialect("snowflake", '"', "%({name})s")
 DATABRICKS = Dialect("databricks", "`", ":{name}")
+# Spanner, over its REST API (a caller's `execute` binds the named parameters). A
+# PostgreSQL-dialect database takes no named parameters: its schemas are never bound.
+SPANNER = Dialect("spanner", "`", "@{name}")
+SPANNER_PG = Dialect("spanner_pg", '"', "@{name}")
 
 
 def tables_sql(dialect: Dialect, schemas: tuple[str, ...]) -> tuple[str, Params]:
@@ -119,8 +126,9 @@ def tables_sql(dialect: Dialect, schemas: tuple[str, ...]) -> tuple[str, Params]
 
 
 def sample_sql(dialect: Dialect, schema: str, table: str, limit: int) -> str:
-    """The one statement that reads data: a sample of rows, by quoted identifiers."""
-    name = f"{dialect.ident(schema)}.{dialect.ident(table)}"
+    """The one statement that reads data: a sample of rows, by quoted identifiers. A table
+    in a default schema with no name (Spanner's GoogleSQL) is named alone."""
+    name = f"{dialect.ident(schema)}.{dialect.ident(table)}" if schema else dialect.ident(table)
     n = int(limit)
     if dialect.limit == "top":
         return f"SELECT TOP ({n}) * FROM {name}"  # noqa: S608 - quoted identifiers

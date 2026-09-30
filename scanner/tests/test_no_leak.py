@@ -2168,3 +2168,51 @@ def test_no_value_leaves_cloud_sql_or_alloydb(capsys: pytest.CaptureFixture[str]
     for where, blob in {"document": json.dumps(doc), "logs": out, "reprs": repr(s)}.items():
         assert leaks(blob) == [], where
         assert TOKEN not in blob and SSN_B not in blob and SSN_A not in blob, where
+
+
+def test_no_value_leaves_firestore_spanner_or_bigtable(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in documents, rows and cells, and in database, collection, field, instance,
+    table, column, row key and qualifier names, and Google's error messages: none leave."""
+    from gcp_fakes import NOW, Cloud, NoSql, asset, error, project_row, settings
+    from sensitive_data_gcp.runner import run_scan
+
+    project, number = f"p-{SSN_A}", "421000000079"
+    fs_db, ds_db = f"db-{CARDS['visa']}", f"ds-{dashed(SSN_B)}"
+    inst, sdb, bt = f"i-{SSN_A}", f"d-{CARDS['mir']}", f"t-{SSN_A}"
+    c = Cloud()
+    n = NoSql(c)
+    c.assets["cloudresourcemanager.googleapis.com/Project"] = [project_row(project, number)]
+    fs = "firestore.googleapis.com/Database"
+    c.assets[fs] = [
+        asset(fs, f"//firestore.googleapis.com/projects/{project}/databases/{fs_db}", number),
+        asset(fs, f"//firestore.googleapis.com/projects/{project}/databases/{ds_db}", number),
+        asset(fs, f"//firestore.googleapis.com/projects/{project}/databases/x-{SSN_A}", number),
+    ]
+    docs = [{f"card_{CARDS['amex']}": CARDS["discover"], f"s_{SSN_B}": dashed(SSN_A)}]
+    n.firestore[(project, fs_db)] = {
+        "type": "FIRESTORE_NATIVE",
+        "collections": {f"c_{SSN_B}": docs},
+    }
+    n.firestore[(project, ds_db)] = {"type": "DATASTORE_MODE", "collections": {f"k_{SSN_B}": docs}}
+    n.fail[f"x-{SSN_A}"] = error(500, "INTERNAL", message=f"failed on {fs_db} {CARDS['jcb']}")
+    sp = "spanner.googleapis.com/Database"
+    spath = f"projects/{project}/instances/{inst}/databases/{sdb}"
+    c.assets[sp] = [asset(sp, f"//spanner.googleapis.com/{spath}", number)]
+    n.spanner[spath] = {"dialect": "GOOGLE_STANDARD_SQL", "tables": {f"t_{SSN_B}": docs}}
+    btt = "bigtableadmin.googleapis.com/Table"
+    bpath = f"projects/{project}/instances/{inst}/tables/{bt}"
+    c.assets[btt] = [asset(btt, f"//bigtableadmin.googleapis.com/{bpath}", number)]
+    n.bigtable[bpath] = {
+        f"k#{CARDS['visa']}": {f"f:q_{SSN_B}": f"card {CARDS['mastercard']}"},
+    }
+    s = settings(DISCOVER="firestore,datastore,spanner,bigtable")
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, c.clients(), detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    services = {f["resource"]["service"] for f in doc["findings"]}
+    assert services == {"firestore", "datastore", "spanner", "bigtable"}
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob and SSN_A not in blob and CARDS["amex"] not in blob, where
