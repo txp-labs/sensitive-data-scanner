@@ -2,7 +2,7 @@
 
 The SaaS scanner runs **in your own environment**: a container you schedule on
 ECS, Azure Container Apps, Cloud Run or Kubernetes, with **read-only** grants
-to your SaaS tenants: Microsoft 365 and Google Workspace. It samples mail, files and messages, and sends **findings
+to your SaaS tenants: Microsoft 365, Google Workspace and Slack. It samples mail, files and messages, and sends **findings
 only, never values** ([FINDINGS.md](FINDINGS.md), schema 1.8). **Mermera's own
 servers never read your SaaS content for this**: they receive findings, the
 same as from the cloud scanners, so they stay out of what your content is in
@@ -30,6 +30,8 @@ and its own image (`docker build --target saas`).
   reason**: `access_denied`, `scope_unverified` or `unscoped_grant` (mail),
   `protected_api` (Teams), `not_provisioned` (no mailbox or drive),
   `throttled` (the vendor kept asking to wait; the next run goes on),
+  `not_a_member` (a Slack channel the app's bot was not invited to),
+  `read_not_configured` (an opt-in kind not named in `DISCOVER`),
   `deferred` (the budget), `denied` or `not_allowed` (your rules).
 - **Budgets and sampling**: the core's run budget (items, bytes, time) shared
   among the stores, a cap per mailbox, drive and channel per run, a stable
@@ -289,6 +291,71 @@ Google encrypts Workspace data with its own keys (`service_managed`). A file
 under Workspace client-side encryption is ciphertext to the API: it is not
 read (counted by kind).
 
+## Slack
+
+| Kind (`DISCOVER`) | Store | Read with (the app's scopes) | Default |
+|---|---|---|---|
+| `slack_channel` (`slack`) | A public or private channel | `channels:read`, `groups:read` (to list), `channels:history`, `groups:history`, `files:read` | read, in the channels the app's bot is a member of |
+| `slack_dm` (`dms`) | Direct and group messages, one store per organization | `discovery:read` (the Discovery API, Enterprise Grid only) | **off**: name it in `DISCOVER` |
+
+### Consent: a Slack app of your own, read scopes only
+
+Create an app from this manifest (**Your apps > Create New App > From an app
+manifest**), install it to the workspace, and invite its bot to the channels
+to scan (`/invite @Sensitive data scanner`). The scanner never joins a channel
+itself: `channels:join` would be a write, and is not in the manifest.
+
+```yaml
+display_information:
+  name: Sensitive data scanner
+features:
+  bot_user:
+    display_name: Sensitive data scanner
+oauth_config:
+  scopes:
+    bot:
+      - channels:read
+      - groups:read
+      - channels:history
+      - groups:history
+      - files:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+```
+
+Put the bot token (`xoxb-…`) in a file on a mounted secret volume and set
+`SLACK_TOKEN_FILE`. `SLACK_TOKEN` or `SLACK_BOT_TOKEN` in the environment is
+refused. `SLACK_CHANNELS` limits the scan to named channel ids. A channel
+the bot is not a member of is `not_a_member`.
+
+**Direct messages** are readable only through Slack's **Discovery API**, on
+**Enterprise Grid**, by an org-level app Slack has approved for
+`discovery:read` (Slack grants it to eDiscovery and DLP partners and to
+organizations on request). Its token (`xoxp-…`, in `SLACK_TOKEN_FILE`) reads
+`discovery.conversations.list` (`only_im`, `only_mpim`) and
+`discovery.conversations.history`. Until you have it, name `slack_dm` in
+`DISCOVER` only to see it as `access_denied` (`not_allowed_token_type` or
+`missing_scope`); left out, it is `read_not_configured`.
+
+### What is read
+
+Each channel's messages, newest first, down to what the last complete read
+saw (the first run: `LOOKBACK_DAYS`), with each thread's replies read along
+with its first message (a reply added later to a thread already read is not
+seen), a message's legacy attachments' text, and its files, downloaded from
+`files.slack.com` with ranged GETs and read by the core's readers (a file
+hosted elsewhere is `linked_item`). At most `MESSAGES_MAX_PER_CHANNEL`
+messages a channel a run; the next run goes on below where this one stopped.
+Slack's `Retry-After` is honored. The token is sent to `slack.com` and
+`files.slack.com` only.
+
+Slack encrypts its data with its own keys (`service_managed`); with **Slack
+Enterprise Key Management**, set `SLACK_EKM_KEY_ID` to your key's id: findings
+say `customer_managed_key`, with its hash. Findings link to the channel in
+Slack (`https://app.slack.com/client/<team>/<channel>`); a direct message has
+no link.
+
 ## Findings
 
 A SaaS document says `"platform": "saas"` and names its `site`
@@ -296,9 +363,9 @@ A SaaS document says `"platform": "saas"` and names its `site`
 
 | Field | What |
 |---|---|
-| `vendor` | `m365`, `google_workspace` |
-| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive` |
-| `tenantHash` | SHA-256 of the tenant id, lower-case (Microsoft 365: the Entra tenant id; Google Workspace: the customer id) |
+| `vendor` | `m365`, `google_workspace`, `slack` |
+| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive`; `channel`, `dm` |
+| `tenantHash` | SHA-256 of the tenant id, lower-case (Microsoft 365: the Entra tenant id; Google Workspace: the customer id; Slack: the Enterprise Grid organization's id, else the workspace's) |
 | `ownerHash` | SHA-256 of the mailbox's, OneDrive's or chat's owner (principal name, lower-case) |
 | `container`, `channel` | The site and library, or the team and channel, masked like keys |
 | `itemId`, `itemHash` | The vendor's id for the item (a message id, `message/attachment`, a drive item id), masked, and its SHA-256 |
@@ -311,7 +378,7 @@ store, `ownerHash`. A finding's `link` opens the item in the vendor's own web
 app, built from ids only, and is `null` when an id it carries had to be
 masked: a message in Outlook on the web (its owner or a delegate opens it), a
 SharePoint or OneDrive file by its unique id, a Teams channel, a Google Drive
-file by its id.
+file by its id, a Slack channel.
 
 ## Settings
 
@@ -346,6 +413,9 @@ file by its id.
 | `GWS_CREDENTIAL`, `GWS_WORKLOAD_PROVIDER`, `GWS_KEY_FILE` | | Who signs ([Who signs](#who-signs-keyless-where-possible)): exactly one of `GWS_CREDENTIAL` and `GWS_KEY_FILE` |
 | `GWS_USERS`, `GWS_GROUPS`, `GWS_ORG_UNITS` | | Whose Gmail and My Drive are read |
 | `GWS_SHARED_DRIVES` | | Shared drive ids, or `all` |
+| `SLACK_TOKEN_FILE` | | The Slack app's token, in a file; set to scan Slack |
+| `SLACK_CHANNELS` | every channel the token lists | Channel ids to read |
+| `SLACK_EKM_KEY_ID` | | Your Slack EKM key's id |
 
 At least one of `FINDINGS_HTTPS_URL` and `FINDINGS_FILE` is required.
 

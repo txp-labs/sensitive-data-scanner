@@ -14,6 +14,7 @@ from .gws_gmail import GmailAdapter
 from .m365_files import OneDriveAdapter, SharePointAdapter
 from .m365_mail import MailAdapter
 from .m365_teams import ChannelsAdapter, ChatsAdapter
+from .slack import ChannelAdapter, DiscoveryAdapter
 
 _ALL: list[Adapter[Context]] = [
     MailAdapter(),
@@ -24,5 +25,7 @@ _ALL: list[Adapter[Context]] = [
     GmailAdapter(),
     DriveAdapter(),
     SharedDriveAdapter(),
+    ChannelAdapter(),
+    DiscoveryAdapter(),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}

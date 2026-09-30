@@ -2501,3 +2501,65 @@ def test_no_value_leaves_the_saas_scanner_google_workspace(
         for secret in (SSN_A, SSN_B, CARDS["visa"], "made-up-tok", "PRIVATE KEY"):
             assert secret not in blob, where
         assert "@acme.example" not in blob, where
+
+
+def test_no_value_leaves_the_saas_scanner_slack(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Values in channel messages, threads, legacy attachments, files, direct messages, and in
+    channel and file names and Slack's error answers: none of them in the findings, the
+    logs, the state or any repr, and never the token."""
+    from office_fixtures import xlsx
+    from sensitive_data_core.state import FileState
+    from sensitive_data_saas.runner import run_scan
+    from slack_fakes import BOT, NOW, Chan, SlackOrg, settings, ts
+
+    o = SlackOrg()
+    c = Chan("C0SUPPORT1", f"cards-{CARDS['visa']}")
+    c.messages = [
+        {
+            "ts": ts(5),
+            "text": f"my card is {printed(CARDS['visa'])}",
+            "reply_count": 1,
+            "thread_ts": ts(5),
+        },
+        {
+            "ts": ts(3),
+            "text": f"ssn {dashed(SSN_B)}",
+            "attachments": [{"fallback": f"card {CARDS['jcb']}"}],
+            "files": [
+                {
+                    "id": "F0ROSTER1",
+                    "name": f"ssn-{SSN_A}.xlsx",
+                    "size": 2000,
+                    "url_private_download": "https://files.slack.com/files-pri/T0-F0ROSTER1/r.xlsx",
+                }
+            ],
+        },
+    ]
+    c.replies[ts(5)] = [{"ts": ts(4), "text": f"ssn {dashed(SSN_A)}"}]
+    o.files["/files-pri/T0-F0ROSTER1/r.xlsx"] = xlsx([["card"], [CARDS["amex"]]])
+    o.channels[c.id] = c
+    o.channels["G0SECRET1"] = Chan("G0SECRET1", f"hr-{SSN_A}", private=True, member=False)
+    o.dms["D0DM00001"] = [{"ts": ts(1), "text": f"my card is {printed(CARDS['mastercard'])}"}]
+    s = settings(tmp_path, DISCOVER="all")
+    state = FileState(str(tmp_path / "state.json"))
+    clients = o.clients(s)
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, _ = run_scan(s, clients, detector=detector, now=lambda: NOW, state=state)
+    o.fail["conversations.list"] = f"invalid_auth {CARDS['visa']}"
+    run_scan(s, o.clients(s), detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert {"channel", "dm"} <= {f["resource"]["service"] for f in doc["findings"]}
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        "state": (tmp_path / "state.json").read_text(),
+        "reprs": repr(s) + repr(clients) + repr(s.slack) + repr(clients.slack),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        for secret in (SSN_A, SSN_B, CARDS["visa"], BOT, "xoxb-"):
+            assert secret not in blob, where

@@ -135,7 +135,8 @@ def test_settings_need_one_credential_and_never_a_secret_in_the_environment(
         ({"M365_USERS": "not an address"}, "m365_users"),
         ({"M365_GROUPS": "finance"}, "m365_groups"),
         ({"M365_SITES": "https://contoso.sharepoint.com/sites/x"}, "m365_sites"),
-        ({"DISCOVER": "slack"}, "discover_kind"),
+        ({"DISCOVER": "slack"}, "discover_vendor_not_configured"),
+        ({"DISCOVER": "salesforce"}, "discover_kind"),
         ({"FINDINGS_HTTPS_URL": "http://collector.example/x"}, "findings_url_not_https"),
         ({"STATE_LOCATION": "relative/state.json"}, "state_location"),
         ({"STATE_LOCATION": "https://state.example/x"}, "state_hmac_key"),
@@ -335,7 +336,11 @@ def test_mail_is_read_only_when_the_grant_is_proved_scoped(tmp_path: Path) -> No
     m.scope_check_readable = True
     s = settings(tmp_path, M365_USERS=ALICE, DISCOVER="mail", M365_MAIL_SCOPE_CHECK=OUTSIDE)
     doc = scan(m, s)
-    assert {x["reason"] for x in doc["discovery"]["stores"]} == {"unscoped_grant"}
+    reasons = {x["reason"] for x in doc["discovery"]["stores"] if x["name"] != "*"}
+    assert reasons == {"unscoped_grant"}
+    # The opt-in kinds left out are named, not silent.
+    off = {x["kind"] for x in doc["discovery"]["stores"] if x["name"] == "*"}
+    assert off == {"m365_teams_channel", "m365_teams_chat"}
     assert not any("/mailFolders" in c[1] for c in m.calls)
 
 
