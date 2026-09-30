@@ -120,6 +120,11 @@ class Offset:
             out["pointer"] = redact_digits(self.pointer)
         return out
 
+    def __repr__(self) -> str:
+        # The pointer is built from the item's own keys, which may hold a value (#77).
+        pointer = None if self.pointer is None else redact_digits(self.pointer)
+        return f"Offset(start={self.start}, end={self.end}, pointer={pointer!r})"
+
 
 @dataclass
 class ClassFinding:

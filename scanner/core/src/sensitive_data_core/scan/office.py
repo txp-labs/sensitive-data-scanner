@@ -36,6 +36,7 @@ import csv
 import io
 import re
 import zipfile
+import zlib
 from dataclasses import dataclass
 from typing import IO
 from xml.etree import ElementTree as ET
@@ -231,6 +232,15 @@ def office_zip_text(kind: str, zf: zipfile.ZipFile, *, max_inflated_bytes: int) 
             text = _pptx(zf, names, budget)
         else:
             raise OfficeUnreadable("not an office kind")
-    except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError, RuntimeError):
+    except (
+        zipfile.BadZipFile,
+        zlib.error,
+        OSError,
+        EOFError,
+        ValueError,
+        NotImplementedError,
+        RuntimeError,
+    ):
+        # A damaged part (a deflate stream that will not inflate, #77) is an unreadable file.
         raise OfficeUnreadable("unreadable part") from None
     return OfficeText(kind, text, partial or budget.cut)

@@ -230,5 +230,5 @@ def _try_json(message: str) -> Any:
         return None
     try:
         return json.loads(t)
-    except ValueError:
+    except (ValueError, RecursionError):  # nested past the parser's stack: text (#77)
         return None

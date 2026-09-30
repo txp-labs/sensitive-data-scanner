@@ -62,3 +62,27 @@ uv run ruff check && uv run ruff format --check && uv run mypy && uv run pytest
 runs the TypeScript package with Node (`test_parity.py`) to check that the two
 agree on every vector. CI sets `SDS_REQUIRE_PARITY=1`, so a missing Node is a
 failure there and not a skip.
+
+### Accuracy and fuzzing
+
+```sh
+uv run python tests/bench_score.py --check     # the accuracy benchmark (docs/BENCHMARK.md)
+uv run pytest tests/test_fuzz_readers.py --hypothesis-profile=fuzz        # what CI runs
+uv run pytest tests/test_fuzz_readers.py --hypothesis-profile=fuzz-long   # a long local run
+```
+
+`tests/test_fuzz_readers.py` holds Hypothesis property tests for every reader:
+`sniff`, archives, Office, PDF, Parquet, ORC, Avro, JSON, CSV and text. It
+checks them against damaged files of every kind and against arbitrary bytes.
+
+- **No crash beyond the declared exceptions.** A damaged top-level table is
+  the only object `read_object` may raise on; its caller counts it as
+  unreadable.
+- **The caps hold.** This covers bytes fetched, text inflated, rows read and
+  a PDF's characters.
+- **No planted value reaches an output.** Exceptions, log lines, warnings,
+  stdout, reprs and findings are all checked.
+
+The normal `pytest` run uses the `default` profile: derandomized, 40 examples
+per property. The profiles are in `tests/conftest.py`, and every case the fuzz
+has found is pinned with `@example`.

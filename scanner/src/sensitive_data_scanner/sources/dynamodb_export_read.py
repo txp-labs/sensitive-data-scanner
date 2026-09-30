@@ -62,7 +62,7 @@ def _item(
 ) -> None:
     try:
         doc = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         return
     if not isinstance(doc, dict):
         return

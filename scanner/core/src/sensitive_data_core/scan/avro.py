@@ -291,7 +291,7 @@ class AvroReader:
         self.codec = meta.get("avro.codec", b"null").decode() or "null"
         try:
             self.schema = _Schema(json.loads(meta["avro.schema"]))
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, RecursionError):
             raise AvroError("no schema") from None
         if self.codec not in ("null", "deflate", "bzip2", "xz", "snappy", "zstandard"):
             raise UnsupportedCodec("unknown codec")

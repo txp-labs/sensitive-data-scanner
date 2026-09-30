@@ -70,6 +70,13 @@ jobs:
         # fails on a drop past benchmark/baseline.json or on a value in any output.
         run: uv run python tests/bench_score.py --check
 
+      - name: Fuzz the readers (#77)
+        # Randomized property tests of every reader (tests/test_fuzz_readers.py): a few
+        # hundred damaged files and arbitrary bytes per property. The time cap bounds a
+        # slow shrink; the normal pytest run above already ran them derandomized.
+        timeout-minutes: 6
+        run: uv run pytest tests/test_fuzz_readers.py --hypothesis-profile=fuzz -p no:cacheprovider -q
+
   node:
     name: Node (typecheck, tests)
     runs-on: ubuntu-latest
