@@ -32,7 +32,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
-from sensitive_data_core.index import Indexes, PrefixBackend, index_salt
+from sensitive_data_core.index import Indexes, PrefixBackend, index_salt, listed_with, relist
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
 
@@ -249,7 +249,9 @@ def _scan(
         if capped is not None:
             share.max_items = min(share.max_items, capped.share(ways).max_items)
         log_event("source.start", source=source.target, kind=source.kind)
-        result = source.run(cursors.get(source.id) or {}, share, detector, findings, started)
+        cursor = relist(source, cursors.get(source.id) or {}, indexes)
+        result = source.run(cursor, share, detector, findings, started)
+        listed_with(source, result, indexes, cursor)
         prune = getattr(source, "prune", None)
         if callable(prune) and result.coverage.error is None:
             prune(findings, share)

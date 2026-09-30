@@ -497,7 +497,8 @@ core package:
 
 | Component | Made of |
 |---|---|
-| `adapter:<kind>` | The source module that reads a kind of store (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). The kinds are found from the `kind = "..."` names in every platform's `sources/` modules, plus the kinds a module sets at run time. A vendor's importer is its own (`adapter:macie`) |
+| `adapter:<kind>` | A kind of store's **read path**: the code that fetches its data and interprets it (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). An adapter whose objects the index records keeps its read path in its own module, `sources/<name>_read.py`, which names the kinds it reads (`READS`). The kinds are found from those, from the `kind = "..."` names in every platform's `sources/` modules, and from the kinds a module sets at run time. An adapter that records nothing in the index (it reads forward, or every pass) is its whole module. A vendor's importer is its own (`adapter:macie`) |
+| `listing:<kind>` | The rest of a split adapter: discovery, listing, inventory reports, configuration and logging (`sources/<name>.py`, and helpers such as `inventory.py` and `exports.py`). A change here re-lists the store and reads nothing again ([below](#how-rescans-are-chosen)) |
 | `reader:<name>` | One of the core's readers: `text`, `transcript`, `docx`, `xlsx`, `pptx`, `pdf`, `archive-zip`, `archive-tar`, `archive-stream` (gzip, bzip2, xz, zstd), `columnar` (Parquet, ORC), `avro`, `rdb`, and for tables `sql` and `attributes`. A reader can be made of named functions of a shared file, so a change to `_pptx` in `scan/office.py` moves `reader:pptx` and not `reader:docx`. The manifest also lists the kinds of object each reader reads (`readerKinds`) |
 | `sniffer` | `scan/sniff.py`, and the routing in `scan/objects.py` that sends bytes to a reader |
 | `spec-standalone` | The unprompted engine: shape and context rules, the recognizers, the spec loader |
@@ -508,7 +509,8 @@ CI runs `uv run python ../scripts/components.py --check`, and
 `tests/test_components.py` runs it too. The check fails when a component's
 source changed and the manifest was not regenerated, so a version is never
 forgotten. It also fails when a new `sources/` module names no kind and is not
-a listed helper. To regenerate, run
+a listed helper, when a module that records objects in the index has no read
+module of its own, and when a read module has no adapter module beside it. To regenerate, run
 `uv run python ../scripts/components.py --write` in `scanner/` and commit the
 manifest.
 
@@ -594,7 +596,7 @@ first rule that applies is its `rescanReason`
 
 | What changed | What is read again |
 |---|---|
-| An adapter (`adapter:s3`) | That adapter's objects only |
+| An adapter's read path (`adapter:s3`, `sources/s3_read.py`) | That adapter's objects only. How the store is listed (`listing:s3`) reads nothing again: it re-lists ([below](#how-rescans-are-chosen)) |
 | A reader (`reader:pdf`) | The objects that reader read, on every platform, including archives with an entry it read |
 | A new reader, or pyarrow in the build | The objects that held a kind no reader read (`unread` in the profile), when a reader now reads it: 7z before a 7z reader, Parquet read by the Lambda zip once the image reads it |
 | The sniffer | Objects whose kind was undetermined (`binary`) or disputed (`disguised`) |
@@ -604,6 +606,28 @@ first rule that applies is its `rescanReason`
 
 Nothing else is re-read. An image counted by kind is not read again for a spec
 change, and a PDF is not read again for a Word reader's.
+
+**How a store is listed is not how it is read.** An adapter's version is its
+read path only (`sources/<name>_read.py`). Discovery, listing, inventory
+reports, configuration and logging are `listing:<kind>`, and a change to them
+(a refactor of `sources/s3.py`, a fix to `inventory.py`) reads nothing again.
+It **re-lists** the store instead:
+
+- Each source's cursor records the `listing:<kind>` version its position was
+  reached with. When it differs from this build's, the run drops the position
+  (a resume key, a page token, a report position, a delta link) and lists the
+  store again from the start. The coverage says `relisted: true`.
+- Each object met is decided by its row as always: the same change marker and
+  a current vector is a skip. A delta feed listed from no link (SharePoint,
+  OneDrive, Drive) downloads only the files whose content tag or version
+  moved.
+- Only with an index. The first run after an upgrade records the version and
+  re-lists nothing.
+- Rows recorded before adapters were narrowed (manifest version 1) hashed the
+  whole module. Their adapter version is not compared, and a pass that meets
+  such a row unchanged gives it this build's version, since that release moved
+  code and changed nothing any adapter reads. From then on a change to the
+  read path rescans them like any adapter change.
 
 **Budgeted and spread across runs.** Source changes come first. Rescans come
 after them, in listing order, and may use at most `RESCAN_PERCENT` (25%) of
@@ -684,7 +708,7 @@ The numbers assume the defaults: 20,000 items a run, a quarter of each
 source's share for rescans, and one run a day.
 
 **The SharePoint reader changed.** Say a release changes how SharePoint
-libraries are read: `sources/m365_files.py`, the module behind
+libraries are read: `sources/m365_files_read.py`, the read path behind
 `adapter:m365_sharepoint` and `adapter:m365_onedrive`. The manifest's two
 versions move, and nothing else does:
 
@@ -702,6 +726,11 @@ versions move, and nothing else does:
   and `rescanBacklog: 38750`. It is done in about 32 runs. Its changed files
   are read first, every run, as before.
 - The findings of a rescanned file say `rescanReason: adapter`.
+
+Had the release changed only how libraries are found or listed
+(`sources/m365_files.py`), `listing:m365_sharepoint` would move instead. Each
+library would be listed again from no delta link, and no file whose content tag
+is the recorded one would be downloaded.
 
 Had the Word reader changed instead (`_docx` in `scan/office.py`),
 `reader:docx` would move. Only the Word files, and archives holding one, would

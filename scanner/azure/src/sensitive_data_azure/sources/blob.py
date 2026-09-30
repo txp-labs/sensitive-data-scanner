@@ -44,13 +44,15 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
-from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale, md5_fingerprint
+from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
-from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
+from sensitive_data_core.scan.objects import planned_bytes, sample_point
 
 from ..resources import BlobTarget, ResourceId, azure_fields, blob_resource, portal_link
+from . import blob_read as _read_path
 from .base import Context, key_facts
+from .blob_read import blob_fingerprint, blob_marker
 
 KIND = "azure_blob"
 STORAGE_API = "2023-05-01"
@@ -189,22 +191,13 @@ def _page_token(pages: Any) -> str | None:
     return str(token) if token else None
 
 
-def blob_marker(props: Any) -> str:
-    """What changes when a blob changes: its ETag, size and last-modified time."""
-    modified = getattr(props, "last_modified", None)
-    when = modified.isoformat() if isinstance(modified, _dt.datetime) else str(modified or "")
-    return f"{getattr(props, 'etag', '') or ''}|{getattr(props, 'size', 0) or 0}|{when}"
-
-
-def blob_fingerprint(props: Any) -> str | None:
-    settings = getattr(props, "content_settings", None)
-    return md5_fingerprint(getattr(settings, "content_md5", None))
-
-
 class BlobSource:
     """One container (or a prefix of it): its blobs, listed in name order and read."""
 
     kind = KIND
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("passStartedAt", "token", "skip", "prefixDir", "prefixCount")
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -241,13 +234,9 @@ class BlobSource:
     def __repr__(self) -> str:
         return f"BlobSource({self.t!r})"
 
-    def _blob_facts(self, props: Any) -> dict[str, Any] | None:
-        scope = str(getattr(props, "encryption_scope", None) or "")
-        if scope and scope in self.t.scopes:
-            return dict(self.t.scopes[scope])
-        if scope:
-            return {"atRestEncryption": "unknown"}  # a scope created after discovery
-        return self.facts or self.t.default or None
+    # The read path (`blob_read.py`, the `adapter:<kind>` component, #67).
+    _blob_facts = _read_path._blob_facts
+    _read = _read_path._read
 
     def run(
         self,
@@ -459,55 +448,6 @@ class BlobSource:
             log_event("item.unreadable", source=self.target, error=e)
             return e
         return None
-
-    def _read(
-        self,
-        props: Any,
-        *,
-        cov: Coverage,
-        detector: Detector,
-        store: FindingStore,
-        seen_at: str,
-        why: Stale | None = None,
-    ) -> None:
-        name = str(props.name)
-        size = int(getattr(props, "size", 0) or 0)
-        version = getattr(props, "version_id", None) or None
-
-        def fetch(start: int, end: int) -> bytes:
-            kwargs: dict[str, Any] = {"offset": start, "length": end - start + 1}
-            if version:
-                kwargs["version_id"] = version
-            data: bytes = self.container.download_blob(name, **kwargs).readall()
-            return data
-
-        got = read_object(
-            name,
-            size,
-            fetch,
-            detector,
-            max_object_bytes=self.max_object_bytes,
-            max_inflated_bytes=self.max_inflated_bytes,
-            max_rows=self.max_rows,
-            columnar=self.columnar,
-        )
-        fingerprint = blob_fingerprint(props)
-        self._op.record(name, marker=blob_marker(props), fingerprint=fingerprint, got=got)
-        facts = self._blob_facts(props)
-        link = portal_link(self.t.rid, "containersList")
-        findings = record(
-            got,
-            cov,
-            resource_for=lambda column: blob_resource(self.t, name, version, column=column),
-            link=link,
-            seen_at=seen_at,
-            facts=facts,
-        )
-        self._op.rescanned(findings, why)
-        if findings is None:
-            return
-        location = f"{self.id}\n{name}"
-        store.replace_location(location, findings)
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:
         """Drop stored findings whose blob is gone."""

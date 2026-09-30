@@ -53,7 +53,7 @@ import sqlite3
 import time
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from importlib import resources
 from pathlib import Path
@@ -101,6 +101,14 @@ _BY_FINGERPRINT = "CREATE INDEX IF NOT EXISTS objects_f ON objects(f) WHERE f IS
 # ------------------------------------------------------------------ the component manifest
 
 
+# The manifest's scheme: 2 narrowed each adapter to its read path (`adapter:<kind>`), with
+# `listing:<kind>` beside it. An adapter version recorded under an older scheme hashed a whole
+# module, so it is not compared (`stale`); the row takes this scheme's version when a pass
+# meets it unchanged (`ObjectPass.decide`), since the release that narrowed the adapters moved
+# their code and changed nothing any of them reads.
+MANIFEST_SCHEME = 2
+
+
 @dataclass(frozen=True)
 class Manifest:
     """The component versions this build was made from (`components.json`,
@@ -108,6 +116,7 @@ class Manifest:
 
     components: Mapping[str, str]
     reader_kinds: Mapping[str, tuple[str, ...]]
+    scheme: int = MANIFEST_SCHEME
 
     @classmethod
     def load(cls) -> Manifest:
@@ -119,6 +128,7 @@ class Manifest:
         return cls(
             dict(doc.get("components") or {}),
             {str(k): tuple(v) for k, v in kinds.items()},
+            int(doc.get("manifestVersion") or 1),
         )
 
     def version(self, name: str) -> str | None:
@@ -129,6 +139,10 @@ class Manifest:
 
     def reader(self, name: str) -> str | None:
         return self.components.get(f"reader:{name}")
+
+    def listing(self, kind: str) -> str | None:
+        """`listing:<kind>`: how a split adapter finds its objects (a change re-lists)."""
+        return self.components.get(f"listing:{kind}")
 
     @property
     def classes(self) -> dict[str, str]:
@@ -173,9 +187,12 @@ class Profile:
     classes: tuple[tuple[str, str], ...] = ()
     conversation_v: str | None = None
     name_kind: str | None = None  # the name's known extensions (a duplicate must share them)
+    scheme: int = 1  # the manifest scheme `adapter_v` was taken under (MANIFEST_SCHEME)
 
     def body(self) -> str:
         out: dict[str, Any] = {"a": self.adapter, "av": self.adapter_v}
+        if self.scheme > 1:
+            out["ms"] = self.scheme
         if self.detected is not None:
             out["t"] = self.detected
         if self.readers:
@@ -209,6 +226,7 @@ class Profile:
             classes=tuple(sorted((str(k), str(v)) for k, v in (d.get("sc") or {}).items())),
             conversation_v=d.get("cv"),
             name_kind=d.get("n"),
+            scheme=int(d.get("ms") or 1),
         )
 
     def reader_names(self) -> frozenset[str]:
@@ -247,6 +265,7 @@ def profile_for(
         classes=tuple(sorted(manifest.classes.items())),
         conversation_v=manifest.version("spec-conversation"),
         name_kind=name_kind,
+        scheme=manifest.scheme,
     )
 
 
@@ -702,6 +721,15 @@ class ObjectIndex:
             self._load_meta()["rows"] += 1
         return True
 
+    def reprofile(self, row: Row, profile: Profile) -> None:
+        """Give a row another profile, nothing else changed (an adapter version carried to a
+        newer manifest scheme)."""
+        shard = self._shard(self._shard_of(row.key))
+        shard.conn.execute(
+            "UPDATE objects SET p = ? WHERE k = ?", (self._profile_id(shard, profile), row.key)
+        )
+        shard.dirty = True
+
     def touch(self, key: str, generation: int) -> None:
         """The listing saw the object in pass `generation` (so a sweep keeps its row)."""
         k = self.hasher.key(key)
@@ -966,9 +994,11 @@ def stale(profile: Profile, flags: int, manifest: Manifest, *, columnar: bool) -
     - the conversation spec changed, and some part of it was a conversation.
 
     A component the manifest no longer names (a reader removed or renamed) counts as changed.
+    An adapter version taken under an older manifest scheme is not compared: it hashed the
+    whole module, listing included, where this scheme hashes the read path only.
     """
     current = manifest.adapter(profile.adapter)
-    if current is not None and profile.adapter_v != current:
+    if current is not None and profile.adapter_v != current and profile.scheme == manifest.scheme:
         return Stale(ADAPTER)
     for name, version in profile.readers:
         if manifest.reader(name) != version:
@@ -990,6 +1020,52 @@ def stale(profile: Profile, flags: int, manifest: Manifest, *, columnar: bool) -
     if flags & CONVERSATION and profile.conversation_v != manifest.version("spec-conversation"):
         return Stale(SPEC_CONVERSATION)
     return None
+
+
+# ------------------------------------------------------------------ re-listing
+
+
+# The cursor key that records the `listing:<kind>` version a source's position was reached with.
+LISTING_KEY = "listing"
+
+
+def relist(source: Any, cursor: Mapping[str, Any], indexes: Indexes | None) -> dict[str, Any]:
+    """The cursor a source runs from. When how its kind is listed changed since the position
+    was reached (`listing:<kind>` moved: discovery, listing, an inventory reader), the
+    source's position keys (`relist_keys`: a resume key, a page token, a delta link) are
+    dropped, so the pass lists the store again from the start. Nothing is read again for it:
+    each object is decided by its row as always, and an unchanged one is skipped (#67).
+
+    Only with an index: without one, a delta feed that lost its link would read every item.
+    The first run after an upgrade records the version and re-lists nothing."""
+    out = dict(cursor)
+    if indexes is None:
+        return out
+    current = indexes.manifest.listing(str(getattr(source, "kind", "")))
+    had = out.get(LISTING_KEY)
+    if current is not None and had is not None and had != current:
+        keys = tuple(getattr(source, "relist_keys", ()))
+        for key in keys:
+            out.pop(key, None)
+        out[RELISTED] = True
+        log_event("source.relist", source=getattr(source, "target", None))
+    return out
+
+
+RELISTED = "_relisted"
+
+
+def listed_with(source: Any, run: Any, indexes: Indexes | None, cursor: Mapping[str, Any]) -> None:
+    """After a source's run (`run`, its SourceRun): its cursor records the `listing:<kind>`
+    version it listed with, and its coverage says when this run re-listed (`relisted`)."""
+    if indexes is None or not isinstance(run.cursor, dict):
+        return
+    run.cursor.pop(RELISTED, None)
+    current = indexes.manifest.listing(str(getattr(source, "kind", "")))
+    if current is not None:
+        run.cursor[LISTING_KEY] = current
+    if cursor.get(RELISTED):
+        run.coverage.relisted = True
 
 
 @dataclass(frozen=True)
@@ -1154,8 +1230,22 @@ class ObjectPass:
             return READ
         if row.flags & UNREADABLE:
             return SKIP  # retried when it changes, as before the index
+        return self._verdict(row)
+
+    def _verdict(self, row: Row) -> Decision:
+        """An unchanged row: a rescan when a component it was read with is stale, else skip.
+        A row whose adapter version predates this manifest scheme takes this build's version
+        on the way (`MANIFEST_SCHEME`): the read path it was read with is this one."""
         why = stale(row.profile, row.flags, self.manifest, columnar=self.columnar)
-        return Decision("rescan", why) if why is not None else SKIP
+        if why is not None:
+            return Decision("rescan", why)
+        m = self.manifest
+        if self.index is not None and row.profile.scheme != m.scheme:
+            self.index.reprofile(
+                row,
+                replace(row.profile, adapter_v=m.adapter(row.profile.adapter), scheme=m.scheme),
+            )
+        return SKIP
 
     def table(self, key: str, marker: str, *, resample_days: int = TABLE_RESAMPLE_DAYS) -> Decision:
         """A table with an engine's change marker (#67 part 3): skipped when the marker is the
@@ -1169,8 +1259,7 @@ class ObjectPass:
             return READ
         if self.generation - row.generation >= resample_days:
             return READ
-        why = stale(row.profile, row.flags, self.manifest, columnar=self.columnar)
-        return Decision("rescan", why) if why is not None else SKIP
+        return self._verdict(row)
 
     def offer(self, candidate: Any, decision: Decision) -> None:
         """A rescan candidate (`decide` said `rescan`), read after the changes if it fits."""

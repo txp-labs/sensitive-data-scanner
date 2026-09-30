@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.10",
+  "title": "Sensitive-data scanner findings, version 1.11",
   "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site, or (1.8) in the SaaS tenants of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.10" },
+    "schemaVersion": { "const": "1.11" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
@@ -664,6 +664,10 @@
           "description": "(1.10) Rescans still owed: objects whose recorded components are stale, and objects with no row met and not read. Later runs read them within their capped share.",
           "type": "integer",
           "minimum": 0
+        },
+        "relisted": {
+          "description": "(1.11, #67) How this kind of store is listed changed (its listing:<kind> component): this run listed it again from the start and read only what changed at the source or needed a rescan.",
+          "const": true
         }
       }
     },

@@ -41,14 +41,12 @@ from sensitive_data_core.index import Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.objects import (
-    ObjectResult,
     planned_bytes,
-    read_object,
-    record,
     sample_point,
 )
 
-from ..resources import ResourceId, ShareTarget, azure_fields, file_resource, portal_link
+from ..resources import ResourceId, ShareTarget, azure_fields
+from . import files_read as _read_path
 from .base import Context, key_facts
 from .blob import STORAGE_ACCOUNTS, STORAGE_API, _account_key_uri, _tags
 from .common import http_gap
@@ -128,6 +126,9 @@ class FilesSource:
     """One share: its files, listed directory by directory, read in path order."""
 
     kind = KIND
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("passStartedAt", "after")
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -283,47 +284,8 @@ class FilesSource:
             cov.unreadable += 1
             log_event("item.unreadable", source=self.target, error=error_name(err))
 
-    def _read(
-        self,
-        path: str,
-        size: int,
-        *,
-        cov: Coverage,
-        detector: Detector,
-        store: FindingStore,
-        seen_at: str,
-        why: Stale | None = None,
-    ) -> tuple[ObjectResult, list[dict[str, Any]] | None]:
-        client = self.share.get_file_client(path)
-
-        def fetch(start: int, end: int) -> bytes:
-            data: bytes = client.download_file(offset=start, length=end - start + 1).readall()
-            return data
-
-        got = read_object(
-            path,
-            size,
-            fetch,
-            detector,
-            max_object_bytes=self.max_object_bytes,
-            max_inflated_bytes=self.max_inflated_bytes,
-            max_rows=self.max_rows,
-            columnar=self.columnar,
-        )
-        facts = self.facts or self.t.facts
-        findings = record(
-            got,
-            cov,
-            resource_for=lambda column: file_resource(self.t, path, column=column),
-            link=portal_link(self.t.rid, "fileList"),
-            seen_at=seen_at,
-            facts=facts,
-        )
-        if findings is not None:
-            for f in findings:
-                f.update(why.fields() if why is not None else {})
-            store.replace_location(f"{self.id}\n{path}", findings)
-        return got, findings
+    # The read path (`files_read.py`, the `adapter:<kind>` component, #67).
+    _read = _read_path._read
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:
         """Drop stored findings whose file is gone."""

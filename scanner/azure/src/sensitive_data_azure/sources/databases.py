@@ -45,23 +45,22 @@ from dataclasses import dataclass
 from typing import Any
 
 from sensitive_data_core import grants as g
-from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, column_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import (
     UNKNOWN_ENCRYPTION,
     Coverage,
     encryption_facts,
-    store_field_resource,
 )
-from sensitive_data_core.index import Indexes, ObjectPass
+from sensitive_data_core.index import Indexes
 from sensitive_data_core.safety import error_name, log_event, redact_digits
-from sensitive_data_core.scan.columnar import TableResult
-from sensitive_data_core.scan.sql import SQLSERVER, sample_tables
+from sensitive_data_core.scan.sql import SQLSERVER
 from sensitive_data_db.engines import MY, PG, SqlSession
 
 from ..config import Settings
-from ..resources import ResourceId, azure_fields, portal_link
+from ..resources import ResourceId, azure_fields
+from . import databases_read as _read_path
 from .base import Context, key_facts
 
 SQL_API = "2023-08-01"
@@ -69,7 +68,6 @@ PG_API = "2024-08-01"
 MYSQL_API = "2023-12-30"
 # The token audience of Azure Database for PostgreSQL and MySQL.
 OSSRDBMS_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
-MAX_WRITE_GRANTS = 30
 
 SYSTEM_DATABASES = {
     "azure_sql": frozenset({"master"}),
@@ -503,6 +501,9 @@ Connect = Callable[[], tuple[SqlSession, tuple[str, ...]]]
 class DatabaseSource:
     """One database: its user checked, then its tables sampled, resumable by table."""
 
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("after",)
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(self, target: DbTarget, open_session: Connect, settings: Settings) -> None:
@@ -547,88 +548,5 @@ class DatabaseSource:
             session.rollback()
             session.close()
 
-    def _read(
-        self,
-        session: SqlSession,
-        *,
-        begin: tuple[str, ...],
-        cov: Coverage,
-        cursor: dict[str, Any],
-        budget: Budget,
-        detector: Detector,
-        store: FindingStore,
-        now: _dt.datetime,
-    ) -> SourceRun:
-        grants = session.grants()
-        if not grants.verified:
-            log_event(
-                "source.refused", source=self.target, kind=self.kind, reason="grants_unverifiable"
-            )
-            return SourceRun(cov, cursor, note="grants_unverifiable")
-        if grants.write:
-            log_event(
-                "source.refused", source=self.target, kind=self.kind, reason="db_user_can_write"
-            )
-            write = sorted(grants.write)[:MAX_WRITE_GRANTS]
-            return SourceRun(cov, cursor, note="db_user_can_write", extra={"writeGrants": write})
-        if self.facts is None:
-            self.facts = encryption_facts(session.encryption())
-        seen_at = now.isoformat()
-        facts = self.facts
-        t = self.t
-        today = (now.date() - _dt.date(1970, 1, 1)).days
-        op = ObjectPass(self.indexes, self.id, self.kind, generation=today, budget=budget)
-        link = portal_link(t.rid)
-
-        def on_table(schema: str, table: str, result: TableResult) -> None:
-            def resource(column: str) -> dict[str, Any]:
-                out = store_field_resource(
-                    service=t.kind,
-                    store=t.server,
-                    database=t.database,
-                    table=f"{schema}.{table}",
-                    field=column,
-                    read_by="sample",
-                )
-                out.update(azure_fields(t.rid))
-                return out
-
-            location = f"{self.id}\n{schema}\n{table}"
-            store.replace_location(
-                location, column_findings(result, resource, link, seen_at, facts=facts)
-            )
-
-        session.rollback()
-        for statement in begin:
-            session.execute(statement, [])
-        s = self.settings
-        try:
-            sp = sample_tables(
-                session.execute,
-                session.dialect,
-                detector=detector,
-                has_room=budget.has,
-                take=budget.take,
-                on_table=on_table,
-                after=cursor.get("after"),
-                schemas=s.db_schemas,
-                max_rows=s.db_max_rows,
-                max_tables=s.db_max_tables,
-                source=self.target,
-                index=op,
-            )
-        except Exception as err:  # the listing itself failed
-            cov.error = error_name(err)
-            log_event("source.failed", source=self.target, kind=self.kind, error=cov.error)
-            return SourceRun(cov, cursor)
-        cov.listed, cov.eligible, cov.scanned = sp.listed, sp.eligible, sp.scanned
-        cov.unreadable, cov.partial, cov.bytes_scanned = sp.unreadable, sp.partial, sp.bytes
-        cov.test_values, cov.suppressed = sp.test_values, sp.suppressed
-        cov.redaction_markers = sp.redaction_markers
-        cov.pass_complete = sp.done
-        cov.backlog = not sp.done
-        if sp.scanned:
-            cov.formats["sql"] = sp.scanned
-        op.settle(cov)
-        note = "no_grant" if sp.listed == 0 else None
-        return SourceRun(cov, {"after": None if sp.done else sp.after}, note=note)
+    # The read path (`databases_read.py`, the `adapter:<kind>` component, #67).
+    _read = _read_path._read
