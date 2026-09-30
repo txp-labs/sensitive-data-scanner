@@ -6,7 +6,7 @@
  * a caller that loads a newer spec itself.
  */
 import { CLASSES_RAW, NORMALIZE_RAW } from './spec.generated.js';
-export const SPEC_VERSION = '0.5';
+export const SPEC_VERSION = '0.6';
 const WS = '[ \\t\\r\\n]+';
 /** What may separate the words of a retry prefix in a turn: whitespace and . , ! ? ; : */
 const RETRY_SEP = '[ \\t\\r\\n.,!?;:]';

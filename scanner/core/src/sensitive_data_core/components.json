@@ -131,15 +131,15 @@
     "reader:transcript": "22ae7786f667",
     "reader:xlsx": "daeab817dd9a",
     "sniffer": "75cfca010cea",
-    "spec-conversation": "5ea388892e30",
-    "spec-standalone": "4ecb108c0e60",
+    "spec-conversation": "08c23bf0c5d1",
+    "spec-standalone": "9df61db7eb83",
     "spec-standalone/account_number": "eb6dcbaeebc8",
     "spec-standalone/card": "590ac475d1d0",
     "spec-standalone/cvv": "ad65bf9617e8",
     "spec-standalone/dob": "1b0f574feb9e",
     "spec-standalone/pin": "16e5c626b930",
     "spec-standalone/us_itin": "398a301d8532",
-    "spec-standalone/us_ssn": "9ee80986511d",
+    "spec-standalone/us_ssn": "1ef67e358f96",
     "spec-standalone/us_ssn_last4": "d8d48d99b482"
   },
   "readerKinds": {
