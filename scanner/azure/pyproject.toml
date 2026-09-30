@@ -21,6 +21,8 @@ dependencies = [
     "azure-storage-queue>=12.13",
     # Cosmos DB for NoSQL, with the Cosmos DB Built-in Data Reader role.
     "azure-cosmos>=4.9",
+    # Log Analytics workspaces (Azure Monitor logs), sampled KQL with Log Analytics Reader.
+    "azure-monitor-query>=2.0",
 ]
 
 [project.optional-dependencies]

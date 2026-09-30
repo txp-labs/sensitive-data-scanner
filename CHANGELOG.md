@@ -66,6 +66,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
     per table, by property, with Storage Table Data Reader. Queue Storage
     (`azure_queue`): **peek only**, up to 32 messages, never dequeued, with
     Storage Queue Data Reader; base64 messages decoded when they are text.
+- **Azure, step 4: Azure Monitor logs** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
+  every Log Analytics workspace (`log_analytics`), read by default with Log
+  Analytics Reader: `Usage` picks the tables with data in the window
+  (`LOGS_LOOKBACK_DAYS`), each sampled with one quoted `take n` query
+  (`LOGS_MAX_ROWS_PER_TABLE`) and read by column (format `kql`); Basic and
+  Auxiliary tables, billed per query, are counted as `billed_plan` and not
+  read; a workspace resumes at its next table.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -247,7 +254,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
   resource ID) on Azure findings and stores, the `azure_blob`, `azure_sql`,
   `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`,
-  `cosmosdb`, `cosmosdb_mongo`, `azure_table` and `azure_queue` kinds, the
+  `cosmosdb`, `cosmosdb_mongo`, `azure_table`, `azure_queue` and
+  `log_analytics` kinds, the `kql` format and the `billed_plan` skip kind, the
   store field `api`, the `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
   `archive_tier` skip kind and Azure portal links.
 - Version **1.5**, additive: `atRestEncryption`,

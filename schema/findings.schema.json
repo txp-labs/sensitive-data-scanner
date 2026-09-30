@@ -72,7 +72,8 @@
         "stepfunctions", "lambda", "xray", "codecommit", "s3_directory", "msk", "mq",
         "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
-        "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo"
+        "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo",
+        "log_analytics"
       ]
     },
     "azureSubscription": {
@@ -293,7 +294,8 @@
         "format": {
           "enum": [
             "text", "csv", "json", "lambda_log", "connect_chat", "contact_lens", "lex_v2_log",
-            "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro", "sql", "block", "cql", "rdb"
+            "connect_flow_log", "dynamodb_item", "parquet", "orc", "avro", "sql", "block", "cql", "rdb",
+            "kql"
           ]
         },
         "class": { "$ref": "#/$defs/class" },
@@ -367,7 +369,7 @@
           "propertyNames": {
             "enum": [
               "audio", "video", "image", "document", "archive", "binary", "columnar",
-              "archive_tier"
+              "archive_tier", "billed_plan"
             ]
           },
           "additionalProperties": { "type": "integer", "minimum": 0 }
