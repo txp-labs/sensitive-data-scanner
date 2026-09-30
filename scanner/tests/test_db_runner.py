@@ -329,6 +329,25 @@ def test_mysql_grants_and_roles() -> None:
     assert g.mysql(hidden).verified is False
 
 
+def test_sqlserver_view_database_state_is_a_read() -> None:
+    """The grant docs/DATABASES.md asks for so the scanner can read a table's change marker
+    (`sys.dm_db_index_usage_stats`, #67): VIEW DATABASE STATE, and on Azure SQL VIEW
+    DATABASE PERFORMANCE STATE. A user holding it is read-only, not refused."""
+    from sensitive_data_core import grants as g
+
+    held = ("CONNECT", "SELECT", "VIEW DATABASE STATE", "VIEW DATABASE PERFORMANCE STATE")
+
+    def execute(sql: str, params: Any) -> list[dict[str, Any]]:
+        if "IS_SRVROLEMEMBER" in sql:
+            return [{"sysadmin": 0, "db_owner": 0, "db_datawriter": 0, "db_ddladmin": 0}]
+        if "fn_my_permissions" in sql:
+            return [{"permission_name": p} for p in held]
+        return [{"objects": 0}]
+
+    got = g.sqlserver(execute)
+    assert got.verified and not got.write
+
+
 def test_sqlserver_read_only_and_refused() -> None:
     db = Db(tables={("dbo", "people"): people()})
     db.on(

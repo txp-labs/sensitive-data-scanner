@@ -478,3 +478,14 @@ def test_a_pass_resumes_mid_page_and_reads_each_object_once() -> None:
         assert runs < 10
     reads = [u for _, u, q in c.requests if q.get("alt") == "media"]
     assert len(reads) == 7 and len(set(reads)) == 7
+
+
+def test_a_large_bucket_is_named_for_a_storage_insights_report() -> None:
+    """Storage Insights inventory reports are not read (#67, on demand): a bucket whose
+    complete pass listed at least GCS_INVENTORY_MIN_OBJECTS is named in the run summary,
+    and listed as before."""
+    c = cloud()
+    s = stores(run(c, GCS_INVENTORY_MIN_OBJECTS="5"))
+    assert s["acme-lake"]["recommendation"] == "storage_insights"
+    assert "recommendation" not in s["acme-cmek"]
+    assert "recommendation" not in stores(run(c))["acme-lake"]
