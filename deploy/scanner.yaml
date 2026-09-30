@@ -63,7 +63,7 @@ Parameters:
     Type: String
     Default: all
     Description: >-
-      DISCOVER - all, or any of s3, logs, dynamodb, glue, rds, redshift,
+      DISCOVER - all (or true), or any of s3, logs, dynamodb, glue, rds, redshift,
       opensearch, documentdb, neptune, ebs, backup, efs, fsx, kinesis,
       firehose, sqs, ssm, secretsmanager, elasticache, memorydb, timestream,
       keyspaces, stepfunctions, lambda, xray, codecommit, s3express, msk, mq,
@@ -310,7 +310,6 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub sds-results-${AWS::AccountId}-${AWS::Region}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
@@ -371,6 +370,18 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId }
+      # The Denies and the opt-in Allows are managed policies, attached here so the role
+      # never exists without them: a role's inline policies may hold 10,240 characters
+      # in all, and each managed policy 6,144 (docs/ARCHITECTURE.md, Policy sizes).
+      ManagedPolicyArns:
+        - !Ref DataStoreWriteDenyPolicy
+        - !Ref GuardDenyPolicy
+        - !Ref StoreReadPolicy
+        - !Ref BrokerImageGraphReadPolicy
+        - !If [RdsExport, !Ref RdsExportPermissions, !Ref AWS::NoValue]
+        - !If [DynamoDBExport, !Ref DynamoDBExportPermissions, !Ref AWS::NoValue]
+        - !If [DataApi, !Ref DataApiPermissions, !Ref AWS::NoValue]
+        - !If [RedshiftReads, !Ref RedshiftReadPermissions, !Ref AWS::NoValue]
       Policies:
         - PolicyName: scanner
           PolicyDocument:
@@ -391,14 +402,6 @@ Resources:
                 Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt ResultsBucket.Arn
-              # --- its configuration document in SSM, when ConfigLocation names one
-              - !If
-                - ConfigInSsm
-                - Sid: ReadOwnConfigParameter
-                  Effect: Allow
-                  Action: ssm:GetParameter
-                  Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/*
-                - !Ref AWS::NoValue
               - Sid: OwnLogs
                 Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
@@ -478,13 +481,6 @@ Resources:
                 Effect: Allow
                 Action: es:ESHttpGet
                 Resource: !Sub arn:${AWS::Partition}:es:${AWS::Region}:${AWS::AccountId}:domain/*/*
-              - !If
-                - OpenSearchServerless
-                - Sid: ReadServerlessCollections
-                  Effect: Allow
-                  Action: aoss:APIAccessAll
-                  Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
-                - !Ref AWS::NoValue
               # --- Snapshots, backups and file systems: discover and report
               - Sid: DescribeSnapshotsBackupsAndFileSystems
                 Effect: Allow
@@ -499,25 +495,6 @@ Resources:
                   - docdb-elastic:ListClusters
                   - docdb-elastic:ListTagsForResource
                 Resource: "*"
-              - !If
-                - EbsRead
-                - Sid: ReadEbsSnapshotBlocks
-                  Effect: Allow
-                  Action: [ebs:ListSnapshotBlocks, ebs:GetSnapshotBlock]
-                  Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
-                - !Ref AWS::NoValue
-              - !If
-                - EbsRead
-                - Sid: DecryptSnapshotsThroughEbs
-                  Effect: Allow
-                  Action: kms:Decrypt
-                  Resource: "*"
-                  Condition:
-                    StringEquals:
-                      kms:ViaService:
-                        - !Sub ebs.${AWS::Region}.amazonaws.com
-                        - !Sub ec2.${AWS::Region}.amazonaws.com
-                - !Ref AWS::NoValue
               # --- Streams and queues: Kinesis sampled (never checkpointed), Firehose
               # destinations read as S3, SQS listed (dead-letter queues opt-in below)
               - Sid: ReadStreamsAndListQueues
@@ -536,62 +513,6 @@ Resources:
                   - sqs:GetQueueAttributes
                   - sqs:ListQueueTags
                 Resource: "*"
-              - !If
-                - SqsDlq
-                - Sid: ReceiveFromDeadLetterQueues
-                  Effect: Allow
-                  Action: sqs:ReceiveMessage
-                  Resource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*
-                - !Ref AWS::NoValue
-              - !If
-                - SqsDlq
-                - Sid: DecryptQueuesThroughSqs
-                  Effect: Allow
-                  Action: kms:Decrypt
-                  Resource: "*"
-                  Condition:
-                    StringEquals:
-                      kms:ViaService: !Sub sqs.${AWS::Region}.amazonaws.com
-                - !Ref AWS::NoValue
-              # --- Parameter Store and Secrets Manager
-              - Sid: ListConfigStores
-                Effect: Allow
-                Action:
-                  - ssm:DescribeParameters
-                  - ssm:ListTagsForResource
-                  - secretsmanager:ListSecrets
-                Resource: "*"
-              - Sid: ReadParameters
-                Effect: Allow
-                Action: ssm:GetParameters
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*
-              - !If
-                - SsmSecureStrings
-                - Sid: DecryptParametersThroughSsm
-                  Effect: Allow
-                  Action: kms:Decrypt
-                  Resource: "*"
-                  Condition:
-                    StringEquals:
-                      kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
-                - !Ref AWS::NoValue
-              - !If
-                - SecretsValues
-                - Sid: ReadSecretValues
-                  Effect: Allow
-                  Action: secretsmanager:GetSecretValue
-                  Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*
-                - !Ref AWS::NoValue
-              - !If
-                - SecretsValues
-                - Sid: DecryptSecretsThroughSecretsManager
-                  Effect: Allow
-                  Action: kms:Decrypt
-                  Resource: "*"
-                  Condition:
-                    StringEquals:
-                      kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
-                - !Ref AWS::NoValue
               # --- Caches (reported), Timestream and Keyspaces (sampled read-only queries)
               - Sid: DescribeCachesAndTimeSeries
                 Effect: Allow
@@ -654,516 +575,641 @@ Resources:
                 Resource: !Sub arn:${AWS::Partition}:s3express:${AWS::Region}:${AWS::AccountId}:bucket/*
                 Condition:
                   StringEquals: { "s3express:SessionMode": ReadOnly }
-              # --- Brokers: MSK and Amazon MQ, discovered and reported; reads opt-in below
-              - Sid: DescribeBrokers
-                Effect: Allow
-                Action: [kafka:ListClustersV2, mq:ListBrokers, mq:DescribeBroker]
-                Resource: "*"
-              - !If
-                - MskReads
-                - Sid: MskBootstrapBrokers
-                  Effect: Allow
-                  Action: kafka:GetBootstrapBrokers
-                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*
-                - !Ref AWS::NoValue
-              - !If
-                - MskReads
-                - Sid: ConnectToMskClusters
-                  Effect: Allow
-                  Action: [kafka-cluster:Connect, kafka-cluster:DescribeCluster]
-                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*
-                - !Ref AWS::NoValue
-              - !If
-                - MskReads
-                - Sid: ReadMskTopics
-                  Effect: Allow
-                  Action: [kafka-cluster:DescribeTopic, kafka-cluster:ReadData]
-                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:topic/*/*/*
-                - !Ref AWS::NoValue
-              # Its own throwaway groups only, and only to describe them (the consumer
-              # asks for their committed offsets; there are none, and AlterGroup is denied).
-              - !If
-                - MskReads
-                - Sid: DescribeOwnThrowawayGroups
-                  Effect: Allow
-                  Action: kafka-cluster:DescribeGroup
-                  Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:group/*/*/sensitive-data-scanner-*
-                - !Ref AWS::NoValue
-              - !If
-                - MqReads
-                - Sid: CheckMqUsers
-                  Effect: Allow
-                  Action: [mq:DescribeUser, mq:DescribeConfigurationRevision]
-                  Resource:
-                    - !Sub arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:broker:*
-                    - !Sub arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:configuration:*
-                - !Ref AWS::NoValue
-              - !If
-                - MqReads
-                - Sid: ReadMqUserSecrets
-                  Effect: Allow
-                  Action: secretsmanager:GetSecretValue
-                  Resource: !Ref MqSecretArns
-                - !Ref AWS::NoValue
-              # --- Images, ML, graphs and archives: discovered and reported (#35)
-              - Sid: DescribeImagesMlGraphsAndArchives
-                Effect: Allow
-                Action:
-                  - ecr:DescribeRepositories
-                  - ecr:ListTagsForResource
-                  - sagemaker:ListFeatureGroups
-                  - sagemaker:DescribeFeatureGroup
-                  - sagemaker:ListNotebookInstances
-                  - sagemaker:ListTags
-                  - neptune-graph:ListGraphs
-                  - neptune-graph:ListTagsForResource
-                  - events:ListArchives
-                  - events:DescribeArchive
-                  - glacier:ListVaults
-                  - glacier:ListTagsForVault
-                Resource: "*"
-              - !If
-                - EcrReads
-                - Sid: ReadEcrImageLayers
-                  Effect: Allow
-                  Action: [ecr:DescribeImages, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
-                  Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*
-                - !Ref AWS::NoValue
-              - !If
-                - NeptuneGraphExport
-                - Sid: StartGraphExports
-                  Effect: Allow
-                  Action: neptune-graph:StartExportTask
-                  Resource: !Sub arn:${AWS::Partition}:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/*
-                - !Ref AWS::NoValue
-              - !If
-                - NeptuneGraphExport
-                - Sid: WatchGraphExports
-                  Effect: Allow
-                  Action: neptune-graph:GetExportTask
-                  Resource: !Sub arn:${AWS::Partition}:neptune-graph:${AWS::Region}:${AWS::AccountId}:export-task/*
-                - !Ref AWS::NoValue
-              - !If
-                - NeptuneGraphExport
-                - Sid: PassTheGraphExportRoleOnly
-                  Effect: Allow
-                  Action: iam:PassRole
-                  Resource: !GetAtt NeptuneGraphExportRole.Arn
-                  Condition:
-                    StringEquals: { iam:PassedToService: neptune-graph.amazonaws.com }
-                - !Ref AWS::NoValue
-              - !If
-                - NeptuneGraphExport
-                - Sid: ReadTheGraphExport
-                  Effect: Allow
-                  Action: kms:Decrypt
-                  Resource: !Ref NeptuneAnalyticsExportKmsKeyArn
-                  Condition:
-                    StringEquals: { kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com" }
-                - !Ref AWS::NoValue
-              # An archive is read only by a replay: to a rule of the scanner's own on the
-              # archive's bus, which sends only its replays to its own queue.
-              - !If
-                - EventBridgeReplays
-                - Sid: OwnReplayRules
-                  Effect: Allow
-                  Action: [events:PutRule, events:PutTargets, events:RemoveTargets, events:DeleteRule]
-                  Resource:
-                    - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/sensitive-data-scanner-replay-*
-                    - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*
-                - !Ref AWS::NoValue
-              - !If
-                - EventBridgeReplays
-                - Sid: StartOwnReplays
-                  Effect: Allow
-                  Action: [events:StartReplay, events:DescribeReplay]
-                  Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:replay/sds-*
-                - !Ref AWS::NoValue
-              - !If
-                - EventBridgeReplays
-                - Sid: OwnReplayQueue
-                  Effect: Allow
-                  Action: [sqs:ReceiveMessage, sqs:DeleteMessage]
-                  Resource: !GetAtt ReplayQueue.Arn
-                - !Ref AWS::NoValue
-              # --- Which KMS keys are AWS managed (alias/aws/*), to tell each store's
-              # at-rest key apart (#35). Metadata only: no key is described or used.
-              - Sid: ListKmsAliases
-                Effect: Allow
-                Action: kms:ListAliases
-                Resource: "*"
-              # --- Push findings to the central sink
-              - !If
-                - HasBus
-                - Sid: PushFindings
-                  Effect: Allow
-                  Action: events:PutEvents
-                  Resource: !Ref FindingsEventBusArn
-                - !Ref AWS::NoValue
-              # --- Customer managed keys, only through S3 and DynamoDB
-              - !If
-                - KmsDecrypt
-                - Sid: DecryptThroughS3AndDynamoDB
-                  Effect: Allow
-                  Action: kms:Decrypt
-                  Resource: "*"
-                  Condition:
-                    StringEquals:
-                      kms:ViaService:
-                        - !Sub s3.${AWS::Region}.amazonaws.com
-                        - !Sub dynamodb.${AWS::Region}.amazonaws.com
-                        - !Sub kinesis.${AWS::Region}.amazonaws.com
-                        - !Sub states.${AWS::Region}.amazonaws.com
-                        - !Sub lambda.${AWS::Region}.amazonaws.com
-                        - !Sub xray.${AWS::Region}.amazonaws.com
-                        - !Sub codecommit.${AWS::Region}.amazonaws.com
-                - !Ref AWS::NoValue
-              - !If
-                - MacieImport
-                - Sid: ReadMacieFindings
-                  Effect: Allow
-                  Action:
-                    - macie2:GetMacieSession
-                    - macie2:ListFindings
-                    - macie2:GetFindings
-                  Resource: "*"
-                - !Ref AWS::NoValue
-              # --- Defense in depth: never write anywhere else, never escalate
-              - Sid: NeverRevealOrChangeMacie
-                Effect: Deny
-                Action:
-                  - macie2:GetSensitiveDataOccurrences*
-                  - macie2:GetRevealConfiguration
-                  - macie2:UpdateRevealConfiguration
-                  - macie2:Create*
-                  - macie2:Update*
-                  - macie2:Delete*
-                  - macie2:Put*
-                  - macie2:Enable*
-                  - macie2:Disable*
-                  - macie2:Accept*
-                  - macie2:Decline*
-                  - macie2:Tag*
-                  - macie2:Untag*
-                Resource: "*"
-              - Sid: NoWritesOutsideOwnBucket
-                Effect: Deny
-                Action:
-                  - s3:PutObject
-                  - s3:PutObjectAcl
-                  - s3:PutObjectTagging
-                  - s3:DeleteObject
-                  - s3:DeleteObjectVersion
-                  - s3:RestoreObject
-                  - s3:ReplicateObject
-                  - s3:PutBucket*
-                  - s3:DeleteBucket*
-                NotResource:
-                  - !GetAtt ResultsBucket.Arn
-                  - !Sub ${ResultsBucket.Arn}/*
-              - Sid: NoDataStoreWrites
-                Effect: Deny
-                Action:
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:BatchWriteItem
-                  - dynamodb:PartiQLInsert
-                  - dynamodb:PartiQLUpdate
-                  - dynamodb:PartiQLDelete
-                  - dynamodb:Create*
-                  - dynamodb:Delete*
-                  - dynamodb:Update*
-                  - dynamodb:Restore*
-                  - rds:Create*
-                  - rds:Delete*
-                  - rds:Modify*
-                  - rds:Reboot*
-                  - rds:Restore*
-                  - rds:StopDB*
-                  - rds:CancelExportTask
-                  - glue:Create*
-                  - glue:Update*
-                  - glue:Delete*
-                  - glue:BatchDelete*
-                  - logs:Delete*
-                  - logs:PutRetentionPolicy
-                  - logs:PutSubscriptionFilter
-                  - logs:PutDataProtectionPolicy
-                  - redshift:CreateClusterUser
-                  - redshift:JoinGroup
-                  - redshift:Modify*
-                  - redshift:Delete*
-                  - redshift:Pause*
-                  - redshift:Resume*
-                  - redshift:Reboot*
-                  - redshift:Restore*
-                  - redshift-serverless:Create*
-                  - redshift-serverless:Update*
-                  - redshift-serverless:Delete*
-                  - redshift-serverless:Restore*
-                  - redshift-data:BatchExecuteStatement
-                  - es:ESHttpPost
-                  - es:ESHttpPut
-                  - es:ESHttpPatch
-                  - es:ESHttpDelete
-                  - es:Create*
-                  - es:Delete*
-                  - es:Update*
-                  - aoss:Create*
-                  - aoss:Update*
-                  - aoss:Delete*
-                  - ebs:StartSnapshot
-                  - ebs:PutSnapshotBlock
-                  - ebs:CompleteSnapshot
-                  - ec2:CreateSnapshot*
-                  - ec2:CreateVolume
-                  - ec2:CopySnapshot
-                  - ec2:DeleteSnapshot
-                  - ec2:DeleteVolume
-                  - ec2:ModifySnapshot*
-                  - ec2:ModifyVolume*
-                  - ec2:AttachVolume
-                  - ec2:DetachVolume
-                  - backup:Create*
-                  - backup:Delete*
-                  - backup:Put*
-                  - backup:Start*
-                  - backup:Update*
-                  - elasticfilesystem:Create*
-                  - elasticfilesystem:Delete*
-                  - elasticfilesystem:Put*
-                  - elasticfilesystem:Update*
-                  - elasticfilesystem:ClientWrite
-                  - elasticfilesystem:ClientRootAccess
-                  - fsx:Create*
-                  - fsx:Delete*
-                  - fsx:Update*
-                  - docdb-elastic:Create*
-                  - docdb-elastic:Delete*
-                  - docdb-elastic:Update*
-                  - kinesis:PutRecord*
-                  - kinesis:Create*
-                  - kinesis:Delete*
-                  - kinesis:Update*
-                  - kinesis:MergeShards
-                  - kinesis:SplitShard
-                  - kinesis:RegisterStreamConsumer
-                  - kinesis:*StreamEncryption
-                  - kinesis:*RetentionPeriod
-                  - firehose:Create*
-                  - firehose:Delete*
-                  - firehose:Update*
-                  - firehose:Put*
-                  - firehose:Start*
-                  - firehose:Stop*
-                  - sqs:ChangeMessageVisibility*
-                  - sqs:SendMessage*
-                  - sqs:PurgeQueue
-                  - sqs:SetQueueAttributes
-                  - sqs:CreateQueue
-                  - sqs:DeleteQueue
-                  - sqs:StartMessageMoveTask
-                  - sqs:CancelMessageMoveTask
-                  - ssm:PutParameter
-                  - ssm:DeleteParameter*
-                  - ssm:LabelParameterVersion
-                  - ssm:UnlabelParameterVersion
-                  - secretsmanager:CreateSecret
-                  - secretsmanager:PutSecretValue
-                  - secretsmanager:UpdateSecret*
-                  - secretsmanager:DeleteSecret
-                  - secretsmanager:RestoreSecret
-                  - secretsmanager:RotateSecret
-                  - secretsmanager:CancelRotateSecret
-                  - secretsmanager:PutResourcePolicy
-                  - secretsmanager:DeleteResourcePolicy
-                  - secretsmanager:ReplicateSecretToRegions
-                  - secretsmanager:RemoveRegionsFromReplication
-                  - secretsmanager:StopReplicationToReplica
-                  - elasticache:Create*
-                  - elasticache:Delete*
-                  - elasticache:Modify*
-                  - elasticache:CopySnapshot
-                  - elasticache:CopyServerlessCacheSnapshot
-                  - elasticache:ExportServerlessCacheSnapshot
-                  - elasticache:Reboot*
-                  - elasticache:TestFailover
-                  - memorydb:Create*
-                  - memorydb:Delete*
-                  - memorydb:Update*
-                  - memorydb:CopySnapshot
-                  - timestream:WriteRecords
-                  - timestream:Create*
-                  - timestream:Delete*
-                  - timestream:Update*
-                  - timestream-influxdb:Create*
-                  - timestream-influxdb:Delete*
-                  - timestream-influxdb:Update*
-                  - cassandra:Create
-                  - cassandra:Alter
-                  - cassandra:Drop
-                  - cassandra:Modify
-                  - cassandra:Restore*
-                  - cassandra:UpdatePartitioner
-                  - states:Start*
-                  - states:Stop*
-                  - states:Create*
-                  - states:Delete*
-                  - states:Update*
-                  - states:SendTask*
-                  - states:RedriveExecution
-                  - states:Publish*
-                  - states:TagResource
-                  - states:UntagResource
-                  - lambda:Create*
-                  - lambda:Delete*
-                  - lambda:Update*
-                  - lambda:Put*
-                  - lambda:Publish*
-                  - lambda:AddPermission
-                  - lambda:RemovePermission
-                  - lambda:Invoke*
-                  - lambda:TagResource
-                  - lambda:UntagResource
-                  - xray:Put*
-                  - xray:Create*
-                  - xray:Delete*
-                  - xray:Update*
-                  - xray:TagResource
-                  - xray:UntagResource
-                  - codecommit:Put*
-                  - codecommit:Create*
-                  - codecommit:Delete*
-                  - codecommit:Update*
-                  - codecommit:Merge*
-                  - codecommit:Post*
-                  - codecommit:Override*
-                  - codecommit:Associate*
-                  - codecommit:Disassociate*
-                  - codecommit:GitPush
-                  - codecommit:TagResource
-                  - codecommit:UntagResource
-                  - s3express:CreateBucket
-                  - s3express:DeleteBucket
-                  - s3express:PutBucketPolicy
-                  - s3express:DeleteBucketPolicy
-                  - s3express:PutEncryptionConfiguration
-                  - s3express:PutLifecycleConfiguration
-                  - kafka-cluster:WriteData
-                  - kafka-cluster:WriteDataIdempotently
-                  - kafka-cluster:AlterGroup
-                  - kafka-cluster:DeleteGroup
-                  - kafka-cluster:CreateTopic
-                  - kafka-cluster:DeleteTopic
-                  - kafka-cluster:AlterTopic
-                  - kafka-cluster:AlterTopicDynamicConfiguration
-                  - kafka-cluster:AlterCluster
-                  - kafka-cluster:AlterClusterDynamicConfiguration
-                  - kafka-cluster:AlterTransactionalId
-                  - kafka:Create*
-                  - kafka:Delete*
-                  - kafka:Update*
-                  - kafka:Reboot*
-                  - kafka:Put*
-                  - kafka:BatchAssociate*
-                  - kafka:BatchDisassociate*
-                  - kafka:TagResource
-                  - kafka:UntagResource
-                  - mq:Create*
-                  - mq:Delete*
-                  - mq:Update*
-                  - mq:Reboot*
-                  - mq:Promote
-                  - ecr:Put*
-                  - ecr:BatchDeleteImage
-                  - ecr:Delete*
-                  - ecr:Create*
-                  - ecr:InitiateLayerUpload
-                  - ecr:UploadLayerPart
-                  - ecr:CompleteLayerUpload
-                  - ecr:Set*
-                  - ecr:Start*
-                  - ecr:ReplicateImage
-                  - ecr:TagResource
-                  - ecr:UntagResource
-                  - sagemaker:Create*
-                  - sagemaker:Delete*
-                  - sagemaker:Update*
-                  - sagemaker:Put*
-                  - sagemaker:Start*
-                  - sagemaker:Stop*
-                  - sagemaker:AddTags
-                  - neptune-graph:Create*
-                  - neptune-graph:Delete*
-                  - neptune-graph:Update*
-                  - neptune-graph:Reset*
-                  - neptune-graph:Restore*
-                  - neptune-graph:StartImportTask
-                  - neptune-graph:CancelImportTask
-                  - neptune-graph:CancelExportTask
-                  - neptune-graph:WriteDataViaQuery
-                  - neptune-graph:DeleteDataViaQuery
-                  - neptune-graph:TagResource
-                  - neptune-graph:UntagResource
-                  - events:CreateArchive
-                  - events:DeleteArchive
-                  - events:UpdateArchive
-                  - events:CancelReplay
-                  - events:CreateEventBus
-                  - events:DeleteEventBus
-                  - events:UpdateEventBus
-                  - events:PutPermission
-                  - events:RemovePermission
-                  - glacier:InitiateJob
-                  - glacier:Delete*
-                  - glacier:Upload*
-                  - glacier:Create*
-                  - glacier:Set*
-                  - glacier:AbortMultipartUpload
-                  - glacier:CompleteMultipartUpload
-                  - glacier:InitiateMultipartUpload
-                  - glacier:AddTagsToVault
-                  - glacier:RemoveTagsFromVault
-                  - glacier:AbortVaultLock
-                  - glacier:CompleteVaultLock
-                  - glacier:InitiateVaultLock
-                Resource: "*"
-              # Messages are deleted from the scanner's own replay queue only (it takes each
-              # replayed event off once read); every other queue's messages stay.
-              - Sid: NoMessageDeletesButOwnQueue
-                Effect: Deny
-                Action: sqs:DeleteMessage*
-                NotResource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:sensitive-data-scanner-replay
-              # Rules and replays: the scanner's own only, never the customer's.
-              - Sid: NoRulesButOwnReplayRules
-                Effect: Deny
-                Action:
-                  - events:PutRule
-                  - events:PutTargets
-                  - events:RemoveTargets
-                  - events:DeleteRule
-                  - events:DisableRule
-                  - events:EnableRule
-                NotResource:
-                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/sensitive-data-scanner-replay-*
-                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*
-              - Sid: NoReplaysButOwn
-                Effect: Deny
-                Action: events:StartReplay
-                NotResource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:replay/sds-*
-              # A session that could write is never created (the Allow above asks for
-              # ReadOnly too; this holds whatever else the role is given).
-              - Sid: NoReadWriteExpressSessions
-                Effect: Deny
-                Action: s3express:CreateSession
-                Resource: "*"
-                Condition:
-                  StringNotEquals: { "s3express:SessionMode": ReadOnly }
-              - Sid: NeverAskLakeFormation
-                Effect: Deny
-                Action: lakeformation:*
-                Resource: "*"
+
+  # --- Defense in depth, attached to ScannerRole as managed policies: IAM allows a
+  # role 10,240 characters of inline policy in all, and these Denies alone are most
+  # of that (docs/ARCHITECTURE.md, Policy sizes). Never write to a data store.
+  DataStoreWriteDenyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: NoDataStoreWrites
+            Effect: Deny
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:PartiQLInsert
+              - dynamodb:PartiQLUpdate
+              - dynamodb:PartiQLDelete
+              - dynamodb:Create*
+              - dynamodb:Delete*
+              - dynamodb:Update*
+              - dynamodb:Restore*
+              - rds:Create*
+              - rds:Delete*
+              - rds:Modify*
+              - rds:Reboot*
+              - rds:Restore*
+              - rds:StopDB*
+              - rds:CancelExportTask
+              - glue:Create*
+              - glue:Update*
+              - glue:Delete*
+              - glue:BatchDelete*
+              - logs:Delete*
+              - logs:PutRetentionPolicy
+              - logs:PutSubscriptionFilter
+              - logs:PutDataProtectionPolicy
+              - redshift:CreateClusterUser
+              - redshift:JoinGroup
+              - redshift:Modify*
+              - redshift:Delete*
+              - redshift:Pause*
+              - redshift:Resume*
+              - redshift:Reboot*
+              - redshift:Restore*
+              - redshift-serverless:Create*
+              - redshift-serverless:Update*
+              - redshift-serverless:Delete*
+              - redshift-serverless:Restore*
+              - redshift-data:BatchExecuteStatement
+              - es:ESHttpPost
+              - es:ESHttpPut
+              - es:ESHttpPatch
+              - es:ESHttpDelete
+              - es:Create*
+              - es:Delete*
+              - es:Update*
+              - aoss:Create*
+              - aoss:Update*
+              - aoss:Delete*
+              - ebs:StartSnapshot
+              - ebs:PutSnapshotBlock
+              - ebs:CompleteSnapshot
+              - ec2:CreateSnapshot*
+              - ec2:CreateVolume
+              - ec2:CopySnapshot
+              - ec2:DeleteSnapshot
+              - ec2:DeleteVolume
+              - ec2:ModifySnapshot*
+              - ec2:ModifyVolume*
+              - ec2:AttachVolume
+              - ec2:DetachVolume
+              - backup:Create*
+              - backup:Delete*
+              - backup:Put*
+              - backup:Start*
+              - backup:Update*
+              - elasticfilesystem:Create*
+              - elasticfilesystem:Delete*
+              - elasticfilesystem:Put*
+              - elasticfilesystem:Update*
+              - elasticfilesystem:ClientWrite
+              - elasticfilesystem:ClientRootAccess
+              - fsx:Create*
+              - fsx:Delete*
+              - fsx:Update*
+              - docdb-elastic:Create*
+              - docdb-elastic:Delete*
+              - docdb-elastic:Update*
+              - kinesis:PutRecord*
+              - kinesis:Create*
+              - kinesis:Delete*
+              - kinesis:Update*
+              - kinesis:MergeShards
+              - kinesis:SplitShard
+              - kinesis:RegisterStreamConsumer
+              - kinesis:*StreamEncryption
+              - kinesis:*RetentionPeriod
+              - firehose:Create*
+              - firehose:Delete*
+              - firehose:Update*
+              - firehose:Put*
+              - firehose:Start*
+              - firehose:Stop*
+              - sqs:ChangeMessageVisibility*
+              - sqs:SendMessage*
+              - sqs:PurgeQueue
+              - sqs:SetQueueAttributes
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:StartMessageMoveTask
+              - sqs:CancelMessageMoveTask
+              - ssm:PutParameter
+              - ssm:DeleteParameter*
+              - ssm:LabelParameterVersion
+              - ssm:UnlabelParameterVersion
+              - secretsmanager:CreateSecret
+              - secretsmanager:PutSecretValue
+              - secretsmanager:UpdateSecret*
+              - secretsmanager:DeleteSecret
+              - secretsmanager:RestoreSecret
+              - secretsmanager:RotateSecret
+              - secretsmanager:CancelRotateSecret
+              - secretsmanager:PutResourcePolicy
+              - secretsmanager:DeleteResourcePolicy
+              - secretsmanager:ReplicateSecretToRegions
+              - secretsmanager:RemoveRegionsFromReplication
+              - secretsmanager:StopReplicationToReplica
+              - elasticache:Create*
+              - elasticache:Delete*
+              - elasticache:Modify*
+              - elasticache:CopySnapshot
+              - elasticache:CopyServerlessCacheSnapshot
+              - elasticache:ExportServerlessCacheSnapshot
+              - elasticache:Reboot*
+              - elasticache:TestFailover
+              - memorydb:Create*
+              - memorydb:Delete*
+              - memorydb:Update*
+              - memorydb:CopySnapshot
+              - timestream:WriteRecords
+              - timestream:Create*
+              - timestream:Delete*
+              - timestream:Update*
+              - timestream-influxdb:Create*
+              - timestream-influxdb:Delete*
+              - timestream-influxdb:Update*
+              - cassandra:Create
+              - cassandra:Alter
+              - cassandra:Drop
+              - cassandra:Modify
+              - cassandra:Restore*
+              - cassandra:UpdatePartitioner
+              - states:Start*
+              - states:Stop*
+              - states:Create*
+              - states:Delete*
+              - states:Update*
+              - states:SendTask*
+              - states:RedriveExecution
+              - states:Publish*
+              - states:TagResource
+              - states:UntagResource
+              - lambda:Create*
+              - lambda:Delete*
+              - lambda:Update*
+              - lambda:Put*
+              - lambda:Publish*
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:Invoke*
+              - lambda:TagResource
+              - lambda:UntagResource
+              - xray:Put*
+              - xray:Create*
+              - xray:Delete*
+              - xray:Update*
+              - xray:TagResource
+              - xray:UntagResource
+              - codecommit:Put*
+              - codecommit:Create*
+              - codecommit:Delete*
+              - codecommit:Update*
+              - codecommit:Merge*
+              - codecommit:Post*
+              - codecommit:Override*
+              - codecommit:Associate*
+              - codecommit:Disassociate*
+              - codecommit:GitPush
+              - codecommit:TagResource
+              - codecommit:UntagResource
+              - s3express:CreateBucket
+              - s3express:DeleteBucket
+              - s3express:PutBucketPolicy
+              - s3express:DeleteBucketPolicy
+              - s3express:PutEncryptionConfiguration
+              - s3express:PutLifecycleConfiguration
+              - kafka-cluster:WriteData
+              - kafka-cluster:WriteDataIdempotently
+              - kafka-cluster:AlterGroup
+              - kafka-cluster:DeleteGroup
+              - kafka-cluster:CreateTopic
+              - kafka-cluster:DeleteTopic
+              - kafka-cluster:AlterTopic
+              - kafka-cluster:AlterTopicDynamicConfiguration
+              - kafka-cluster:AlterCluster
+              - kafka-cluster:AlterClusterDynamicConfiguration
+              - kafka-cluster:AlterTransactionalId
+              - kafka:Create*
+              - kafka:Delete*
+              - kafka:Update*
+              - kafka:Reboot*
+              - kafka:Put*
+              - kafka:BatchAssociate*
+              - kafka:BatchDisassociate*
+              - kafka:TagResource
+              - kafka:UntagResource
+              - mq:Create*
+              - mq:Delete*
+              - mq:Update*
+              - mq:Reboot*
+              - mq:Promote
+              - ecr:Put*
+              - ecr:BatchDeleteImage
+              - ecr:Delete*
+              - ecr:Create*
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:Set*
+              - ecr:Start*
+              - ecr:ReplicateImage
+              - ecr:TagResource
+              - ecr:UntagResource
+              - sagemaker:Create*
+              - sagemaker:Delete*
+              - sagemaker:Update*
+              - sagemaker:Put*
+              - sagemaker:Start*
+              - sagemaker:Stop*
+              - sagemaker:AddTags
+              - neptune-graph:Create*
+              - neptune-graph:Delete*
+              - neptune-graph:Update*
+              - neptune-graph:Reset*
+              - neptune-graph:Restore*
+              - neptune-graph:StartImportTask
+              - neptune-graph:CancelImportTask
+              - neptune-graph:CancelExportTask
+              - neptune-graph:WriteDataViaQuery
+              - neptune-graph:DeleteDataViaQuery
+              - neptune-graph:TagResource
+              - neptune-graph:UntagResource
+              - events:CreateArchive
+              - events:DeleteArchive
+              - events:UpdateArchive
+              - events:CancelReplay
+              - events:CreateEventBus
+              - events:DeleteEventBus
+              - events:UpdateEventBus
+              - events:PutPermission
+              - events:RemovePermission
+              - glacier:InitiateJob
+              - glacier:Delete*
+              - glacier:Upload*
+              - glacier:Create*
+              - glacier:Set*
+              - glacier:AbortMultipartUpload
+              - glacier:CompleteMultipartUpload
+              - glacier:InitiateMultipartUpload
+              - glacier:AddTagsToVault
+              - glacier:RemoveTagsFromVault
+              - glacier:AbortVaultLock
+              - glacier:CompleteVaultLock
+              - glacier:InitiateVaultLock
+            Resource: "*"
+
+  # Never write anywhere else, never escalate, never reveal.
+  GuardDenyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # --- Defense in depth: never write anywhere else, never escalate
+          - Sid: NeverRevealOrChangeMacie
+            Effect: Deny
+            Action:
+              - macie2:GetSensitiveDataOccurrences*
+              - macie2:GetRevealConfiguration
+              - macie2:UpdateRevealConfiguration
+              - macie2:Create*
+              - macie2:Update*
+              - macie2:Delete*
+              - macie2:Put*
+              - macie2:Enable*
+              - macie2:Disable*
+              - macie2:Accept*
+              - macie2:Decline*
+              - macie2:Tag*
+              - macie2:Untag*
+            Resource: "*"
+          - Sid: NoWritesOutsideOwnBucket
+            Effect: Deny
+            Action:
+              - s3:PutObject
+              - s3:PutObjectAcl
+              - s3:PutObjectTagging
+              - s3:DeleteObject
+              - s3:DeleteObjectVersion
+              - s3:RestoreObject
+              - s3:ReplicateObject
+              - s3:PutBucket*
+              - s3:DeleteBucket*
+            NotResource:
+              - !GetAtt ResultsBucket.Arn
+              - !Sub ${ResultsBucket.Arn}/*
+          # Messages are deleted from the scanner's own replay queue only (it takes each
+          # replayed event off once read); every other queue's messages stay.
+          - Sid: NoMessageDeletesButOwnQueue
+            Effect: Deny
+            Action: sqs:DeleteMessage*
+            NotResource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:sensitive-data-scanner-replay
+          # Rules and replays: the scanner's own only, never the customer's.
+          - Sid: NoRulesButOwnReplayRules
+            Effect: Deny
+            Action:
+              - events:PutRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:DeleteRule
+              - events:DisableRule
+              - events:EnableRule
+            NotResource:
+              - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/sensitive-data-scanner-replay-*
+              - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*
+          - Sid: NoReplaysButOwn
+            Effect: Deny
+            Action: events:StartReplay
+            NotResource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:replay/sds-*
+          # A session that could write is never created (the Allow above asks for
+          # ReadOnly too; this holds whatever else the role is given).
+          - Sid: NoReadWriteExpressSessions
+            Effect: Deny
+            Action: s3express:CreateSession
+            Resource: "*"
+            Condition:
+              StringNotEquals: { "s3express:SessionMode": ReadOnly }
+          - Sid: NeverAskLakeFormation
+            Effect: Deny
+            Action: lakeformation:*
+            Resource: "*"
+
+  # Opt-in reads of stores and keys, delivery and the Macie import (each statement
+  # under its parameter); ListConfigStores and ReadParameters keep it never empty.
+  StoreReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # --- its configuration document in SSM, when ConfigLocation names one
+          - !If
+            - ConfigInSsm
+            - Sid: ReadOwnConfigParameter
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/*
+            - !Ref AWS::NoValue
+          - !If
+            - OpenSearchServerless
+            - Sid: ReadServerlessCollections
+              Effect: Allow
+              Action: aoss:APIAccessAll
+              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+            - !Ref AWS::NoValue
+          - !If
+            - EbsRead
+            - Sid: ReadEbsSnapshotBlocks
+              Effect: Allow
+              Action: [ebs:ListSnapshotBlocks, ebs:GetSnapshotBlock]
+              Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
+            - !Ref AWS::NoValue
+          - !If
+            - EbsRead
+            - Sid: DecryptSnapshotsThroughEbs
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService:
+                    - !Sub ebs.${AWS::Region}.amazonaws.com
+                    - !Sub ec2.${AWS::Region}.amazonaws.com
+            - !Ref AWS::NoValue
+          - !If
+            - SqsDlq
+            - Sid: ReceiveFromDeadLetterQueues
+              Effect: Allow
+              Action: sqs:ReceiveMessage
+              Resource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*
+            - !Ref AWS::NoValue
+          - !If
+            - SqsDlq
+            - Sid: DecryptQueuesThroughSqs
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub sqs.${AWS::Region}.amazonaws.com
+            - !Ref AWS::NoValue
+          # --- Parameter Store and Secrets Manager
+          - Sid: ListConfigStores
+            Effect: Allow
+            Action:
+              - ssm:DescribeParameters
+              - ssm:ListTagsForResource
+              - secretsmanager:ListSecrets
+            Resource: "*"
+          - Sid: ReadParameters
+            Effect: Allow
+            Action: ssm:GetParameters
+            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*
+          - !If
+            - SsmSecureStrings
+            - Sid: DecryptParametersThroughSsm
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+            - !Ref AWS::NoValue
+          - !If
+            - SecretsValues
+            - Sid: ReadSecretValues
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*
+            - !Ref AWS::NoValue
+          - !If
+            - SecretsValues
+            - Sid: DecryptSecretsThroughSecretsManager
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
+            - !Ref AWS::NoValue
+          # --- Which KMS keys are AWS managed (alias/aws/*), to tell each store's
+          # at-rest key apart (#35). Metadata only: no key is described or used.
+          - Sid: ListKmsAliases
+            Effect: Allow
+            Action: kms:ListAliases
+            Resource: "*"
+          # --- Push findings to the central sink
+          - !If
+            - HasBus
+            - Sid: PushFindings
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !Ref FindingsEventBusArn
+            - !Ref AWS::NoValue
+          # --- Customer managed keys, only through S3 and DynamoDB
+          - !If
+            - KmsDecrypt
+            - Sid: DecryptThroughS3AndDynamoDB
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService:
+                    - !Sub s3.${AWS::Region}.amazonaws.com
+                    - !Sub dynamodb.${AWS::Region}.amazonaws.com
+                    - !Sub kinesis.${AWS::Region}.amazonaws.com
+                    - !Sub states.${AWS::Region}.amazonaws.com
+                    - !Sub lambda.${AWS::Region}.amazonaws.com
+                    - !Sub xray.${AWS::Region}.amazonaws.com
+                    - !Sub codecommit.${AWS::Region}.amazonaws.com
+            - !Ref AWS::NoValue
+          - !If
+            - MacieImport
+            - Sid: ReadMacieFindings
+              Effect: Allow
+              Action:
+                - macie2:GetMacieSession
+                - macie2:ListFindings
+                - macie2:GetFindings
+              Resource: "*"
+            - !Ref AWS::NoValue
+
+  # Brokers, images, graphs and archives: discovery, and the opt-in reads.
+  BrokerImageGraphReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # --- Brokers: MSK and Amazon MQ, discovered and reported; reads opt-in below
+          - Sid: DescribeBrokers
+            Effect: Allow
+            Action: [kafka:ListClustersV2, mq:ListBrokers, mq:DescribeBroker]
+            Resource: "*"
+          - !If
+            - MskReads
+            - Sid: MskBootstrapBrokers
+              Effect: Allow
+              Action: kafka:GetBootstrapBrokers
+              Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*
+            - !Ref AWS::NoValue
+          - !If
+            - MskReads
+            - Sid: ConnectToMskClusters
+              Effect: Allow
+              Action: [kafka-cluster:Connect, kafka-cluster:DescribeCluster]
+              Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*
+            - !Ref AWS::NoValue
+          - !If
+            - MskReads
+            - Sid: ReadMskTopics
+              Effect: Allow
+              Action: [kafka-cluster:DescribeTopic, kafka-cluster:ReadData]
+              Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:topic/*/*/*
+            - !Ref AWS::NoValue
+          # Its own throwaway groups only, and only to describe them (the consumer
+          # asks for their committed offsets; there are none, and AlterGroup is denied).
+          - !If
+            - MskReads
+            - Sid: DescribeOwnThrowawayGroups
+              Effect: Allow
+              Action: kafka-cluster:DescribeGroup
+              Resource: !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:group/*/*/sensitive-data-scanner-*
+            - !Ref AWS::NoValue
+          - !If
+            - MqReads
+            - Sid: CheckMqUsers
+              Effect: Allow
+              Action: [mq:DescribeUser, mq:DescribeConfigurationRevision]
+              Resource:
+                - !Sub arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:broker:*
+                - !Sub arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:configuration:*
+            - !Ref AWS::NoValue
+          - !If
+            - MqReads
+            - Sid: ReadMqUserSecrets
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref MqSecretArns
+            - !Ref AWS::NoValue
+          # --- Images, ML, graphs and archives: discovered and reported (#35)
+          - Sid: DescribeImagesMlGraphsAndArchives
+            Effect: Allow
+            Action:
+              - ecr:DescribeRepositories
+              - ecr:ListTagsForResource
+              - sagemaker:ListFeatureGroups
+              - sagemaker:DescribeFeatureGroup
+              - sagemaker:ListNotebookInstances
+              - sagemaker:ListTags
+              - neptune-graph:ListGraphs
+              - neptune-graph:ListTagsForResource
+              - events:ListArchives
+              - events:DescribeArchive
+              - glacier:ListVaults
+              - glacier:ListTagsForVault
+            Resource: "*"
+          - !If
+            - EcrReads
+            - Sid: ReadEcrImageLayers
+              Effect: Allow
+              Action: [ecr:DescribeImages, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+              Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*
+            - !Ref AWS::NoValue
+          - !If
+            - NeptuneGraphExport
+            - Sid: StartGraphExports
+              Effect: Allow
+              Action: neptune-graph:StartExportTask
+              Resource: !Sub arn:${AWS::Partition}:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/*
+            - !Ref AWS::NoValue
+          - !If
+            - NeptuneGraphExport
+            - Sid: WatchGraphExports
+              Effect: Allow
+              Action: neptune-graph:GetExportTask
+              Resource: !Sub arn:${AWS::Partition}:neptune-graph:${AWS::Region}:${AWS::AccountId}:export-task/*
+            - !Ref AWS::NoValue
+          - !If
+            - NeptuneGraphExport
+            - Sid: PassTheGraphExportRoleOnly
+              Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt NeptuneGraphExportRole.Arn
+              Condition:
+                StringEquals: { iam:PassedToService: neptune-graph.amazonaws.com }
+            - !Ref AWS::NoValue
+          - !If
+            - NeptuneGraphExport
+            - Sid: ReadTheGraphExport
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Ref NeptuneAnalyticsExportKmsKeyArn
+              Condition:
+                StringEquals: { kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com" }
+            - !Ref AWS::NoValue
+          # An archive is read only by a replay: to a rule of the scanner's own on the
+          # archive's bus, which sends only its replays to its own queue.
+          - !If
+            - EventBridgeReplays
+            - Sid: OwnReplayRules
+              Effect: Allow
+              Action: [events:PutRule, events:PutTargets, events:RemoveTargets, events:DeleteRule]
+              Resource:
+                - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/sensitive-data-scanner-replay-*
+                - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*
+            - !Ref AWS::NoValue
+          - !If
+            - EventBridgeReplays
+            - Sid: StartOwnReplays
+              Effect: Allow
+              Action: [events:StartReplay, events:DescribeReplay]
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:replay/sds-*
+            - !Ref AWS::NoValue
+          - !If
+            - EventBridgeReplays
+            - Sid: OwnReplayQueue
+              Effect: Allow
+              Action: [sqs:ReceiveMessage, sqs:DeleteMessage]
+              Resource: !GetAtt ReplayQueue.Arn
+            - !Ref AWS::NoValue
 
   # Neptune Analytics export (only with NeptuneAnalyticsExportKmsKeyArn)
   NeptuneGraphExportRole:
@@ -1223,12 +1269,10 @@ Resources:
                   - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*
 
   # RDS and Aurora snapshot export (only with RdsExportKmsKeyArn)
-  RdsExportPolicy:
-    Type: AWS::IAM::RolePolicy
+  RdsExportPermissions:
+    Type: AWS::IAM::ManagedPolicy
     Condition: RdsExport
     Properties:
-      RoleName: !Ref ScannerRole
-      PolicyName: rds-snapshot-export
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -1293,12 +1337,10 @@ Resources:
                 Resource: !GetAtt ResultsBucket.Arn
 
   # DynamoDB Export to S3 (only with EnableDynamoDBExport)
-  DynamoDBExportPolicy:
-    Type: AWS::IAM::RolePolicy
+  DynamoDBExportPermissions:
+    Type: AWS::IAM::ManagedPolicy
     Condition: DynamoDBExport
     Properties:
-      RoleName: !Ref ScannerRole
-      PolicyName: dynamodb-export
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -1320,16 +1362,14 @@ Resources:
             - !Ref AWS::NoValue
 
   # Opt-in read-only SQL (only with DataApiTargets)
-  DataApiPolicy:
-    Type: AWS::IAM::RolePolicy
+  DataApiPermissions:
+    Type: AWS::IAM::ManagedPolicy
     Condition: DataApi
     Metadata:
       # The ARN lists default to empty (Split/Join keeps the lint finding here);
       # the policy exists only when DataApiTargets is set, and they with it.
       cfn-lint: { config: { ignore_checks: [W1033] } }
     Properties:
-      RoleName: !Ref ScannerRole
-      PolicyName: rds-data-api-read-only
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -1346,12 +1386,10 @@ Resources:
             Resource: !Split [",", !Join [",", !Ref DataApiSecretArns]]
 
   # Redshift reads through the Data API (only with RedshiftRead iam or db-user)
-  RedshiftReadPolicy:
-    Type: AWS::IAM::RolePolicy
+  RedshiftReadPermissions:
+    Type: AWS::IAM::ManagedPolicy
     Condition: RedshiftReads
     Properties:
-      RoleName: !Ref ScannerRole
-      PolicyName: redshift-read-only-sql
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -1392,7 +1430,14 @@ Resources:
 
   Function:
     Type: AWS::Lambda::Function
-    DependsOn: LogGroup
+    # The role holds these already (ManagedPolicyArns); named here too, so the function
+    # never runs as the role without its Denies. The conditional ones come with the role.
+    DependsOn:
+      - LogGroup
+      - DataStoreWriteDenyPolicy
+      - GuardDenyPolicy
+      - StoreReadPolicy
+      - BrokerImageGraphReadPolicy
     Metadata:
       # The zip's bucket and key default to empty; they are used only without ImageUri.
       cfn-lint: { config: { ignore_checks: [W1030, W1031] } }

@@ -294,6 +294,9 @@ class Coverage:
     indexed: int | None = None
     # (1.10, #67 part 5) Objects not read because their bytes are an indexed object's.
     duplicates: int = 0
+    # (1.10) Objects listed and not read because the store's rules do not allow them, by
+    # reason: `key_filter` (the bucket's keyInclude / keyExclude).
+    not_allowed: dict[str, int] = field(default_factory=dict)
     # (1.11, #67) How the store is listed changed: this run listed it again from the start,
     # reading only what changed.
     relisted: bool = False
@@ -324,6 +327,8 @@ class Coverage:
             out["kmsDenied"] = self.kms_denied
         if self.disguised:
             out["disguised"] = self.disguised
+        if self.not_allowed:
+            out["notAllowed"] = dict(sorted(self.not_allowed.items()))
         if self.indexed is not None:
             out["indexed"] = self.indexed
             out["rescanned"] = dict(sorted(self.rescanned.items()))

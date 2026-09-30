@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .rules import StoreRule
+from .rules import KeyFilter, StoreRule
 from .safety import redact_digits
 
 ACCESS_DENIED = frozenset(
@@ -75,6 +75,8 @@ class Store:
     error: str | None = None
     sample_percent: int | None = None
     max_per_prefix: int | None = None
+    # Which object keys are read (a bucket's `keyInclude` / `keyExclude`); empty: every key.
+    key_filter: KeyFilter = field(default_factory=KeyFilter)
     source_ids: list[str] = field(default_factory=list)
     gaps: dict[str, int] = field(default_factory=dict)
     backlog: bool = False
@@ -141,8 +143,11 @@ def apply_rules(
     """Apply the allow and deny rules to one store. False when it was skipped.
 
     A deny rule wins; a deny-by-tag rule that cannot be checked skips the store
-    (never read what may be denied); with an allow list, a store it does not
-    name is `not_allowed`.
+    (never read what may be denied). **An allow list restricts per kind**: the allow
+    rules that apply to a store are those of its own kind (`s3:prod-*`) and those of
+    no kind (`tag:pii-scan=yes`, `*-archive`, which apply to every kind). When any
+    apply, a store none of them names is `not_allowed`; a kind no allow rule applies
+    to is not restricted (an `s3:` allow rule leaves DynamoDB tables alone).
     """
     kind, name, tags = store.kind, store.name, store.tags
     if any(r.matches(kind, name, tags) for r in deny):
@@ -151,7 +156,8 @@ def apply_rules(
     if tag_error is not None and any(r.needs_tags and r.kind in (None, kind) for r in deny):
         store.skip("tags_unreadable", tag_error)
         return False
-    if allow and not any(r.matches(kind, name, tags) for r in allow):
+    own = [r for r in allow if r.kind in (None, kind)]
+    if own and not any(r.matches(kind, name, tags) for r in own):
         store.skip("not_allowed", tag_error)
         return False
     return True
@@ -221,6 +227,9 @@ def settle(
     kms = sum(c.kms_denied for c in coverages)
     unreadable = sum(c.unreadable for c in coverages)
     unsupported = sum(sum(c.skipped.values()) for c in coverages)
+    not_allowed = sum(sum(c.not_allowed.values()) for c in coverages)
+    if not_allowed:
+        store.gaps["notAllowed"] = not_allowed
     disguised = sum(c.disguised for c in coverages)
     if disguised:
         store.gaps["disguised"] = disguised

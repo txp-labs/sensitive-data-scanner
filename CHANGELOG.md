@@ -602,6 +602,60 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - Applies to S3, Azure Blob Storage, Cloud Storage, and OneDrive,
     SharePoint and Drive files.
 
+- **A bucket's key filter** (`keyInclude`, `keyExclude` in `DISCOVER_SAMPLING`):
+  one bucket can be read for the keys ending `transcript.json` only
+  (`{"match": "s3:<bucket>", "keyInclude": "*transcript.json"}`) while its
+  other objects (`.wav`) are listed and never read. They are counted in
+  coverage as `notAllowed` (`key_filter`) and in the store's gaps, never listed
+  as findings. Globs match the whole key (`*` also matches `/`). S3 buckets,
+  named or discovered, and S3 directory buckets
+  ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
+
+### Fixed
+- **`deploy/scanner.yaml` could not deploy: IAM refused the scanner's role.**
+  Its inline policies came to about 13,900 characters with the defaults and
+  22,900 with every opt-in on, against the 10,240 a role may hold in all
+  (`ServiceLimitExceeded`, "Maximum policy size of 10240 bytes exceeded"),
+  so every stack and the estate StackSet failed. The explicit denies are now
+  managed policies (`NoDataStoreWrites` alone in `DataStoreWriteDenyPolicy`,
+  the other seven in `GuardDenyPolicy`), and so are the opt-in Allows
+  (`StoreReadPolicy`, `BrokerImageGraphReadPolicy`, and the export and SQL
+  policies, renamed `*Permissions`), all attached by the role itself; the
+  function `DependsOn` them. No permission changed: a test holds every
+  statement, with the parameters it comes under, to a snapshot of the role
+  at fb9097a, and another holds every role in every CloudFormation template
+  to IAM's limits with every opt-in on (inline 10,240; each managed policy
+  6,144; 10 managed policies). The Google Cloud custom roles are held to
+  Google's limits the same way; the Azure deployment has no custom role
+  ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#policy-sizes)).
+- **A failed first create no longer blocks the next one.** The results
+  bucket had a fixed name (`sds-results-<account>-<region>`) and
+  `DeletionPolicy: Retain`, so a create that failed kept the bucket and
+  every later create failed on its name. CloudFormation now names it from the
+  stack (the `ResultsBucket` output gives it); it is still retained when the
+  stack is deleted.
+- **The template is deployed from S3, documented.** `scanner.yaml` is over
+  the 51,200 bytes CloudFormation takes inline (`--template-body`); the
+  estate rollout already names it in S3, and the docs now give the upload
+  for an ordinary stack (`aws cloudformation deploy --s3-bucket`). A test
+  keeps it under S3's 1 MB and the step documented.
+- **`DISCOVER=true` was refused** as "unknown kind of store". `true` now
+  means `all`, and `false` means off, like `none`.
+- **`DISCOVER_ALLOW` restricts per kind.** An allow rule for one kind
+  (`s3:calls-*`) made every other kind `not_allowed`, so allowing one bucket
+  silently turned off DynamoDB, CloudWatch Logs and every other kind. Now a
+  kind's allow rules restrict only that kind; a rule of no kind (`tag:…`,
+  `*-archive`) still applies to every kind, and a kind no allow rule applies to
+  is not restricted. The same for the Azure, Google Cloud, databases and SaaS
+  scanners, which share the rule.
+- **DynamoDB: `sortPrefix` without `partition`.** A `SCAN_DYNAMODB` entry
+  with `sortPrefix` and no `partition` was refused ("sortPrefix needs a
+  partition"). It now reads the whole table with a `Scan` filtered on the
+  sort key (`begins_with`), so only items whose sort key begins with the
+  prefix are read; the others are counted as listed and never scanned. A
+  table without a string sort key is reported as an error on the read.
+  With `partition`, the read is still a `Query`.
+
 ### Changed
 - **An adapter's version is its read path; a listing change re-lists, never
   re-reads** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
@@ -751,7 +805,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
   a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage; the
   store fields `exportType`, `listedBy` and `recommendation`; `duplicateOf`
-  on a finding and `duplicates` in coverage.
+  on a finding and `duplicates` in coverage; `notAllowed` in coverage (by
+  reason, `key_filter`) and the `notAllowed` gap on a store.
 - Version **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
   `declaredType` and `detectedType` on a finding; `archivePath`,
   `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,

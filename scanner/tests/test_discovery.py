@@ -98,6 +98,17 @@ def test_discover_kinds() -> None:
         discover_kinds("s3,mainframe")
 
 
+def test_discover_true_is_all_and_false_is_off() -> None:
+    """DISCOVER=true was refused as an unknown kind of store: it means all, and false off."""
+    for raw in ("true", "TRUE", " True "):
+        assert discover_kinds(raw) == EVERY
+    for raw in ("false", "False", "none", ""):
+        assert discover_kinds(raw) == frozenset()
+    # Only on its own: in a list of kinds it is still not a kind.
+    with pytest.raises(ValueError, match="unknown kind"):
+        discover_kinds("s3,true")
+
+
 def test_rules_by_name_glob_and_tag() -> None:
     assert parse_rule("s3:prod-*") == StoreRule(kind="s3", name="prod-*")
     assert parse_rule("logs:/aws/lambda/*") == StoreRule(
