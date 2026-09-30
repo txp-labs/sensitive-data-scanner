@@ -69,6 +69,8 @@ EVENTS: Final = frozenset(
         "index.dropped",
         # How a store is listed changed: it is listed again from the start (#67).
         "source.relist",
+        # How the run's budget was served: rounds and calls (#94, schedule.py).
+        "run.scheduled",
         # The run's lock was taken over by another run (this one outlived the stale age);
         # it is left for that run to release (#94).
         "run.lock_lost",

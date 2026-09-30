@@ -60,10 +60,31 @@ One run:
 2. **State.** The run reads each source's cursor and the findings carried
    over from the previous run. With `DISCOVER`, it first lists the stores in
    the account and region ([Discovery](#discovery)).
-3. **Sources.** Each source gets an even share of the run's budget: items,
-   bytes and time (the Lambda deadline minus 90 seconds, or
-   `MAX_RUN_SECONDS`), within any per-kind cap. Sources the budget does not
-   reach are deferred to the next run, which starts with them.
+3. **Sources.** The run's budget (items, bytes and time: the Lambda deadline
+   minus 90 seconds, or `MAX_RUN_SECONDS`), within any per-kind cap, is served
+   by a work-conserving round robin in rotation order
+   (`sensitive_data_core/schedule.py`, #94). The Azure, Google Cloud and SaaS
+   runners use it too.
+   - **A slice** is an even share of what is left among the sources still to
+     be served this round, but never less than a fiftieth of the run's items,
+     bytes and time (about 16 seconds and 400 items of a Lambda run with the
+     defaults), and never more than is left.
+   - **Unused time goes back to the pool.** A small store (a Lambda
+     function's variables, a quiet log group) finishes in a fraction of its
+     slice, and the rest is cut into the slices of those after it.
+   - **Rounds.** A source that spent its whole slice and still has more to
+     read is served again in the next round, with the others still behind,
+     until the budget is spent. A source that stopped for another reason
+     (its own page cap, an export still running, throttling, an error) waits
+     for the next run. A source served in several rounds has one coverage
+     for the run.
+   - **Carried forward.** Sources the budget does not reach are deferred, and
+     the next run starts with the first of them; when every source was
+     reached, it starts with the first one still behind. The run summary's
+     `backlogByKind` counts the stores still behind, by kind.
+   - In the first whole-account run (about 750 sources), an even share once
+     per source gave each about a second and 26 items: the biggest table read
+     34 items a run.
    - **S3.** The source lists in key order and reads only objects modified
      since the last complete pass (less a five-minute skew). A pass that
      runs out of budget resumes after its last key. Each read is one object

@@ -260,3 +260,37 @@ def test_spoken_card_in_a_plain_transcript_file(env: Env) -> None:
     doc = env.run(config())
     assert doc is not None
     assert by_key(doc)["transcribe/call.txt"]["card"]["confidence"] == "high"
+
+
+def test_a_large_store_among_many_small_ones_gets_the_budget_they_leave(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#94: an even share per source gave a large store a few items a run when hundreds of
+    small stores were waiting. Now the small ones finish, and the large one gets the rest."""
+    for i in range(800):
+        env.put(f"bulk/{i:03d}.txt", f"line {i}")
+    t = recent(30)
+    groups = [f"/aws/lambda/fn-{i:02d}" for i in range(60)]
+    for g in groups:
+        env.log(g, "s", [(t, "START")])
+    doc = env.run(config(s3_targets=[(DATA, "bulk/")], log_groups=groups, max_items_per_run=500))
+    assert doc is not None
+    valid(doc)
+    by_target = {c["target"]: c for c in doc["coverage"]}
+    assert all(by_target[g]["passComplete"] for g in groups)
+    bulk = by_target[f"{DATA}/bulk/"]
+    # One coverage for the bucket, however many rounds it was served in.
+    assert [c["target"] for c in doc["coverage"]].count(f"{DATA}/bulk/") == 1
+    # The even share was 500 / 61, about 8 objects; now all that the groups left.
+    assert bulk["scanned"] >= 500 - len(groups) - 1
+    assert bulk["backlog"] and not bulk["passComplete"]
+    scheduled = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if '"run.scheduled"' in line
+    ]
+    assert scheduled and scheduled[0]["rounds"] >= 2
+    # The next run starts with the bucket, still behind, and finishes it.
+    again = env.run(config(s3_targets=[(DATA, "bulk/")], log_groups=groups, max_items_per_run=500))
+    assert again is not None
+    assert {c["target"]: c for c in again["coverage"]}[f"{DATA}/bulk/"]["passComplete"]

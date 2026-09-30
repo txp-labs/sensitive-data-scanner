@@ -905,6 +905,12 @@
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/storeKind" },
           "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,80}$" }
+        },
+        "backlogByKind": {
+          "type": "object",
+          "description": "(1.11, #94) The stores still behind after this run, by kind: read in part (backlog) or not reached (deferred, reason budget). Empty when every pass is complete.",
+          "propertyNames": { "$ref": "#/$defs/storeKind" },
+          "additionalProperties": { "type": "integer", "minimum": 1 }
         }
       }
     }
