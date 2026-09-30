@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 
 
 class DynamoDBExportSource:
+    # The table's own encryption (1.5), from discovery (runner.plan): not the export's.
+    facts: dict[str, Any] | None = None
     kind = "dynamodb"
 
     def __init__(
@@ -259,7 +261,7 @@ class DynamoDBExportSource:
         for path, found in sorted(result.by_path.items()):
             resource = dynamodb_resource(self.table, shown, key_hash, path)
             for cf in found.findings.values():
-                f = finding_json(resource, link, FORMAT, cf, seen_at)
+                f = finding_json(resource, link, FORMAT, cf, seen_at, facts=self.facts)
                 f["_pass"] = c["passId"]
                 findings.append(f)
         store.replace_location(f"{self.id}\n{key_hash}", findings)

@@ -110,6 +110,22 @@ every database, read or not, and why:
 | `deferred`, `budget` | The run's budget ran out first |
 | `error`, `error` | The connection or the table listing failed; `error` names the exception class |
 
+Each finding, and each database in the run summary, also says what storage
+encryption the database reports about itself (`atRestEncryption`, findings
+schema 1.5), read after the user check with catalog queries only:
+
+| Engine | Reported as |
+|---|---|
+| SQL Server, Azure SQL | TDE on (`sys.databases.is_encrypted`, readable by every login): `customer_managed_key`, except Azure SQL Database and Managed Instance with the service's certificate (`service_managed`). The encryptor comes from `sys.dm_database_encryption_keys` (it needs `VIEW DATABASE STATE`; without it, Azure is `unknown`). TDE off: `unknown` |
+| MySQL, MariaDB | Every base table of the database created encrypted (`ENCRYPTION='Y'`, or MariaDB's `ENCRYPTED=YES`, in `information_schema.TABLES`): `customer_managed_key`, the keyring's key. Otherwise `unknown` (a server-wide default is not seen) |
+| Snowflake | `service_managed`: Snowflake encrypts all data. Tri-Secret Secure is not detected |
+| MongoDB | Atlas (every host under `mongodb.net`): `service_managed`. Self-managed: `unknown` |
+| PostgreSQL, Oracle, Databricks | `unknown`: PostgreSQL has no TDE; Oracle's per-tablespace TDE and a lakehouse's cloud storage are not read |
+
+`unknown` is never `none`: a database cannot see the disk or volume under it.
+A `card` finding under `service_managed` or `customer_managed_key`, and every
+`cvv` finding, carries a `pciNote` for your QSA ([FINDINGS.md](FINDINGS.md#at-rest-encryption-and-pci-dss-notes-15)).
+
 A run keeps no state: each one samples afresh.
 
 ## Where findings go

@@ -44,6 +44,7 @@ from .sources.base import Context
 from .sources.cloudwatch_logs import CloudWatchLogsSource
 from .sources.dynamodb import DynamoDBSource
 from .sources.dynamodb_export import DynamoDBExportSource
+from .sources.encryption import classifier
 from .sources.exports import ExportQuota
 from .sources.rds import RdsDataApiSource, RdsExportSource
 from .sources.s3 import S3Source
@@ -202,6 +203,7 @@ def _s3_source(
         serde=t.serde if t else None,
         delimiter=t.delimiter if t else ",",
         skip_header=t.skip_header if t else 0,
+        keys=classifier(clients),
     )
 
 
@@ -210,7 +212,7 @@ def _dynamodb_source(
 ) -> DynamoDBSource:
     if clients.dynamodb is None:
         raise ValueError("no DynamoDB client")
-    return DynamoDBSource(
+    source = DynamoDBSource(
         clients.dynamodb,
         target=target,
         region=region,
@@ -218,6 +220,29 @@ def _dynamodb_source(
         max_pages=config.dynamodb_max_pages,
         sample_percent=store.sample_percent or config.dynamodb_sample_percent,
     )
+    source.keys = classifier(clients)
+    return source
+
+
+def _logs_source(config: Config, clients: Clients, region: str, group: str) -> Any:
+    source = CloudWatchLogsSource(
+        clients.logs, log_group=group, region=region, lookback_days=config.logs_lookback_days
+    )
+    source.keys = classifier(clients)
+    return source
+
+
+def _with_facts(sources: list[Any], stores: list[Store]) -> None:
+    """Each source gets its store's facts (1.5: the storage encryption discovery found), unless
+    it knows its own (an S3 object's headers, a configured table's DescribeTable)."""
+    by_id = {s.id: s for s in sources}
+    for store in stores:
+        if not store.facts:
+            continue
+        for i in store.source_ids:
+            src = by_id.get(i)
+            if src is not None and getattr(src, "facts", None) is None:
+                src.facts = dict(store.facts)
 
 
 def plan(
@@ -257,15 +282,7 @@ def plan(
         add(store, _s3_source(config, clients, store, region=region, prefix=prefix))
     for group in config.log_groups:
         store = named("cloudwatch_logs", group)
-        add(
-            store,
-            CloudWatchLogsSource(
-                clients.logs,
-                log_group=group,
-                region=region,
-                lookback_days=config.logs_lookback_days,
-            ),
-        )
+        add(store, _logs_source(config, clients, region, group))
     if config.dynamodb_targets and clients.dynamodb is None:
         raise ValueError("no DynamoDB client")
     for t in config.dynamodb_targets:
@@ -275,12 +292,41 @@ def plan(
         raise ValueError("no RDS Data API client")
     for d in config.data_api_targets:
         src = RdsDataApiSource(clients.rds_data, target=d, region=region)  # type: ignore[arg-type]
+        src.rds, src.keys = clients.rds, classifier(clients)
         store = named("rds", src.identifier)
         store.extra["readBy"] = "data_api"
         add(store, src)
     quota = ExportQuota(config.max_exports_per_run)
     if discovery is None:
         return sources, stores
+    _plan_discovered(
+        config,
+        clients,
+        region,
+        discovery=discovery,
+        account=account,
+        quota=quota,
+        by_key=by_key,
+        stores=stores,
+        add=add,
+    )
+    _with_facts(sources, stores)
+    return sources, stores
+
+
+def _plan_discovered(
+    config: Config,
+    clients: Clients,
+    region: str,
+    *,
+    discovery: Discovery,
+    account: str,
+    quota: ExportQuota,
+    by_key: dict[tuple[str, str], Store],
+    stores: list[Store],
+    add: Callable[[Store, Any], None],
+) -> None:
+    """The discovered stores' sources, after the configured ones."""
     from .sources.aws import ADAPTERS  # noqa: PLC0415 - the adapters import discovery
 
     ctx = Context(config, clients, region, account, quota)
@@ -297,6 +343,7 @@ def plan(
         known = by_key.get((store.kind, store.name))
         if known is not None:
             known.size_bytes = store.size_bytes if known.size_bytes is None else known.size_bytes
+            known.facts = known.facts or store.facts
             continue  # read as configured
         stores.append(store)
         if store.status != "pending":
@@ -349,15 +396,7 @@ def plan(
                 ),
             )
         elif store.kind == "cloudwatch_logs":
-            add(
-                store,
-                CloudWatchLogsSource(
-                    clients.logs,
-                    log_group=store.name,
-                    region=region,
-                    lookback_days=config.logs_lookback_days,
-                ),
-            )
+            add(store, _logs_source(config, clients, region, store.name))
         elif store.kind == "dynamodb" and store.extra.get("readBy") != "export":
             add(store, _dynamodb_source(config, clients, region, store, DynamoTarget(store.name)))
         elif store.kind in ADAPTERS:
@@ -365,7 +404,6 @@ def plan(
             for one in found_source if isinstance(found_source, list) else [found_source]:
                 if one is not None:
                     add(store, one)
-    return sources, stores
 
 
 def build_sources(config: Config, clients: Clients, region: str) -> list[Any]:

@@ -33,6 +33,7 @@ from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.item import ItemResult, _Collector, scan_log_event
 
 from ..resources import log_resource, logs_link
+from .encryption import KeyClassifier, log_group_facts
 
 if TYPE_CHECKING:
     from mypy_boto3_logs import CloudWatchLogsClient
@@ -43,6 +44,10 @@ SETTLE_MS = 2 * 60 * 1000
 
 class CloudWatchLogsSource:
     kind = "cloudwatch_logs"
+    # The group's encryption (1.5): its KMS key, or the service's own. Set from discovery
+    # (runner.plan), or looked up once with `keys` for a group named in the configuration.
+    facts: dict[str, Any] | None = None
+    keys: KeyClassifier | None = None
 
     def __init__(
         self,
@@ -86,8 +91,21 @@ class CloudWatchLogsSource:
         for cf in item.findings.values():
             store.put(
                 f"{self.id}\n{stream}\n{ts}",
-                finding_json(resource, link, item.format, cf, seen_at, connect=connect),
+                finding_json(
+                    resource, link, item.format, cf, seen_at, connect=connect, facts=self.facts
+                ),
             )
+
+    def _facts(self, keys: KeyClassifier) -> dict[str, Any]:
+        """The group's `kmsKeyId` (DescribeLogGroups); `unknown` when it cannot be listed."""
+        try:
+            r = self.client.describe_log_groups(logGroupNamePrefix=self.log_group, limit=50)
+        except Exception:  # the findings then say `unknown`; the read goes on
+            return keys.facts(encrypted=None)
+        for g in r.get("logGroups", []):
+            if g.get("logGroupName") == self.log_group:
+                return log_group_facts(keys, dict(g))
+        return keys.facts(encrypted=None)
 
     def _flush_lex(
         self,
@@ -153,6 +171,8 @@ class CloudWatchLogsSource:
         if not isinstance(start, int):
             start = now_ms - self.lookback_days * 24 * 60 * 60 * 1000
         seen_at = now.isoformat()
+        if self.facts is None and self.keys is not None:
+            self.facts = self._facts(self.keys)
         try:
             while start < end and budget.time_left():
                 window_end = min(end, start + WINDOW_MS)

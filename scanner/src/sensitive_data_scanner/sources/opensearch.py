@@ -48,6 +48,7 @@ from sensitive_data_core.scan.columnar import scan_rows
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
+from .encryption import classifier
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).
@@ -130,6 +131,10 @@ class OpenSearchAdapter:
                 store = Store("opensearch", str(d["DomainName"]))
                 store.extra["deployment"] = "managed"
                 out.stores.append(store)
+                at_rest = d.get("EncryptionAtRestOptions") or {}
+                store.facts = classifier(ctx.clients).facts(
+                    encrypted=bool(at_rest.get("Enabled")), key=at_rest.get("KmsKeyId")
+                )
                 if d.get("Deleted") or not (d.get("Endpoint") or d.get("Endpoints")):
                     store.skip("unsupported")  # being created or deleted
                     store.extra["state"] = "deleted" if d.get("Deleted") else "creating"
@@ -166,6 +171,9 @@ class OpenSearchAdapter:
             store.extra["deployment"] = "serverless"
             out.stores.append(store)
             d = details.get(str(c.get("id")), {})
+            # A collection always encrypts: `auto` is an AWS owned key.
+            key = d.get("kmsKeyArn") or c.get("kmsKeyArn")
+            store.facts = classifier(ctx.clients).facts(key=key, aws_owned=key in (None, "auto"))
             status = str(c.get("status") or "")
             if status != "ACTIVE" or not d.get("collectionEndpoint"):
                 store.skip("unsupported")
@@ -200,6 +208,7 @@ class OpenSearchAdapter:
 
 
 class OpenSearchSource:
+    facts: dict[str, Any] | None = None  # the domain's or collection's encryption (1.5)
     """One domain or collection: each index, a sample of its documents."""
 
     kind = "opensearch"
@@ -313,7 +322,9 @@ class OpenSearchSource:
                 cov.test_values += table.test_values
                 cov.suppressed += table.suppressed
                 cov.redaction_markers += table.redaction_markers
-                findings = column_findings(table, self._resource(index), link, seen_at)
+                findings = column_findings(
+                    table, self._resource(index), link, seen_at, facts=self.facts
+                )
                 for f in findings:
                     f["_pass"] = pass_id
                 store.replace_location(f"{self.id}\n{index}", findings)

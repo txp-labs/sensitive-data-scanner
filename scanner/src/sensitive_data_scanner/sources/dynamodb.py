@@ -49,6 +49,7 @@ from sensitive_data_core.scan.paths import parse_path
 
 from ..config import DynamoTarget
 from ..resources import dynamodb_link, dynamodb_resource
+from .encryption import KeyClassifier, dynamodb_facts
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb import DynamoDBClient
@@ -78,6 +79,9 @@ def _rules(t: DynamoTarget) -> AttributeRules:
 
 
 class DynamoDBSource:
+    # The table's encryption (1.5): from its own DescribeTable when `keys` is given.
+    facts: dict[str, Any] | None = None
+    keys: KeyClassifier | None = None
     kind = "dynamodb"
 
     def __init__(
@@ -176,6 +180,8 @@ class DynamoDBSource:
         pages = 0
         try:
             desc = self._call("describe_table", budget, {"TableName": self.t.table})["Table"]
+            if self.keys is not None:
+                self.facts = dynamodb_facts(self.keys, desc.get("SSEDescription"))
             types = {a["AttributeName"]: a["AttributeType"] for a in desc["AttributeDefinitions"]}
             key_schema = {
                 k["KeyType"]: (k["AttributeName"], types.get(k["AttributeName"], "S"))
@@ -230,7 +236,7 @@ class DynamoDBSource:
                         )
                         link = dynamodb_link(self.region, self.t.table)
                         for cf in found.findings.values():
-                            f = finding_json(resource, link, FORMAT, cf, seen_at)
+                            f = finding_json(resource, link, FORMAT, cf, seen_at, facts=self.facts)
                             f["_pass"] = pass_id
                             findings.append(f)
                     store.replace_location(location, findings)

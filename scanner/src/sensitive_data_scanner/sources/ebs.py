@@ -46,6 +46,7 @@ from sensitive_data_core.scan.raw import printable_text
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
+from .encryption import classifier
 from .exports import drop_other_passes, merge
 
 # The services this module calls (test_template.py checks every call against them).
@@ -81,6 +82,9 @@ class EbsAdapter:
             store = Store("ebs", vid, size_bytes=int(v.get("Size") or 0) * 1024**3)
             store.extra["resource"] = "volume"
             store.tags = _tags(v.get("Tags"))
+            store.facts = classifier(ctx.clients).facts(
+                encrypted=bool(v.get("Encrypted")), key=v.get("KmsKeyId")
+            )
             out.stores.append(store)
             self._decide(ctx, store, by_volume.get(vid, []))
         for vid, snaps in sorted(by_volume.items()):
@@ -91,6 +95,9 @@ class EbsAdapter:
             store.size_bytes = int(latest.get("VolumeSize") or 0) * 1024**3
             store.extra["resource"] = "snapshot"
             store.tags = _tags(latest.get("Tags"))
+            store.facts = classifier(ctx.clients).facts(
+                encrypted=bool(latest.get("Encrypted")), key=latest.get("KmsKeyId")
+            )
             out.stores.append(store)
             self._decide(ctx, store, snaps)
 
@@ -134,6 +141,7 @@ class EbsSnapshotSource:
     """One snapshot's blocks, sampled by the EBS direct APIs; resumes across runs."""
 
     kind = "ebs"
+    facts: dict[str, Any] | None = None  # the volume's (or snapshot's) encryption (1.5)
 
     def __init__(
         self,
@@ -231,7 +239,9 @@ class EbsSnapshotSource:
                     item = scan_item_text("block.txt", text, detector)
                     cov.test_values += item.test_values
                     cov.suppressed += item.suppressed
-                    for f in class_findings(item.findings, resource, link, "block", seen_at):
+                    for f in class_findings(
+                        item.findings, resource, link, "block", seen_at, facts=self.facts
+                    ):
                         merge(store, f"{self.id}\n{self.snapshot_id}", f, str(c["passId"]))
                 c["point"] = point + 1
         except Exception as err:  # recorded by name on the source

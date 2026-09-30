@@ -737,6 +737,81 @@ def test_no_value_leaves_streams_or_queues(
         assert leaks(blob) == [], name_
 
 
+def test_no_value_or_key_name_leaves_the_encryption_facts(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stream encrypted with a customer key named by an alias that holds a value (1.5): the
+    finding names the key only by the hash of its id, never the alias, the id or the ARN."""
+    from test_streams import stubs
+
+    s = stubs(env, "kinesis", "kms")
+    cmk = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"
+    alias = f"alias/pan-{CARDS['visa']}"
+    s["kms"].add_response(
+        "list_aliases",
+        {"Aliases": [{"AliasName": alias, "TargetKeyId": cmk}], "Truncated": False},
+    )
+    stream = f"pay-{SSN_A}"
+    s["kinesis"].add_response(
+        "list_streams",
+        {
+            "StreamNames": [stream],
+            "HasMoreStreams": False,
+            "StreamSummaries": [
+                {"StreamName": stream, "StreamARN": "arn:k", "StreamStatus": "ACTIVE"}
+            ],
+        },
+    )
+    s["kinesis"].add_response(
+        "describe_stream_summary",
+        {
+            "StreamDescriptionSummary": {
+                "StreamName": stream,
+                "StreamARN": "arn:k",
+                "StreamStatus": "ACTIVE",
+                "RetentionPeriodHours": 24,
+                "StreamCreationTimestamp": "2026-09-01T00:00:00Z",
+                "EnhancedMonitoring": [],
+                "EncryptionType": "KMS",
+                "KeyId": f"arn:aws:kms:us-west-2:123456789012:{alias}",
+                "OpenShardCount": 1,
+            }
+        },
+    )
+    s["kinesis"].add_response(
+        "list_shards",
+        {
+            "Shards": [
+                {
+                    "ShardId": "shardId-000000000000",
+                    "HashKeyRange": {"StartingHashKey": "0", "EndingHashKey": "1"},
+                    "SequenceNumberRange": {"StartingSequenceNumber": "1"},
+                }
+            ]
+        },
+    )
+    s["kinesis"].add_response("get_shard_iterator", {"ShardIterator": "it"})
+    data = json.dumps({"card": CARDS["amex"], "cvv": "CVV 482"}).encode()
+    s["kinesis"].add_response(
+        "get_records", {"Records": [{"SequenceNumber": "1", "Data": data, "PartitionKey": "p"}]}
+    )
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            s3_targets=[], discover=frozenset({"kinesis"}), event_bus_arn="arn:aws:events:x:1:b/c"
+        )
+    )
+    assert doc is not None
+    card = next(f for f in doc["findings"] if f["class"] == "card")
+    assert card["atRestEncryption"] == "customer_managed_key"
+    for name_, blob in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob) == [], name_
+        assert cmk not in blob and "pan-" not in blob, name_
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

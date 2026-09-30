@@ -13,6 +13,14 @@ transaction is rolled back. MongoDB is read with `$sample` per collection.
 Connection strings are parsed here and handed to the driver; nothing here
 logs, keeps or raises them. A driver's own exception is reported by its class
 name only (`safety.error_name`).
+
+**At-rest encryption (1.5).** After the user check, each session says what
+storage encryption the database reports about itself (`encryption`), where the
+engine can tell: SQL Server's TDE (`sys.databases.is_encrypted`, and the
+encryptor in `sys.dm_database_encryption_keys`), MySQL's and MariaDB's per-table
+InnoDB encryption, Snowflake (always encrypted by Snowflake) and Atlas (always
+encrypted by the cloud). Everything else, and any probe that fails, is
+`unknown`: a database cannot see the disk under it, so TDE off is not `none`.
 """
 
 from __future__ import annotations
@@ -28,6 +36,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from sensitive_data_core.detect.analyzer import Detector
+from sensitive_data_core.findings import (
+    CUSTOMER_MANAGED_KEY,
+    SERVICE_MANAGED,
+    UNKNOWN_ENCRYPTION,
+)
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import TableResult, scan_rows
 from sensitive_data_core.scan.sql import (
@@ -122,6 +135,76 @@ def _flag(v: str) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on", "required", "require")
 
 
+# ------------------------------------------------------------------ at-rest encryption
+
+Execute = Callable[[str, Params], list[dict[str, Any]]]
+
+# SQL Server: TDE on this database, and the edition (5: Azure SQL Database, 8: Managed
+# Instance). `sys.databases` is readable by every login.
+SQLSERVER_TDE = (
+    "SELECT CAST(d.is_encrypted AS int) AS is_encrypted, "
+    "CAST(SERVERPROPERTY('EngineEdition') AS int) AS edition "
+    "FROM sys.databases d WHERE d.name = DB_NAME()"
+)
+# What protects the database encryption key: a certificate (Azure: the service's) or an
+# asymmetric key (Azure Key Vault, an EKM provider). Needs VIEW DATABASE STATE; optional.
+SQLSERVER_ENCRYPTOR = (
+    "SELECT encryptor_type FROM sys.dm_database_encryption_keys WHERE database_id = DB_ID()"
+)
+# MySQL (`ENCRYPTION='Y'`) and MariaDB (`ENCRYPTED=YES`): the base tables of this database
+# (views have no engine) created encrypted, counted. InnoDB's master key is the operator's.
+MYSQL_ENCRYPTED_TABLES = (
+    "SELECT COUNT(*) AS tables_total, "
+    "SUM(CASE WHEN UPPER(CREATE_OPTIONS) LIKE '%ENCRYPTION=''Y''%' "
+    "OR UPPER(CREATE_OPTIONS) LIKE '%ENCRYPTED=YES%' THEN 1 ELSE 0 END) AS tables_encrypted "
+    "FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND ENGINE IS NOT NULL"
+)
+
+
+def _int(v: Any) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def sqlserver_encryption(execute: Execute) -> str:
+    """TDE on: the customer's key (a certificate in its own master database, or an
+    asymmetric key in Key Vault or an EKM provider), except Azure's service-managed
+    certificate. TDE off, or unreadable: `unknown` (the host's disk may be encrypted)."""
+    rows = execute(SQLSERVER_TDE, [])
+    if not rows or not _int(rows[0].get("is_encrypted")):
+        return UNKNOWN_ENCRYPTION
+    azure = _int(rows[0].get("edition")) in (5, 8)
+    try:
+        found = execute(SQLSERVER_ENCRYPTOR, [])
+        encryptor = str((found[0] if found else {}).get("encryptor_type") or "").upper()
+    except Exception:  # no VIEW DATABASE STATE: the encryptor stays unknown
+        encryptor = ""
+    if encryptor == "ASYMMETRIC KEY":
+        return CUSTOMER_MANAGED_KEY
+    if azure:
+        return SERVICE_MANAGED if encryptor == "CERTIFICATE" else UNKNOWN_ENCRYPTION
+    return CUSTOMER_MANAGED_KEY
+
+
+def mysql_encryption(execute: Execute) -> str:
+    """Every base table created encrypted: the keyring's key, the operator's. Otherwise (some
+    or none, or a server-wide default this does not see): `unknown`."""
+    rows = execute(MYSQL_ENCRYPTED_TABLES, [])
+    total = _int(rows[0].get("tables_total")) if rows else 0
+    encrypted = _int(rows[0].get("tables_encrypted")) if rows else 0
+    return CUSTOMER_MANAGED_KEY if total and encrypted == total else UNKNOWN_ENCRYPTION
+
+
+ENCRYPTION: dict[str, Callable[[Execute], str]] = {
+    "sqlserver": sqlserver_encryption,
+    "mysql": mysql_encryption,
+    # Snowflake encrypts all data with keys it manages (Tri-Secret Secure is not detected).
+    "snowflake": lambda execute: SERVICE_MANAGED,
+}
+
+
 # ------------------------------------------------------------------ SQL sessions
 
 
@@ -210,6 +293,18 @@ class SqlSession:
                 max_tables=settings.max_tables,
                 source=source,
             )
+        finally:
+            self.rollback()
+
+    def encryption(self) -> str:
+        """The storage encryption the database reports (1.5); `unknown` when it cannot tell."""
+        probe = ENCRYPTION.get(self.engine)
+        if probe is None:
+            return UNKNOWN_ENCRYPTION
+        try:
+            return probe(self.execute)
+        except Exception:  # a catalog the user cannot read: unknown, and the read goes on
+            return UNKNOWN_ENCRYPTION
         finally:
             self.rollback()
 
@@ -391,11 +486,19 @@ class MongoSession:
     engine = "mongodb"
     flavor: str | None = None
 
-    def __init__(self, client: Any, default_db: str | None, settings: Settings) -> None:
+    def __init__(
+        self, client: Any, default_db: str | None, settings: Settings, *, atlas: bool = False
+    ) -> None:
         self.client = client
         self.default_db = default_db
         self.database = default_db or ""
         self.settings = settings
+        self.atlas = atlas
+
+    def encryption(self) -> str:
+        """Atlas encrypts every cluster's storage (the cloud provider's volume encryption);
+        a self-managed deployment cannot be told from here."""
+        return SERVICE_MANAGED if self.atlas else UNKNOWN_ENCRYPTION
 
     def __repr__(self) -> str:
         return "MongoSession()"
@@ -484,7 +587,9 @@ def connect_mongodb(db: Database, settings: Settings, driver: Any) -> MongoSessi
         readPreference="secondaryPreferred",
         retryWrites=False,
     )
-    return MongoSession(client, default_db, settings)
+    hosts = url.split("://", 1)[-1].partition("/")[0].rpartition("@")[2].split(",")
+    atlas = all(h.split(":")[0].lower().endswith(".mongodb.net") for h in hosts if h)
+    return MongoSession(client, default_db, settings, atlas=atlas)
 
 
 CONNECT: dict[str, Callable[[Database, Settings, Any], Any]] = {

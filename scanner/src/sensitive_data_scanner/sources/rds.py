@@ -35,7 +35,12 @@ from typing import TYPE_CHECKING, Any
 
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
-from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.findings import (
+    UNKNOWN_ENCRYPTION,
+    Coverage,
+    encryption_facts,
+    finding_json,
+)
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.columnar import TableResult, scan_parquet
 from sensitive_data_core.scan.sql import (
@@ -50,6 +55,7 @@ from sensitive_data_core.scan.sql import tables_sql as generic_tables_sql
 
 from ..config import DataApiTarget
 from ..resources import rds_link, rds_resource
+from .encryption import rds_facts
 from .exports import ExportQuota, delete_prefix, drop_other_passes, due, list_keys, merge
 from .s3 import S3RangeFile
 
@@ -77,6 +83,7 @@ def _findings(
     snapshot_time: str | None,
     link: str,
     seen_at: str,
+    facts: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     out = []
     for column, item in sorted(table.by_column.items()):
@@ -92,7 +99,7 @@ def _findings(
         )
         for cf in item.findings.values():
             cf.offsets = []  # the rows are gone with the export: counts only
-            out.append(finding_json(resource, link, table.format, cf, seen_at))
+            out.append(finding_json(resource, link, table.format, cf, seen_at, facts=facts))
     return out
 
 
@@ -106,6 +113,9 @@ def export_table_of(relative: str) -> tuple[str, str] | None:
 
 class RdsExportSource:
     kind = "rds"
+    # The cluster's or instance's own encryption (1.5), from discovery (runner.plan): the
+    # finding is about the database, not the export read in its place.
+    facts: dict[str, Any] | None = None
 
     def __init__(
         self,
@@ -318,6 +328,7 @@ class RdsExportSource:
                 snapshot_time=c.get("snapshotAt"),
                 link=link,
                 seen_at=seen_at,
+                facts=self.facts,
             ):
                 merge(store, f"{self.id}\n{database}/{name}", f, c["passId"])
             c["after"] = key
@@ -360,6 +371,10 @@ class RdsDataApiSource:
     """An Aurora database read with read-only SQL through the Data API (opt-in)."""
 
     kind = "rds"
+    # The cluster's encryption (1.5): from discovery, or from `describe_db_clusters` with `rds`.
+    facts: dict[str, Any] | None = None
+    rds: Any = None
+    keys: Any = None
 
     def __init__(self, client: RDSDataServiceClient, *, target: DataApiTarget, region: str) -> None:
         self.client = client
@@ -369,6 +384,19 @@ class RdsDataApiSource:
         digest = hashlib.sha256(f"{target.cluster_arn}|{target.database}".encode()).hexdigest()
         self.id = f"rdsdata:{digest[:16]}"
         self.target = f"data_api:{self.identifier}/{target.database}"
+
+    def _cluster_facts(self) -> dict[str, Any]:
+        """The cluster's `StorageEncrypted` and key; `unknown` when it cannot be described."""
+        if self.rds is None or self.keys is None:
+            return encryption_facts(UNKNOWN_ENCRYPTION)
+        try:
+            got = self.rds.describe_db_clusters(DBClusterIdentifier=self.t.cluster_arn)
+        except Exception:  # the findings then say `unknown`; the read goes on
+            return encryption_facts(UNKNOWN_ENCRYPTION)
+        clusters = got.get("DBClusters") or []
+        if not clusters:
+            return encryption_facts(UNKNOWN_ENCRYPTION)
+        return rds_facts(self.keys, dict(clusters[0]))
 
     def _exec(self, sql: str, tx: str | None, params: list[dict[str, Any]] | None = None) -> Any:
         args: dict[str, Any] = {
@@ -401,6 +429,8 @@ class RdsDataApiSource:
         extra = {"engine": engine, "dbType": "cluster", "readBy": "data_api"}
         tx: str | None = None
         done = False
+        if self.facts is None:
+            self.facts = self._cluster_facts()
 
         def execute(sql: str, params: Params) -> list[dict[str, Any]]:
             data_api = [{"name": n, "value": {"stringValue": v}} for n, v in params]
@@ -420,6 +450,7 @@ class RdsDataApiSource:
                 snapshot_time=None,
                 link=link,
                 seen_at=seen_at,
+                facts=self.facts,
             )
             for f in findings:
                 f["_pass"] = pass_id

@@ -42,6 +42,7 @@ from sensitive_data_core.scan.sql import Dialect, sample_sql
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
+from .encryption import classifier
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).
@@ -199,10 +200,13 @@ class TimestreamAdapter:
     def _live(self, ctx: Context, out: Discovery) -> None:
         tw = ctx.clients.client("timestream-write")
         databases: list[str] = []
+        db_keys: dict[str, str | None] = {}
         token: str | None = None
         while True:
             r = tw.list_databases(**({"NextToken": token} if token else {}))
-            databases.extend(str(d["DatabaseName"]) for d in r.get("Databases", []))
+            for d in r.get("Databases", []):
+                databases.append(str(d["DatabaseName"]))
+                db_keys[str(d["DatabaseName"])] = d.get("KmsKeyId")
             token = r.get("NextToken")
             if not token:
                 break
@@ -213,6 +217,8 @@ class TimestreamAdapter:
                 for t in r.get("Tables", []):
                     store = Store(self.kind, f"{db}.{t['TableName']}")
                     store.extra.update(deployment="live_analytics", database=db)
+                    # Timestream always encrypts, with the database's KMS key.
+                    store.facts = classifier(ctx.clients).facts(key=db_keys.get(db))
                     out.stores.append(store)
                     if str(t.get("TableStatus") or "ACTIVE") != "ACTIVE":
                         store.skip("unsupported")
@@ -262,6 +268,7 @@ class _TableSample:
     """A table read once per pass as one sampled query, by column."""
 
     kind = ""
+    facts: dict[str, Any] | None = None  # the table's encryption (1.5)
     service = ""
     read_by = ""
 
@@ -310,7 +317,9 @@ class _TableSample:
         cov.partial = int(len(rows) >= self.max_rows)
         cov.test_values, cov.suppressed = table.test_values, table.suppressed
         cov.redaction_markers = table.redaction_markers
-        findings = column_findings(table, self._resource(), self.link(), now.isoformat())
+        findings = column_findings(
+            table, self._resource(), self.link(), now.isoformat(), facts=self.facts
+        )
         for f in findings:
             f["_pass"] = pass_id
         store.replace_location(f"{self.id}\n{self.target}", findings)
@@ -411,6 +420,19 @@ def keyspaces_session(region: str) -> Any:
     return cluster.connect()
 
 
+def _keyspaces_facts(ctx: Context, ks: Any, space: str, table: str) -> dict[str, str]:
+    """A table's `encryptionSpecification` (GetTable): an AWS owned key, or the customer's."""
+    keys = classifier(ctx.clients)
+    try:
+        spec = ks.get_table(keyspaceName=space, tableName=table).get("encryptionSpecification")
+    except Exception:  # the table is still read; its findings say `unknown`
+        return keys.facts(encrypted=None)
+    spec = spec or {}
+    if str(spec.get("type") or "AWS_OWNED_KMS_KEY") == "AWS_OWNED_KMS_KEY":
+        return keys.facts(aws_owned=True)
+    return keys.facts(key=spec.get("kmsKeyIdentifier"))
+
+
 class KeyspacesAdapter:
     kind = "keyspaces"
 
@@ -440,6 +462,8 @@ class KeyspacesAdapter:
                         except Exception as err:
                             tag_error = error_name(err)
                     decide(store, ctx.config, tag_error)
+                    if store.status == "pending":
+                        store.facts = _keyspaces_facts(ctx, ks, space, str(t["tableName"]))
 
     def source(self, ctx: Context, store: Store) -> KeyspacesSource | None:
         table = store.extra.get("tableName")

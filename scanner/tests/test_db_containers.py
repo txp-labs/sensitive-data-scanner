@@ -214,3 +214,13 @@ def test_mysql_reads_read_only_users_and_refuses_writers_and_their_roles(
         cur.execute(f"SELECT COUNT(*) FROM `{TABLE}`")
         assert cur.fetchone() == (2,)
     conn.close()
+    # The encryption probe runs on a real server as the read-only user (1.5): one table,
+    # created unencrypted, so the store's encryption is not known from the database.
+    from sensitive_data_db.engines import MYSQL_ENCRYPTED_TABLES
+
+    ro = pymysql.connect(host=host, port=port, user="ro", password=USER_PW, database="app")
+    with ro.cursor() as cur:
+        cur.execute(MYSQL_ENCRYPTED_TABLES)
+        assert tuple(int(x or 0) for x in cur.fetchone()) == (1, 0)
+    ro.close()
+    assert stores["ro"]["atRestEncryption"] == "unknown"
