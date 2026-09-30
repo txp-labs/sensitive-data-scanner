@@ -30,6 +30,8 @@ class Context:
     # Cloud Asset Inventory's results, once per run per asset type.
     _found: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     _projects: dict[str, str] | None = None
+    # What adapters share within one run (the Cloud SQL instances three engines' adapters list).
+    memo: dict[str, Any] = field(default_factory=dict)
 
     @property
     def rest(self) -> Rest:

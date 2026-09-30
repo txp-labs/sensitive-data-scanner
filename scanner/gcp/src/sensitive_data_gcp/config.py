@@ -15,6 +15,14 @@ its value.
 - `DISCOVER`: the kinds to discover (`gcs`, `bigquery`, ...; `all`); by default,
   every kind.
 - `BIGQUERY_MAX_ROWS`: rows read per BigQuery table (`tabledata.list`).
+- `GCP_DB_READ`: the database kinds that are read (`cloudsql_postgresql`,
+  `cloudsql_mysql`, `alloydb`, or `all`); off by default, since each database
+  needs an IAM database user for the service account.
+- `GCP_DB_PRINCIPAL`: the service account's email, whose IAM database users
+  are logged in as.
+- `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
+  `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
+  runner's.
 - `DISCOVER_ALLOW`, `DISCOVER_DENY`, `DISCOVER_SAMPLING`: the core's rules, by
   kind and name (`gcs:prod-*`, `tag:scan=false`; a store's tags are its labels).
 - `SAMPLE_PERCENT`, `GCS_MAX_OBJECTS_PER_PREFIX`: object sampling, a stable
@@ -50,8 +58,15 @@ from sensitive_data_core.rules import (
 )
 from sensitive_data_core.safety import Secret
 
+# Google Cloud's databases: discovered by default, read only when named in GCP_DB_READ.
+DATABASE_KINDS: tuple[str, ...] = (
+    "cloudsql_postgresql",
+    "cloudsql_mysql",
+    "cloudsql_sqlserver",
+    "alloydb",
+)
 # Every kind this package discovers, and the ones discovered by default.
-KINDS: tuple[str, ...] = ("gcs", "bigquery")
+KINDS: tuple[str, ...] = ("gcs", "bigquery", *DATABASE_KINDS)
 DEFAULT_KINDS: tuple[str, ...] = KINDS
 # Rule and DISCOVER prefixes: each kind, and shorter names for it.
 KIND_ALIASES = {
@@ -60,12 +75,20 @@ KIND_ALIASES = {
     "bucket": "gcs",
     "buckets": "gcs",
     "bq": "bigquery",
+    "cloudsql": "cloudsql_postgresql",
+    "postgresql": "cloudsql_postgresql",
+    "postgres": "cloudsql_postgresql",
+    "mysql": "cloudsql_mysql",
+    "sqlserver": "cloudsql_sqlserver",
+    "alloy": "alloydb",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 _NUMBER = re.compile(r"^[0-9]{1,24}$")
 _PROJECT = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$|^[a-z][a-z0-9.:-]{4,62}[a-z0-9]$")
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$")
+# The service account's email, whose IAM database users the customer creates.
+_PRINCIPAL = re.compile(r"^[a-z][a-z0-9-]{4,62}@[a-z][a-z0-9.:-]{4,62}\.iam\.gserviceaccount\.com$")
 _TOPIC = re.compile(
     r"^projects/[a-z][a-z0-9.:-]{4,62}[a-z0-9]/topics/[A-Za-z][A-Za-z0-9._~+%-]{2,254}$"
 )
@@ -109,6 +132,14 @@ class Settings:
     findings_file: str | None = None
     # BigQuery: rows read per table with tabledata.list.
     bigquery_max_rows: int = 1000
+    # Cloud SQL and AlloyDB (opt-in): which kinds are read, as whom, and how much.
+    db_read: tuple[str, ...] = ()
+    db_principal: str | None = None
+    db_schemas: tuple[str, ...] = ()
+    db_max_rows: int = 1000
+    db_max_tables: int = 500
+    db_statement_seconds: int = 60
+    db_connect_seconds: int = 15
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -233,6 +264,15 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     if state is None and https_url is None and topic is None and findings_file is None:
         raise ConfigError("no_findings_destination")
     try:
+        db_read = _kinds(e.get("GCP_DB_READ"), (), DATABASE_KINDS)
+    except ConfigError:
+        raise ConfigError("gcp_db_read") from None
+    principal = (e.get("GCP_DB_PRINCIPAL") or "").strip().lower() or None
+    if principal is not None and not _PRINCIPAL.match(principal):
+        raise ConfigError("gcp_db_principal")
+    if principal is None and set(db_read) - {"cloudsql_sqlserver"}:
+        raise ConfigError("gcp_db_principal")
+    try:
         allow = store_rules(e.get("DISCOVER_ALLOW"), KIND_ALIASES)
         deny = store_rules(e.get("DISCOVER_DENY"), KIND_ALIASES)
         sampling = sampling_rules(e.get("DISCOVER_SAMPLING"), KIND_ALIASES)
@@ -260,4 +300,11 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         pubsub_topic=topic,
         findings_file=findings_file,
         bigquery_max_rows=_int(e.get("BIGQUERY_MAX_ROWS"), 1000, 1, 100_000),
+        db_read=db_read,
+        db_principal=principal,
+        db_schemas=_list(e.get("DB_SCHEMAS")),
+        db_max_rows=_int(e.get("DB_MAX_ROWS_PER_TABLE"), 1000, 1, 100_000),
+        db_max_tables=_int(e.get("DB_MAX_TABLES"), 500, 1, 10_000),
+        db_statement_seconds=_int(e.get("DB_STATEMENT_TIMEOUT_SECONDS"), 60, 5, 3600),
+        db_connect_seconds=_int(e.get("DB_CONNECT_TIMEOUT_SECONDS"), 15, 1, 300),
     )

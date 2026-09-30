@@ -18,6 +18,7 @@ else here needs Google.
 
 from __future__ import annotations
 
+import importlib
 import time
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -184,9 +185,33 @@ class Clients:
         self._session = session
         self._sleep = sleep
         self._rest: Rest | None = None
+        # Database driver modules by name; a test puts stubs here.
+        self.drivers: dict[str, Any] = {}
 
     def __repr__(self) -> str:
         return "Clients()"
+
+    def driver(self, module: str) -> Any | None:
+        """A database driver module (`psycopg`, `pymysql`), or None when the image does not
+        carry it (the store's `driver_missing` gap)."""
+        if module not in self.drivers:
+            try:
+                self.drivers[module] = importlib.import_module(module)
+            except ImportError:
+                self.drivers[module] = None
+        return self.drivers[module]
+
+    def token(self, scopes: tuple[str, ...]) -> str:
+        """A fresh access token of the job's service account for `scopes` (a database's IAM
+        login). Held only while connecting; never logged."""
+        from google.auth.transport.requests import Request  # noqa: PLC0415
+
+        creds = self.credentials
+        with_scopes = getattr(creds, "with_scopes", None)
+        if callable(with_scopes):
+            creds = with_scopes(list(scopes))
+        creds.refresh(Request())
+        return str(creds.token)
 
     @property
     def credentials(self) -> Any:

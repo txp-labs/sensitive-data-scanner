@@ -338,6 +338,11 @@ jobs:
           echo "${out}" | grep -q '"event":"run.failed"\|"event":"discovery.failed"'
           docker run --rm --network none --entrypoint python sensitive-data-scanner-gcp:ci -c '
           import google.auth, google.auth.transport.requests, requests
+          # The Cloud SQL and AlloyDB drivers load.
+          import psycopg, pymysql
+          from sensitive_data_gcp.sources.databases import DRIVERS
+          from sensitive_data_gcp.clients import Clients
+          assert all(Clients().driver(m) is not None for m in set(DRIVERS.values()))
           from sensitive_data_core.scan.columnar import pyarrow_available
           assert pyarrow_available()
           import sensitive_data_gcp.runner

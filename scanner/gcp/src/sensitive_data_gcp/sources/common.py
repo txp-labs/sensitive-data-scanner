@@ -19,3 +19,46 @@ def call_gap(err: BaseException) -> str | None:
     if name in DENIED_ERRORS:
         return "access_denied"
     return None
+
+
+# What a driver's message says when the database could not be reached, or refused the
+# login. The message is only looked at here, never kept, logged or returned.
+_NETWORK_HINTS = (
+    "timeout",
+    "timed out",
+    "could not connect",
+    "can't connect",
+    "connection refused",
+    "unreachable",
+    "no route to host",
+    "name or service not known",
+    "could not translate host",
+    "nodename nor servname",
+    "08001",
+)
+_DENIED_HINTS = (
+    "password authentication failed",
+    "authentication failed",
+    "login failed",
+    "no pg_hba.conf entry",
+    "28000",
+    "28p01",
+    "1045",  # MySQL: access denied
+    "access denied",
+    "cloudsql.instances.login",
+    "alloydb.users.login",
+)
+
+
+def connect_gap(err: BaseException) -> str | None:
+    """`network`, `access_denied`, or None, from a connect error. Never keeps the message."""
+    gap = call_gap(err)
+    if gap is not None:
+        return gap
+    text = str(err).lower()
+    name = error_name(err).lower()
+    if any(h in text for h in _NETWORK_HINTS) or "timeout" in name:
+        return "network"
+    if any(h in text for h in _DENIED_HINTS):
+        return "access_denied"
+    return None
