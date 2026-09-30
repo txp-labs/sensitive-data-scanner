@@ -98,6 +98,11 @@ class Settings:
     max_items_per_run: int = 20_000
     max_bytes_per_run: int = 2 * 1024**3
     max_run_seconds: int = 3600
+    # #67: with STATE_LOCATION, an index of what each table was read with, beside it; a
+    # table unchanged since its last read is skipped, and its findings carried.
+    object_index: bool = True
+    index_max_objects: int = 10_000_000
+    rescan_percent: int = 25
     https_url: Secret | None = field(default=None, repr=False)
     hmac_key: Secret | None = field(default=None, repr=False)
     event_bus_arn: str | None = None
@@ -244,6 +249,10 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         max_items_per_run=_int(e.get("MAX_ITEMS_PER_RUN"), 20_000, 1, 1_000_000),
         max_bytes_per_run=_int(e.get("MAX_BYTES_PER_RUN"), 2 * 1024**3, 1024, 50 * 1024**3),
         max_run_seconds=_int(e.get("MAX_RUN_SECONDS"), 3600, 60, 24 * 3600),
+        object_index=(e.get("OBJECT_INDEX") or "on").strip().lower()
+        not in ("off", "false", "0", "no"),
+        index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
+        rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
         https_url=https_url,
         hmac_key=key,
         event_bus_arn=bus,

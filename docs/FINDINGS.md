@@ -112,8 +112,10 @@ value shows up in findings, events, logs, exception messages or object reprs.
 - Version 1.10 ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67))
   reads an object that did not change again only when a component it was read
   with changed and could change what it finds ([Rescans](#rescans-110)): the
-  finding fields `rescanReason` and `rescanClasses`, and `indexed`,
-  `rescanned` and `rescanBacklog` in coverage. All additive.
+  finding fields `rescanReason` and `rescanClasses`, `indexed`,
+  `rescanned` and `rescanBacklog` in coverage, and the store field
+  `exportType` (`incremental`, a DynamoDB export of what changed). All
+  additive.
 
 ## Sources and modes (1.8)
 
@@ -865,6 +867,7 @@ coverage gap is visible rather than silent.
 | `lakeFormation` | The Glue table is registered with Lake Formation |
 | `engine`, `dbType`, `snapshotTime`, `exportStatus` | For RDS: the engine, cluster or instance, the snapshot read, and the export's state |
 | `readBy`, `pitr` | For DynamoDB: `export` when the table is read from an Export to S3; `pitr: false` when it is too large and has no point-in-time recovery |
+| `exportType` | (1.10) For DynamoDB read by export: `incremental` when this run's export holds only the items written since the last one |
 | `deployment`, `database`, `state` | (1.3) `provisioned` or `serverless` (Redshift), `managed` or `serverless` (OpenSearch); the database connected to by default; and the store's state when that is why it was not read |
 | `resource`, `olderSnapshots` | (1.3) For EBS: `volume` or `snapshot`, and the earlier snapshots counted, not read; (1.5) for SageMaker, `feature_group` or `notebook_instance` |
 | `recoveryPoints` | (1.3) For a Backup vault: its recovery points by resource type |

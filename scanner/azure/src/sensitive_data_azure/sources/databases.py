@@ -54,6 +54,7 @@ from sensitive_data_core.findings import (
     encryption_facts,
     store_field_resource,
 )
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import TableResult
 from sensitive_data_core.scan.sql import SQLSERVER, sample_tables
@@ -502,6 +503,8 @@ Connect = Callable[[], tuple[SqlSession, tuple[str, ...]]]
 class DatabaseSource:
     """One database: its user checked, then its tables sampled, resumable by table."""
 
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
+
     def __init__(self, target: DbTarget, open_session: Connect, settings: Settings) -> None:
         self.t = target
         self.kind = target.kind
@@ -573,6 +576,8 @@ class DatabaseSource:
         seen_at = now.isoformat()
         facts = self.facts
         t = self.t
+        today = (now.date() - _dt.date(1970, 1, 1)).days
+        op = ObjectPass(self.indexes, self.id, self.kind, generation=today, budget=budget)
         link = portal_link(t.rid)
 
         def on_table(schema: str, table: str, result: TableResult) -> None:
@@ -610,6 +615,7 @@ class DatabaseSource:
                 max_rows=s.db_max_rows,
                 max_tables=s.db_max_tables,
                 source=self.target,
+                index=op,
             )
         except Exception as err:  # the listing itself failed
             cov.error = error_name(err)
@@ -623,5 +629,6 @@ class DatabaseSource:
         cov.backlog = not sp.done
         if sp.scanned:
             cov.formats["sql"] = sp.scanned
+        op.settle(cov)
         note = "no_grant" if sp.listed == 0 else None
         return SourceRun(cov, {"after": None if sp.done else sp.after}, note=note)

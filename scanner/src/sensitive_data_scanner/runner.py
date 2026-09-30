@@ -375,6 +375,7 @@ def _plan_discovered(
                     max_object_bytes=config.max_object_bytes,
                     max_inflated_bytes=config.max_inflated_bytes,
                     min_interval_days=config.export_min_interval_days,
+                    incremental=config.dynamodb_incremental,
                 ),
             )
         elif store.kind == "rds":

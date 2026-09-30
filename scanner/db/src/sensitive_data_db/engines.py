@@ -42,6 +42,7 @@ from sensitive_data_core.findings import (
     SERVICE_MANAGED,
     UNKNOWN_ENCRYPTION,
 )
+from sensitive_data_core.index import ObjectPass
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import TableResult, scan_rows
 from sensitive_data_core.scan.sql import (
@@ -275,6 +276,7 @@ class SqlSession:
         take: Callable[[int], None],
         on_table: OnTable,
         source: str,
+        index: ObjectPass | None = None,
     ) -> SqlPass:
         self.rollback()
         for statement in self._begin:
@@ -292,6 +294,7 @@ class SqlSession:
                 max_rows=settings.max_rows,
                 max_tables=settings.max_tables,
                 source=source,
+                index=index,
             )
         finally:
             self.rollback()
@@ -519,6 +522,7 @@ class MongoSession:
         take: Callable[[int], None],
         on_table: OnTable,
         source: str,
+        index: ObjectPass | None = None,
     ) -> SqlPass:
         out = SqlPass(after=None)
         names = (

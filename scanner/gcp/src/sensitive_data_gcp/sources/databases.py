@@ -54,6 +54,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, column_
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import TableResult
 from sensitive_data_core.scan.sql import sample_tables
@@ -434,6 +435,8 @@ class DatabaseSource:
     """One Cloud SQL database, or an AlloyDB cluster's databases: the user checked, then
     the tables sampled, resumable by table."""
 
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
+
     def __init__(self, target: DbTarget, open_session: Connect, settings: Settings) -> None:
         self.t = target
         self.kind = target.kind
@@ -585,6 +588,10 @@ class DatabaseSource:
         seen_at = now.isoformat()
         facts = self.facts
         t = self.t
+        today = (now.date() - _dt.date(1970, 1, 1)).days
+        op = ObjectPass(
+            self.indexes, f"{self.id}\n{database}", self.kind, generation=today, budget=budget
+        )
 
         def on_table(schema: str, table: str, result: TableResult) -> None:
             def resource(column: str) -> dict[str, Any]:
@@ -621,6 +628,7 @@ class DatabaseSource:
                 max_rows=s.db_max_rows,
                 max_tables=s.db_max_tables,
                 source=self.target,
+                index=op,
             )
         except Exception as err:  # the listing itself failed
             cov.error = error_name(err)
@@ -637,6 +645,7 @@ class DatabaseSource:
         cov.redaction_markers += sp.redaction_markers
         cov.pass_complete = sp.done
         cov.backlog = not sp.done
+        op.settle(cov)
         if sp.scanned:
             cov.formats["sql"] = cov.formats.get("sql", 0) + sp.scanned
         note = "no_grant" if sp.listed == 0 and self.t.database is not None else None

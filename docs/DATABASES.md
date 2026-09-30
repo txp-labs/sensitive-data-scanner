@@ -79,6 +79,7 @@ scanner's own JSON log lines (the drivers' logging is switched off).
 | `DB_STATEMENT_TIMEOUT_SECONDS` | 60 | Per statement |
 | `DB_CONNECT_TIMEOUT_SECONDS` | 15 | Per connection |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3600 | The run's budget: tables, bytes, time. A database it does not reach is `deferred` (`budget`) |
+| `OBJECT_INDEX`, `INDEX_MAX_OBJECTS`, `RESCAN_PERCENT` | on, 10,000,000, 25 | With `STATE_LOCATION`: the table index beside it, which skips tables unchanged since their last read ([below](#tables-unchanged-since-the-last-read)); the most tables one database indexes; and the share of the budget that rescans may use |
 | `FINDINGS_HTTPS_URL` | | Push each part of the document here (HTTPS only) |
 | `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The key it is signed with, at least 32 characters |
 | `FINDINGS_EVENT_BUS_ARN` | | Push to an EventBridge bus, as the AWS scanner does (the container needs AWS credentials) |
@@ -151,6 +152,39 @@ string, no finding.
 A state that is missing, unreadable, not JSON, or another site's counts as
 none: the run starts from the top. One that cannot be written is logged by
 its error name, and the findings still go out.
+
+### Tables unchanged since the last read
+
+With `STATE_LOCATION`, the runner also keeps a **table index** beside the
+state (`<location>.index/`, or `<URL>.index/<file>` over HTTPS with the same
+signed PUTs; [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
+The document then holds one more thing, `indexSalt`, the random key of the
+index's hashes. From the second run on, the runner asks each database what
+changed, with one catalog query and no data:
+
+| Engine | What it asks |
+|---|---|
+| PostgreSQL | `pg_stat_user_tables`: rows inserted, updated, deleted and live, and the last analyze. On a primary only: a replica's counters do not move, so a replica's tables are always sampled |
+| MySQL, MariaDB | `information_schema.tables.UPDATE_TIME`. InnoDB keeps it in memory, so after a restart a table is sampled until it changes again |
+| SQL Server | The latest `sys.dm_db_index_usage_stats.last_user_update` of the table's indexes (it needs `VIEW DATABASE STATE`, or `VIEW DATABASE PERFORMANCE STATE` on Azure SQL; without it, every table is sampled) |
+| Oracle | `ALL_TAB_MODIFICATIONS` (inserts, updates, deletes, truncation, time) and `ALL_TABLES.LAST_ANALYZED` |
+| Snowflake, Databricks | `information_schema.tables.last_altered` |
+| MongoDB | Nothing cheap: every collection is sampled |
+
+The rules:
+
+- A table whose marker is the one recorded at its last read is not sampled
+  again, and its findings are carried from the last run (`findings.json.gz`
+  beside the index: findings only, never a value). Coverage counts it as
+  listed and not eligible.
+- A table whose marker is unknown, or differs, is sampled.
+- A table not sampled for 7 days is sampled whatever its marker says, in case
+  a marker missed a change (a statistics setting, a restart).
+- A table read with a component that has since changed and could change its
+  result is sampled again within `RESCAN_PERCENT` of the budget
+  ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)).
+- A catalog view the user may not read means no markers, and every table is
+  sampled, as before. `OBJECT_INDEX=off` turns this off.
 
 ## Where findings go
 

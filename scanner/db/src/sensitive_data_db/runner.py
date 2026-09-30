@@ -17,11 +17,18 @@ its run summary lists every database, read or not, and why. It goes to every
 configured sink. With `STATE_LOCATION` (state.py), a run starts with the database
 the previous run's budget did not reach, so every database is read over a few runs;
 without it, each run samples afresh in the configured order.
+
+With `STATE_LOCATION`, a **table index** lives beside the state (#67): a table whose
+engine says it has not changed since its last read (the core's `scan/sql.py` change
+markers) is not sampled again, and its findings are carried from the last run
+(`findings.json.gz` beside the index, findings only, never a value).
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import gzip
+import json
 import secrets
 import time
 from collections.abc import Callable, Sequence
@@ -37,16 +44,47 @@ from sensitive_data_core.findings import (
     findings_document,
     store_field_resource,
 )
+from sensitive_data_core.index import Indexes, ObjectPass, index_salt
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import TableResult
+from sensitive_data_core.state import index_backend
 
 from . import __version__
 from .config import Database, Settings
 from .engines import CONNECT, ReadRefused, load_driver
-from .state import StateStore, load_rotation, save_rotation
+from .state import StateStore, load_state, save_rotation
 
 MAX_WRITE_GRANTS = 30
+
+
+CARRIED = "findings.json.gz"
+
+
+def source_id(db: Database) -> str:
+    return f"{db.engine}:{db.name}"
+
+
+def carry(findings: FindingStore, backend: Any, in_scope: set[str]) -> None:
+    """The findings of the last run, for the databases still configured: a table skipped as
+    unchanged keeps them; a table read again replaces its own."""
+    try:
+        raw = backend.get_bytes(CARRIED)
+        items = json.loads(gzip.decompress(raw)) if raw else []
+    except Exception as err:  # none carried: every finding is this run's
+        log_event("index.failed", error=error_name(err))
+        return
+    for f in items if isinstance(items, list) else []:
+        if isinstance(f, dict) and str(f.get("_location", "")).split("\n", 1)[0] in in_scope:
+            findings.items[str(f.get("id"))] = f
+
+
+def keep(findings: FindingStore, backend: Any) -> None:
+    try:
+        body = json.dumps(list(findings.items.values()), separators=(",", ":")).encode()
+        backend.put_bytes(CARRIED, gzip.compress(body, mtime=0))
+    except Exception as err:  # the next run reads its tables afresh
+        log_event("index.failed", error=error_name(err))
 
 
 def _refuse(store: Store, reason: str, error: str | None = None) -> None:
@@ -102,10 +140,13 @@ def _read(
     detector: Detector,
     budget: Budget,
     findings: FindingStore,
+    indexes: Indexes | None = None,
+    today: int = 0,
 ) -> Coverage:
     cov = Coverage(kind=db.engine, target=db.name)
     seen_at = findings.now
     fmt = "json" if db.engine == "mongodb" else "sql"
+    op = ObjectPass(indexes, source_id(db), db.engine, generation=today, budget=budget)
 
     def on_table(schema: str, table: str, result: TableResult) -> None:
         def resource(column: str) -> dict[str, Any]:
@@ -118,9 +159,10 @@ def _read(
                 read_by="sample",
             )
 
-        location = f"{db.engine}:{db.name}\n{schema}\n{table}"
-        for f in column_findings(result, resource, None, seen_at, facts=store.facts):
-            findings.put(location, f)
+        location = f"{source_id(db)}\n{schema}\n{table}"
+        findings.replace_location(
+            location, column_findings(result, resource, None, seen_at, facts=store.facts)
+        )
 
     log_event("source.start", source=db.name, kind=db.engine)
     try:
@@ -131,6 +173,7 @@ def _read(
             take=budget.take,
             on_table=on_table,
             source=db.name,
+            index=op,
         )
     except Exception as err:  # the listing itself failed; the other databases still run
         cov.error = error_name(err)
@@ -146,6 +189,7 @@ def _read(
     cov.backlog = not sp.done
     if sp.scanned:
         cov.formats[fmt] = sp.scanned
+    op.settle(cov)
     log_event(
         "source.done",
         source=db.name,
@@ -181,7 +225,22 @@ def run(
     stores: list[Store] = []
     coverage: list[Coverage] = []
     ordered = list(settings.databases)
-    start = load_rotation(state, settings.site)
+    saved = load_state(state, settings.site)
+    start = saved.get("rotation") if isinstance(saved.get("rotation"), str) else None
+    backend = index_backend(state) if state is not None and settings.object_index else None
+    indexes = (
+        Indexes(
+            backend,
+            index_salt(saved),
+            max_rows=settings.index_max_objects,
+            rescan_percent=settings.rescan_percent,
+        )
+        if backend is not None
+        else None
+    )
+    if indexes is not None:
+        carry(findings, backend, {source_id(d) for d in ordered})
+    today = (started.date() - _dt.date(1970, 1, 1)).days
     names = [d.name for d in ordered]
     if start in names:
         k = names.index(start)
@@ -208,6 +267,8 @@ def run(
             detector=detector,
             budget=share,
             findings=findings,
+            indexes=indexes,
+            today=today,
         )
         budget.absorb(share)
         coverage.append(cov)
@@ -228,7 +289,10 @@ def run(
         discovery=summary(stores, {}),
         scanner_version=__version__,
     )
-    save_rotation(state, settings.site, deferred)
+    if indexes is not None and backend is not None:
+        indexes.save()
+        keep(findings, backend)
+    save_rotation(state, settings.site, deferred, salt=indexes.salt if indexes else None)
     failed = 0
     for sink in sinks:
         try:

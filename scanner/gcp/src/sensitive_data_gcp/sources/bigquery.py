@@ -29,7 +29,8 @@ inside it). `tabledata.list` runs no query and bills no bytes, which is why it
 is preferred over `TABLESAMPLE`: a `TABLESAMPLE` query would bill the bytes of
 the blocks it samples, and would need `bigquery.jobs.create`. A table
 unchanged since its last complete read (`lastModifiedTime`) is not read again;
-its findings stay.
+its findings stay, unless a component it was read with changed and could change
+them (#67: the object index's rescan rules), within the rescan share.
 
 **Encryption (1.5):** the table's own Cloud KMS key, else its dataset's default
 key (`customer_managed_key`, hashed), else Google's own keys (`service_managed`).
@@ -47,6 +48,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, column_
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import scan_rows
 
@@ -220,6 +222,7 @@ class BigQuerySource:
     """One table: its first rows, read by column with `tabledata.list`."""
 
     kind = KIND
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(self, rest: Rest, target: TableTarget, *, max_rows: int = 1000) -> None:
         self.rest = rest
@@ -258,9 +261,19 @@ class BigQuerySource:
             log_event("source.refused", source=self.target, kind=KIND, reason="row_level_policy")
             return SourceRun(cov, cursor, note="row_level_policy", extra=extra)
         modified = str(meta.get("lastModifiedTime") or "")
+        op = ObjectPass(self.indexes, self.id, KIND, budget=budget)
+        why = None
         if modified and cursor.get("modified") == modified:
-            cov.pass_complete = True  # unchanged since its last complete read: findings stay
-            return SourceRun(cov, cursor, extra=extra)
+            decision = op.decide("table", changed=False, marker=modified)
+            if decision.why is not None:
+                if op.rescans.admit():
+                    why = decision.why  # read again: a component that could change it changed
+                else:
+                    op.rescans.miss(decision.why)
+            if why is None:
+                cov.pass_complete = True  # unchanged since its last complete read: findings stay
+                op.settle(cov)
+                return SourceRun(cov, cursor, extra=extra)
         cov.eligible = 1
         if not budget.has():
             cov.backlog = True
@@ -289,6 +302,10 @@ class BigQuerySource:
         budget.take(size)
         columns = [str(f.get("name") or "") for f in readable]
         result = scan_rows("json", columns, rows, detector, self.max_rows)
+        if why is not None:
+            result.rescan = why.fields()
+        op.record("table", marker=modified or None, readers=("columnar",), text=True)
+        op.rescanned(None, why)
         cov.scanned, cov.bytes_scanned, cov.pass_complete = 1, size, True
         cov.partial = int(len(rows) >= self.max_rows)
         cov.formats["json"] = 1
@@ -317,4 +334,5 @@ class BigQuerySource:
             f"{self.id}\n",
             column_findings(result, resource, link, now.isoformat(), facts=facts),
         )
+        op.settle(cov)
         return SourceRun(cov, {"modified": modified or None}, extra=extra)

@@ -147,6 +147,13 @@ and its own image (`docker build --target azure`).
   table when the budget cuts it short. A finding is a `store_field` with the
   kind as `service`, the server as `store`, then `database`, `schema.table`
   and the column.
+- **Unchanged tables** are not sampled again
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+  from the second pass on, the engine's own change markers are read (SQL's
+  index usage stats, PostgreSQL's `pg_stat_user_tables`, MySQL's
+  `UPDATE_TIME`), and a table whose marker has not moved keeps its findings.
+  Every table is still sampled at least weekly, and the rescan rules apply
+  ([DATABASES.md](DATABASES.md#tables-unchanged-since-the-last-read)).
 - **Gaps:**
   - `network`: public access is off with no private path from the job, or a
     firewall does not admit it. The job's egress must reach the server, for
