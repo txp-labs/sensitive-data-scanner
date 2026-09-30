@@ -55,16 +55,17 @@ run "opt_ins_and_folders" {
     read_databases     = true
     read_private_logs  = true
     read_secrets       = true
+    scan_mode          = "both"
     findings_https_url = "https://collector.example/findings"
     findings_hmac_key  = "made-up-key-made-up-key-made-up-key"
   }
 
   assert {
-    condition     = length(google_organization_iam_custom_role.scanner) == 4
+    condition     = length(google_organization_iam_custom_role.scanner) == 5
     error_message = "Each opt-in adds its own role."
   }
   assert {
-    condition     = length(google_folder_iam_member.scanner) == 8 && length(google_organization_iam_member.scanner) == 0
+    condition     = length(google_folder_iam_member.scanner) == 10 && length(google_organization_iam_member.scanner) == 0
     error_message = "Each role is bound at each folder, and not at the organization."
   }
   assert {

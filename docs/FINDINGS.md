@@ -171,6 +171,7 @@ occurrences) and `enterprise_grid_only`.
 | Platform | Vendor | Importer | Covers | Limits |
 |---|---|---|---|---|
 | AWS | Amazon Macie | `macie2:ListFindings` and `GetFindings`, category `CLASSIFICATION`, updated since the last run (`MACIE_LOOKBACK_DAYS` first) | `s3` | `s3_only`, `sampled_by_vendor`, `counts_not_distinct` |
+| Google Cloud | Sensitive Data Protection | its discovery's data profiles: `columnDataProfiles` (a BigQuery column's predicted info type, on the same `store_field` as this scanner's BigQuery findings) and `fileStoreDataProfiles` (the info types found in a Cloud Storage bucket, on the bucket), in each of `SDP_LOCATIONS`; never its inspection results, which can quote matched text | `bigquery`, `gcs` | `profiled_stores_only`, `profiles_not_items`, `sampled_by_vendor` |
 
 Macie's managed data identifiers map to the spec's classes:
 `CREDIT_CARD_NUMBER`, `CREDIT_CARD_NUMBER_(NO_KEYWORD)` and

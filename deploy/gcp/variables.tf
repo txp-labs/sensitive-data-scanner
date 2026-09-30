@@ -97,6 +97,22 @@ variable "read_secrets" {
   default     = false
 }
 
+variable "scan_mode" {
+  description = "SCAN_MODE (#55): scanner (this scanner reads), vendor (Sensitive Data Protection's data profiles are imported; nothing is read) or both. vendor and both add a role that lists the profiles only."
+  type        = string
+  default     = "scanner"
+  validation {
+    condition     = contains(["scanner", "vendor", "both"], var.scan_mode)
+    error_message = "scan_mode is scanner, vendor or both."
+  }
+}
+
+variable "sdp_locations" {
+  description = "SDP_LOCATIONS: the locations Sensitive Data Protection's discovery keeps its profiles in."
+  type        = list(string)
+  default     = ["global"]
+}
+
 variable "findings_https_url" {
   description = "FINDINGS_HTTPS_URL: the signed push's endpoint. Held in a Secret Manager secret of the job's own."
   type        = string

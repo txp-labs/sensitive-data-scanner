@@ -48,6 +48,10 @@ its value.
   (`projects/<project>/topics/<topic>`) as the job's service account, which
   the topic's owner grants Pub/Sub Publisher on that topic only.
 - `FINDINGS_FILE`: write the findings document to a file (a mounted volume).
+- `SCAN_MODE` (#55): `scanner` (the default), `vendor` (Sensitive Data
+  Protection's data profiles are imported and nothing is read) or `both`;
+  `SDP_LOCATIONS` (default `global`): where its discovery keeps the profiles;
+  `SDP_MAX_PROFILES`: the most profiles imported a run.
 """
 
 from __future__ import annotations
@@ -59,6 +63,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sensitive_data_core.modes import SCANNER, ModeError, read_mode
 from sensitive_data_core.rules import (
     SamplingRule,
     StoreRule,
@@ -183,6 +188,11 @@ class Settings:
     db_max_tables: int = 500
     db_statement_seconds: int = 60
     db_connect_seconds: int = 15
+    # #55: who finds the data (the core's modes), and where Sensitive Data Protection keeps
+    # its profiles (its discovery configuration's locations).
+    scan_mode: str = SCANNER
+    sdp_locations: tuple[str, ...] = ("global",)
+    sdp_max_profiles: int = 20_000
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -281,6 +291,20 @@ def _kinds(
     return tuple(out)
 
 
+def _mode(raw: str | None) -> str:
+    try:
+        return read_mode(raw)
+    except ModeError:
+        raise ConfigError("scan_mode") from None
+
+
+def _locations(raw: str | None) -> tuple[str, ...]:
+    got = _list(raw) or ("global",)
+    if any(not re.match(r"^[a-z][a-z0-9-]{1,40}$", x) for x in got):
+        raise ConfigError("sdp_locations")
+    return got
+
+
 def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     e = os.environ if env is None else env
     site = (e.get("SCANNER_SITE") or "").strip().lower()
@@ -364,4 +388,7 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         db_max_tables=_int(e.get("DB_MAX_TABLES"), 500, 1, 10_000),
         db_statement_seconds=_int(e.get("DB_STATEMENT_TIMEOUT_SECONDS"), 60, 5, 3600),
         db_connect_seconds=_int(e.get("DB_CONNECT_TIMEOUT_SECONDS"), 15, 1, 300),
+        scan_mode=_mode(e.get("SCAN_MODE")),
+        sdp_locations=_locations(e.get("SDP_LOCATIONS")),
+        sdp_max_profiles=_int(e.get("SDP_MAX_PROFILES"), 20_000, 1, 1_000_000),
     )

@@ -128,7 +128,11 @@ def vendor_finding(
     occurrences = max(1, int(detection.occurrences or 0))
     confidence = detection.confidence if detection.confidence in CONFIDENCE else "medium"
     out: dict[str, Any] = {
-        "id": finding_id({**resource, "source": source_of(vendor)}, cls),
+        # A vendor's type is part of the id: two `other` types at one place stay two.
+        "id": finding_id(
+            {**resource, "source": source_of(vendor), "vendorType": detection.vendor_type or ""},
+            cls,
+        ),
         "resource": resource,
         "format": "vendor",
         "class": cls,

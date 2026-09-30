@@ -67,11 +67,19 @@ locals {
     "serviceusage.services.use",
   ]
 
+  # With scan_mode vendor or both (#55): Sensitive Data Protection's data profiles, listed
+  # (the profiles only: never its inspection results, which can quote matched text).
+  sdp_permissions = [
+    "dlp.columnDataProfiles.list",
+    "dlp.fileStoreProfiles.list",
+  ]
+
   roles = merge(
     { reader = { id = "sdsScannerReader", title = "Sensitive data scanner: read", permissions = local.read_permissions } },
     var.read_private_logs ? { private_logs = { id = "sdsScannerPrivateLogs", title = "Sensitive data scanner: private logs", permissions = local.private_log_permissions } } : {},
     var.read_secrets ? { secrets = { id = "sdsScannerSecrets", title = "Sensitive data scanner: secrets", permissions = local.secret_permissions } } : {},
     var.read_databases ? { databases = { id = "sdsScannerDatabases", title = "Sensitive data scanner: database login", permissions = local.database_permissions } } : {},
+    var.scan_mode != "scanner" ? { sdp = { id = "sdsScannerSdpProfiles", title = "Sensitive data scanner: SDP profiles", permissions = local.sdp_permissions } } : {},
   )
 
   scope_env = (
@@ -88,9 +96,11 @@ locals {
     LOGGING_PRIVATE_READ  = var.read_private_logs ? "on" : ""
     SECRET_MANAGER_READ   = var.read_secrets ? "on" : ""
     FINDINGS_PUBSUB_TOPIC = var.findings_pubsub_topic
+    SCAN_MODE             = var.scan_mode != "scanner" ? var.scan_mode : ""
+    SDP_LOCATIONS         = var.scan_mode != "scanner" ? join(",", var.sdp_locations) : ""
   }) : k => v if v != "" }
 
-  apis = [
+  apis = concat(var.scan_mode != "scanner" ? ["dlp.googleapis.com"] : [], [
     "alloydb.googleapis.com",
     "bigquery.googleapis.com",
     "bigtableadmin.googleapis.com",
@@ -106,7 +116,7 @@ locals {
     "spanner.googleapis.com",
     "sqladmin.googleapis.com",
     "storage.googleapis.com",
-  ]
+  ])
 }
 
 resource "google_project_service" "apis" {
