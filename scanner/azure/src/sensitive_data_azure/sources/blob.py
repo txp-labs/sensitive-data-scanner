@@ -44,7 +44,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
-from sensitive_data_core.index import Indexes, ObjectPass, md5_fingerprint
+from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale, md5_fingerprint
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
@@ -270,7 +270,14 @@ class BlobSource:
         first_error: str | None = None
         note: str | None = None
         generation = int(cursor.get("indexPass") or 0) + (0 if cursor.get("passStartedAt") else 1)
-        self._op = ObjectPass(self.indexes, self.id, self.kind, generation=generation)
+        self._op = ObjectPass(
+            self.indexes,
+            self.id,
+            self.kind,
+            generation=generation,
+            columnar=self.columnar,
+            budget=budget,
+        )
         try:
             pages = self.container.list_blobs(
                 name_starts_with=self.prefix or None, results_per_page=self.page_size
@@ -319,6 +326,11 @@ class BlobSource:
             if cov.error in NETWORK_ERRORS and cov.scanned == 0:
                 note = "network"
             log_event("source.failed", source=self.target, error=cov.error)
+        if cov.error is None:
+            # Then the rescans this run met, within their capped share (#67).
+            for props, why in self._op.rescans.drain(budget, self._planned):
+                err_name = self._guarded(props, cov, detector, store, seen_at, why)
+                first_error = first_error or err_name
         if done and cov.error is None:
             cov.pass_complete = True
             self._op.complete()
@@ -337,6 +349,7 @@ class BlobSource:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
         new_cursor["indexPass"] = generation
+        self._op.settle(cov)
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_error
             if first_error in NETWORK_ERRORS:
@@ -361,37 +374,62 @@ class BlobSource:
         size = int(getattr(props, "size", 0) or 0)
         cov.listed += 1
         self._op.seen(name)
-        modified = getattr(props, "last_modified", None)
-        if since is not None and modified is not None and modified <= since:
-            return cur_dir, cur_n, None
         if name.endswith("/") or size == 0:
             return cur_dir, cur_n, None  # a directory (ADLS Gen2) or an empty blob
-        cov.eligible += 1
+        modified = getattr(props, "last_modified", None)
+        changed = since is None or modified is None or modified > since
+        decision = self._op.decide(name, changed=changed, marker=blob_marker(props))
+        if not (decision.read or decision.rescan):
+            return cur_dir, cur_n, None  # unchanged, and read with what it would be now
+        cov.eligible += int(decision.read)
         if sample_point(name) >= self.sample_percent:
-            cov.sampled_out += 1
+            cov.sampled_out += int(decision.read)
             return cur_dir, cur_n, None
         tier = str(getattr(props, "blob_tier", None) or "")
         if tier.lower() == "archive":
-            cov.skipped["archive_tier"] = cov.skipped.get("archive_tier", 0) + 1
+            if decision.read:
+                cov.skipped["archive_tier"] = cov.skipped.get("archive_tier", 0) + 1
             return cur_dir, cur_n, None
         directory = name.rsplit("/", 1)[0] if "/" in name else ""
-        if self.max_per_prefix:
+        counted = decision.read or (decision.why is not None and decision.why.reason == UNINDEXED)
+        if self.max_per_prefix and counted:
             if directory != cur_dir:
                 cur_dir, cur_n = directory, 0
             if cur_n >= self.max_per_prefix:
-                cov.sampled_out += 1
+                cov.sampled_out += int(decision.read)
                 return cur_dir, cur_n, None
+        if decision.rescan:
+            self._op.offer(props, decision)  # read after this run's changes, if it fits
+            return cur_dir, cur_n + int(counted), None
         want = planned_bytes(name, size, self.max_object_bytes)
         if not budget.has(want):
             return None
         budget.take(want)
         cur_n += 1
+        return cur_dir, cur_n, self._guarded(props, cov, detector, store, seen_at)
+
+    def _planned(self, props: Any) -> int:
+        return planned_bytes(str(props.name), int(props.size or 0), self.max_object_bytes)
+
+    def _guarded(  # noqa: PLR0917 - one blob of the pass
+        self,
+        props: Any,
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+        why: Stale | None = None,
+    ) -> str | None:
+        """One blob read (a change, or a rescan for `why`); the error's name when it could not
+        be."""
+        name = str(props.name)
         if getattr(props, "encryption_key_sha256", None):
+            self._op.record(name, marker=blob_marker(props), unreadable=True)
             cov.unreadable += 1
             cov.kms_denied += 1  # a customer-provided key: unreadable without it
-            return cur_dir, cur_n, "BlobUsesCustomerSpecifiedEncryption"
+            return "BlobUsesCustomerSpecifiedEncryption"
         try:
-            self._read(props, cov=cov, detector=detector, store=store, seen_at=seen_at)
+            self._read(props, cov=cov, detector=detector, store=store, seen_at=seen_at, why=why)
         except Exception as err:  # one bad blob must not stop the pass
             self._op.record(name, marker=blob_marker(props), unreadable=True)
             cov.unreadable += 1
@@ -399,8 +437,8 @@ class BlobSource:
             if e in CPK_ERRORS:
                 cov.kms_denied += 1
             log_event("item.unreadable", source=self.target, error=e)
-            return cur_dir, cur_n, e
-        return cur_dir, cur_n, None
+            return e
+        return None
 
     def _read(
         self,
@@ -410,6 +448,7 @@ class BlobSource:
         detector: Detector,
         store: FindingStore,
         seen_at: str,
+        why: Stale | None = None,
     ) -> None:
         name = str(props.name)
         size = int(getattr(props, "size", 0) or 0)
@@ -444,6 +483,7 @@ class BlobSource:
             seen_at=seen_at,
             facts=facts,
         )
+        self._op.rescanned(findings, why)
         if findings is None:
             return
         location = f"{self.id}\n{name}"

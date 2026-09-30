@@ -140,6 +140,7 @@ One run:
 | `MAX_RUN_SECONDS` | Wall-time cap on a run, below the Lambda deadline (0: the deadline only) | 0 |
 | `OBJECT_INDEX` | The per-object index in the results bucket (`state/index/`, [below](#the-object-index-and-component-versions)) | on |
 | `INDEX_MAX_OBJECTS` | The most objects one source indexes; past it, objects are read by their change at the source only | 10,000,000 |
+| `RESCAN_PERCENT` | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change their result changed ([below](#how-rescans-are-chosen)); 0 turns rescans off | 25 |
 | `COLUMNAR_MAX_ROWS` | Rows read per Parquet, ORC or Avro file (or catalog CSV/JSON object); the rest is `partial` | 10,000 |
 | `RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN` | The role RDS assumes to write snapshot exports, and the customer's KMS key to encrypt them. Both are needed to read RDS and Aurora | none: RDS stores are reported `export_not_configured` |
 | `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB) a run may start | 1 |
@@ -571,10 +572,66 @@ The index is bounded:
 
 `OBJECT_INDEX=off` turns the index off.
 
-Today the index records S3 (and Glue tables and directory buckets), Azure Blob
-Storage and Files, Cloud Storage, and OneDrive, SharePoint and Drive files.
-Rescans chosen from it, change detection for tables and duplicate skipping
-build on it (#67).
+The index records S3 (and Glue tables and directory buckets), Azure Blob
+Storage and Files, Cloud Storage, OneDrive, SharePoint and Drive files,
+CodeCommit files (by blob) and ECR layers (by digest).
+
+### How rescans are chosen
+
+On each run, a listed object is read when it **changed at its source**, as
+before: its time is past the last complete pass, or it is in a delta feed.
+With a row in the index, the recorded change marker decides instead: the same
+marker is the same object, so an object inside the five-minute skew window is
+not read twice, and another marker is a change. An object that did not change
+is read again only when **a component it was read with differs from this
+build's, and that component could change its result**
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)). The
+first rule that applies is its `rescanReason`
+([FINDINGS.md](FINDINGS.md#rescans-110)):
+
+| What changed | What is read again |
+|---|---|
+| An adapter (`adapter:s3`) | That adapter's objects only |
+| A reader (`reader:pdf`) | The objects that reader read, on every platform, including archives with an entry it read |
+| A new reader, or pyarrow in the build | The objects that held a kind no reader read (`unread` in the profile), when a reader now reads it: 7z before a 7z reader, Parquet read by the Lambda zip once the image reads it |
+| The sniffer | Objects whose kind was undetermined (`binary`) or disputed (`disguised`) |
+| `spec-standalone` | Every text-bearing object (read as text or a table). A change to one class's rules, or a new class, is named in `rescanClasses` |
+| `spec-conversation` | Transcripts and conversation-shaped items only |
+| (no row) | An unchanged object the index never recorded, once (`unindexed`): objects read before the index existed |
+
+Nothing else is re-read. An image counted by kind is not read again for a spec
+change, and a PDF is not read again for a Word reader's.
+
+**Budgeted and spread across runs.** Source changes come first. Rescans come
+after them, in listing order, and may use at most `RESCAN_PERCENT` (25%) of
+each source's share of the run's items and bytes. The candidates past that
+are the backlog (`rescanBacklog` in coverage). A row that was read is current
+again, so the next run's listing reaches the next slice. An upgrade that
+makes a million objects stale costs each run a quarter of its budget, never
+more. `RESCAN_PERCENT=0` turns rescans off: only changes are read, and the
+backlog is still reported.
+
+**By kind of source:**
+
+- **Listings** (S3, Azure Blob Storage and Files, Cloud Storage) meet their
+  candidates while listing and read them after the pass's changes. Sampling
+  applies to rescans as to changes: an unindexed object takes its place in its
+  directory's sample.
+- **Delta feeds** (OneDrive, SharePoint, Drive) never list an unchanged file.
+  When the index has stale rows, or the drive was read before the index knew
+  it, a pass over every item runs after the feed, reading only the stale ones
+  within the cap. The pass resumes next run where the cap stopped it.
+- **CodeCommit and ECR:**
+  - A new head reads only the files whose blob changed.
+  - A newer image reads only the layers it has not read, since a layer's
+    digest is its content's hash.
+  - Whatever was skipped keeps its findings.
+  - A head or image already read in full is read again only for the files or
+    layers a changed component could read differently.
+
+Logs, X-Ray traces and streams are read forward from their position, so their
+history is not re-read. Tables (databases and DynamoDB) have their own change
+markers (#67 part 3).
 
 ### Glue Data Catalog and Lake Formation
 

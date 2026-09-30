@@ -63,12 +63,14 @@ from .push import SIGNATURE_HEADER, Revealable, sign
 from .safety import error_name, log_event
 
 if TYPE_CHECKING:
+    from .adapter import Budget
     from .scan.objects import ObjectResult
 
 FORMAT_VERSION = 1
 SHARD_ROWS = 250_000
 MAX_SHARDS = 256
 DEFAULT_MAX_ROWS = 10_000_000
+DEFAULT_RESCAN_PERCENT = 25
 KEY_BYTES = 12
 MARKER_BYTES = 8
 FINGERPRINT_BYTES = 12
@@ -212,13 +214,15 @@ def profile_for(
     readers: tuple[str, ...] = (),
     detected: str | None = None,
     skip: str | None = None,
+    unread: tuple[str, ...] = (),
 ) -> Profile:
-    """The profile of one read: an object's (`got`), or a table's or item's (`readers`)."""
+    """The profile of one read: an object's (`got`), or a table's, an item's or a group of
+    objects' (`readers`, `unread`)."""
     names = set(readers)
-    unread: frozenset[str] = frozenset()
+    unread_kinds = frozenset(unread)
     if got is not None:
         names |= got.readers
-        unread = got.unread
+        unread_kinds |= got.unread
         detected = detected or got.detected
         skip = skip or got.skipped
     return Profile(
@@ -226,7 +230,7 @@ def profile_for(
         adapter_v=manifest.adapter(adapter),
         detected=detected,
         readers=tuple(sorted((r, manifest.reader(r)) for r in names)),
-        unread=tuple(sorted(unread)),
+        unread=tuple(sorted(unread_kinds)),
         skip=skip,
         sniffer_v=manifest.version("sniffer"),
         standalone_v=manifest.version("spec-standalone"),
@@ -729,15 +733,18 @@ class ObjectIndex:
                     return self._row(shard, r)
         return None
 
-    def profile_counts(self) -> list[tuple[Profile, int]]:
-        """Every profile in the index and how many rows have it (the rescan backlog's basis)."""
-        out: dict[str, tuple[Profile, int]] = {}
+    def profile_counts(self) -> list[tuple[Profile, int, int]]:
+        """Every profile in the index with its flags, and how many rows have them (what the
+        rescan backlog is counted from)."""
+        out: dict[tuple[str, int], tuple[Profile, int, int]] = {}
         for shard in self._all():
-            for p, n in shard.conn.execute("SELECT p, count(*) FROM objects GROUP BY p"):
+            for p, fl, n in shard.conn.execute(
+                "SELECT p, fl, count(*) FROM objects GROUP BY p, fl"
+            ):
                 prof = shard.by_id[p]
-                body = prof.body()
-                have = out.get(body)
-                out[body] = (prof, (have[1] if have else 0) + int(n))
+                key = (prof.body(), int(fl))
+                have = out.get(key)
+                out[key] = (prof, int(fl), (have[2] if have else 0) + int(n))
         return list(out.values())
 
     # --- saving
@@ -836,6 +843,7 @@ class Indexes:
         manifest: Manifest | None = None,
         max_rows: int = DEFAULT_MAX_ROWS,
         shard_rows: int = SHARD_ROWS,
+        rescan_percent: int = DEFAULT_RESCAN_PERCENT,
     ) -> None:
         self.backend = backend
         self.salt = salt
@@ -843,6 +851,7 @@ class Indexes:
         self.manifest = manifest or Manifest.load()
         self.max_rows = max_rows
         self.shard_rows = shard_rows
+        self.rescan_percent = rescan_percent
         self._open: dict[str, ObjectIndex] = {}
 
     def __repr__(self) -> str:
@@ -879,10 +888,206 @@ class Indexes:
         return failed
 
 
+# ------------------------------------------------------------------ what a rescan is for
+
+
+# Why an object that did not change at its source is read again (`rescanReason`, 1.10).
+ADAPTER = "adapter"
+READER = "reader"
+NEW_READER = "new_reader"
+SNIFFER = "sniffer"
+SPEC_STANDALONE = "spec_standalone"
+SPEC_CONVERSATION = "spec_conversation"
+UNINDEXED = "unindexed"
+RESCAN_REASONS = (
+    ADAPTER,
+    READER,
+    NEW_READER,
+    SNIFFER,
+    SPEC_STANDALONE,
+    SPEC_CONVERSATION,
+    UNINDEXED,
+)
+# What the sniffer could not name: a new sniffer may name it.
+UNDETERMINED = frozenset({"binary"})
+# Kinds only a build with pyarrow reads (the container images; not the Lambda zip).
+NEEDS_PYARROW = frozenset({"parquet", "orc", "avro", "zstd"})
+
+
+@dataclass(frozen=True)
+class Stale:
+    """Why an unchanged object is read again, and for a class-scoped spec change, which
+    classes (a new class, or one class's rules)."""
+
+    reason: str
+    classes: tuple[str, ...] = ()
+
+    def fields(self) -> dict[str, Any]:
+        """What each of the object's findings says about it (1.10)."""
+        out: dict[str, Any] = {"rescanReason": self.reason}
+        if self.classes:
+            out["rescanClasses"] = list(self.classes)
+        return out
+
+
+def readable(manifest: Manifest, kind: str, *, columnar: bool) -> bool:
+    """A reader in this build reads objects of `kind`."""
+    if not manifest.readers_for(kind):
+        return False
+    return columnar or kind not in NEEDS_PYARROW
+
+
+def stale(profile: Profile, flags: int, manifest: Manifest, *, columnar: bool) -> Stale | None:
+    """Whether a component the object was read with differs from this build's **and could
+    change its result**, and which (the first that applies, in this order):
+
+    - its adapter changed: that adapter's objects only;
+    - a reader it was read with changed: that reader's objects, whatever the platform;
+    - a reader now reads a kind it met unread (a new reader, or pyarrow in the build);
+    - the sniffer changed, and what the object is was undetermined (`binary`) or disputed
+      (`disguised`);
+    - the standalone spec changed (the engine: every class; one class's rules or a new
+      class: those classes), and the object was read as text or a table;
+    - the conversation spec changed, and some part of it was a conversation.
+
+    A component the manifest no longer names (a reader removed or renamed) counts as changed.
+    """
+    current = manifest.adapter(profile.adapter)
+    if current is not None and profile.adapter_v != current:
+        return Stale(ADAPTER)
+    for name, version in profile.readers:
+        if manifest.reader(name) != version:
+            return Stale(READER)
+    for kind in profile.unread:
+        if readable(manifest, kind, columnar=columnar):
+            return Stale(NEW_READER)
+    if profile.sniffer_v != manifest.version("sniffer") and (
+        profile.detected is None or profile.detected in UNDETERMINED or flags & DISGUISED
+    ):
+        return Stale(SNIFFER)
+    if flags & TEXT:
+        if profile.standalone_v != manifest.version("spec-standalone"):
+            return Stale(SPEC_STANDALONE)
+        had = dict(profile.classes)
+        changed = tuple(sorted(c for c, v in manifest.classes.items() if had.get(c) != v))
+        if changed:
+            return Stale(SPEC_STANDALONE, changed)
+    if flags & CONVERSATION and profile.conversation_v != manifest.version("spec-conversation"):
+        return Stale(SPEC_CONVERSATION)
+    return None
+
+
+@dataclass(frozen=True)
+class Decision:
+    """What a pass does with one listed object: `read` it (it changed at its source, or is
+    new), `rescan` it (`why`), or `skip` it (unchanged, and read with what could change
+    its result)."""
+
+    action: str
+    why: Stale | None = None
+
+    @property
+    def read(self) -> bool:
+        return self.action == "read"
+
+    @property
+    def rescan(self) -> bool:
+        return self.action == "rescan"
+
+
+READ = Decision("read")
+SKIP = Decision("skip")
+
+
+class Rescans:
+    """The rescan candidates of one source's run, read after its changes (#67).
+
+    Rescans may use at most `percent` of the source's share of the run (items and bytes),
+    and only what its changes left: an upgrade that makes a million objects stale reads a
+    capped slice of them each run, in listing order, so the next run reaches the next slice
+    (the rows read are current again). Candidates past the cap are the backlog."""
+
+    def __init__(self, budget: Budget | None, percent: int) -> None:
+        pct = max(0, min(100, percent))
+        max_items = budget.max_items if budget is not None else 0
+        max_bytes = budget.max_bytes if budget is not None else 0
+        self.cap_items = max(1, max_items * pct // 100) if pct and max_items else 0
+        self.cap_bytes = max_bytes * pct // 100
+        self.items = 0
+        self.bytes = 0
+        self.queue: list[tuple[Any, Stale]] = []
+        self.done: dict[str, int] = {}
+        self.left: dict[str, int] = {}  # candidates met and not read, by reason
+
+    def __repr__(self) -> str:
+        return f"Rescans(queued={len(self.queue)}, left={sum(self.left.values())})"
+
+    def _left(self, why: Stale) -> None:
+        self.left[why.reason] = self.left.get(why.reason, 0) + 1
+
+    def offer(self, candidate: Any, why: Stale) -> None:
+        """A candidate met in the listing: queued while the cap could still read it."""
+        if len(self.queue) < self.cap_items:
+            self.queue.append((candidate, why))
+        else:
+            self._left(why)
+
+    def room(self, size: int) -> bool:
+        if self.items >= self.cap_items:
+            return False
+        return self.items == 0 or self.bytes + size <= self.cap_bytes
+
+    def drain(self, budget: Budget, size_of: Callable[[Any], int]) -> Iterator[tuple[Any, Stale]]:
+        """The queued candidates the cap and the budget have room for, each charged to both;
+        the rest are backlog."""
+        queue, self.queue = self.queue, []
+        for n, (candidate, why) in enumerate(queue):
+            size = size_of(candidate)
+            if not (budget.has(size) and self.room(size)):
+                for _, w in queue[n:]:
+                    self._left(w)
+                return
+            budget.take(size)
+            self.items += 1
+            self.bytes += size
+            yield candidate, why
+
+    def take(self, size: int, budget: Budget) -> bool:
+        """Room for one rescan of `size` now (a source that meets its candidates one by one,
+        such as a delta feed's enumeration): charged to the cap and the budget."""
+        if not (budget.has(size) and self.room(size)):
+            return False
+        budget.take(size)
+        self.items += 1
+        self.bytes += size
+        return True
+
+    def admit(self) -> bool:
+        """Room for one more rescan whose bytes the source charges to the budget itself."""
+        if self.items >= self.cap_items:
+            return False
+        self.items += 1
+        return True
+
+    def miss(self, why: Stale) -> None:
+        """A candidate met with no room left: backlog."""
+        self._left(why)
+
+    def read(self, why: Stale) -> None:
+        self.done[why.reason] = self.done.get(why.reason, 0) + 1
+
+
 class ObjectPass:
-    """One source's pass as the index sees it: each object read (or found unreadable) is
-    recorded with its marker, fingerprint and profile. With no index (`indexes` None, no
-    state location) it records nothing."""
+    """One source's pass as the index sees it.
+
+    - `decide`: read an object that changed at its source (or is new), rescan one whose
+      recorded vector is stale, skip the rest;
+    - `record`: each object read (or found unreadable), with its marker, fingerprint and
+      profile;
+    - `rescans`: the candidates, read after the changes within the capped share.
+
+    With no index (`indexes` None: no state location, or `OBJECT_INDEX=off`) it decides as
+    before, by the change at the source only, and records nothing."""
 
     def __init__(
         self,
@@ -891,11 +1096,92 @@ class ObjectPass:
         adapter: str,
         *,
         generation: int = 0,
+        columnar: bool = False,
+        budget: Budget | None = None,
     ) -> None:
         self.indexes = indexes
         self.adapter = adapter
         self.generation = generation
+        self.columnar = columnar
         self.index = indexes.open(source_id) if indexes is not None else None
+        percent = indexes.rescan_percent if indexes is not None else 0
+        self.rescans = Rescans(budget, percent if self.index is not None else 0)
+
+    @property
+    def bootstrap(self) -> bool:
+        """An object with no row that did not change is read once (`unindexed`): it was read
+        before the index knew it, or with a build whose vector is unknown. Not when the index
+        is full (those objects will never have a row) or rescans are off."""
+        return (
+            self.index is not None
+            and self.rescans.cap_items > 0
+            and self.index.rows < self.index.max_rows
+        )
+
+    def decide(self, key: str, *, changed: bool, marker: str | None = None) -> Decision:
+        """`changed`: the source says it changed (a time past the watermark, less its skew).
+        With a row, the marker decides instead when there is one: the same marker is the
+        same object, whatever its time (an object inside the skew window is not read twice);
+        another marker is a change. Then a stale vector is a rescan; no row is `unindexed`."""
+        if self.index is None:
+            return READ if changed else SKIP
+        row = self.index.get(key)
+        if row is None:
+            if changed:
+                return READ
+            return Decision("rescan", Stale(UNINDEXED)) if self.bootstrap else SKIP
+        if marker is not None and row.marker is not None:
+            if row.marker != self.index.hasher.marker(marker):
+                return READ
+        elif changed:
+            return READ
+        if row.flags & UNREADABLE:
+            return SKIP  # retried when it changes, as before the index
+        why = stale(row.profile, row.flags, self.manifest, columnar=self.columnar)
+        return Decision("rescan", why) if why is not None else SKIP
+
+    def offer(self, candidate: Any, decision: Decision) -> None:
+        """A rescan candidate (`decide` said `rescan`), read after the changes if it fits."""
+        if decision.why is not None:
+            self.rescans.offer(candidate, decision.why)
+
+    def rescanned(self, findings: list[dict[str, Any]] | None, why: Stale | None) -> None:
+        """An object read for `why` (a rescan): its findings say so (`rescanReason`, 1.10),
+        and it is counted. A read for a change at the source is not a rescan."""
+        if why is None:
+            return
+        self.rescans.read(why)
+        for f in findings or []:
+            f.update(why.fields())
+
+    def needs_enumeration(self, *, indexed: bool) -> bool:
+        """A delta feed lists only what changed, so a stale row never shows up in it: a pass
+        over every item is needed when the index has stale rows, or when items were read
+        before the index knew them (`indexed` False)."""
+        if self.index is None or self.rescans.cap_items == 0:
+            return False
+        return not indexed or self.stale_rows() > 0
+
+    def stale_rows(self) -> int:
+        """Rows whose vector is stale: the rescan backlog the index knows of."""
+        if self.index is None:
+            return 0
+        m = self.manifest
+        return sum(
+            n
+            for prof, fl, n in self.index.profile_counts()
+            if not fl & UNREADABLE and stale(prof, fl, m, columnar=self.columnar) is not None
+        )
+
+    def settle(self, cov: Any) -> None:
+        """What the run rescanned, by reason, and the backlog left (1.10), into coverage."""
+        if self.index is None:
+            return
+        cov.indexed = self.index.rows
+        for reason, n in self.rescans.done.items():
+            cov.rescanned[reason] = cov.rescanned.get(reason, 0) + n
+        # Rows still stale, and candidates with no row met and not read.
+        cov.rescan_backlog += self.stale_rows() + self.rescans.left.get(UNINDEXED, 0)
 
     def __repr__(self) -> str:
         return f"ObjectPass({self.adapter!r})"
@@ -915,7 +1201,11 @@ class ObjectPass:
         readers: tuple[str, ...] = (),
         skip: str | None = None,
         text: bool = False,
+        unread: tuple[str, ...] = (),
+        flags: int = 0,
     ) -> None:
+        """One read: an object's (`got`), or what a group of reads met (`readers`, `unread`,
+        `flags`, such as an image layer's files)."""
         if self.index is None:
             return
         profile = profile_for(
@@ -924,15 +1214,26 @@ class ObjectPass:
             got,
             readers=readers,
             skip="unreadable" if unreadable else skip,
+            unread=unread,
         )
         self.index.put(
             key,
             profile=profile,
             marker=marker,
             fingerprint=fingerprint,
-            flags=flags_for(got, unreadable=unreadable, text=text),
+            flags=flags | flags_for(got, unreadable=unreadable, text=text),
             generation=self.generation,
         )
+
+    def carry(self, store: Any, location: str, pass_id: str) -> None:
+        """A pass that skips an unchanged, current location (a file whose blob is the same,
+        a layer already read) keeps its findings: they join this pass (`_pass`), so the end
+        of the pass does not drop them. A `location` ending in a line break is a prefix."""
+        prefix = location.endswith("\n")
+        for f in store.items.values():
+            at = str(f.get("_location", ""))
+            if at == location or (prefix and at.startswith(location)):
+                f["_pass"] = pass_id
 
     def seen(self, key: str) -> None:
         """A listed object this pass did not read (unchanged, sampled out): keep its row."""

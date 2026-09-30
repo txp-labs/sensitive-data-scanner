@@ -250,7 +250,12 @@ def _scan(
     sources = rotate(sources, saved.get("rotation"))
     backend = index_backend(state) if state is not None and settings.object_index else None
     indexes = (
-        Indexes(backend, index_salt(saved), max_rows=settings.index_max_objects)
+        Indexes(
+            backend,
+            index_salt(saved),
+            max_rows=settings.index_max_objects,
+            rescan_percent=settings.rescan_percent,
+        )
         if backend is not None
         else None
     )

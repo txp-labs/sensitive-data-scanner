@@ -279,6 +279,7 @@ class Settings:
     # #67: the per-object index beside the state (`OBJECT_INDEX`, on), and its cap per source.
     object_index: bool = True
     index_max_objects: int = 10_000_000
+    rescan_percent: int = 25  # the share of each source's budget rescans may use (0: none)
     max_throttle_wait: int = 120
     state_location: Secret | None = field(default=None, repr=False)
     https_url: Secret | None = field(default=None, repr=False)
@@ -698,6 +699,7 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         object_index=(e.get("OBJECT_INDEX") or "on").strip().lower()
         not in ("off", "false", "0", "no"),
         index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
+        rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
         max_throttle_wait=_int(e.get("MAX_THROTTLE_WAIT_SECONDS"), 120, 1, 3600),
         state_location=state,
         https_url=https_url,

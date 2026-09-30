@@ -38,7 +38,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, Link
-from sensitive_data_core.index import Indexes, ObjectPass, md5_fingerprint
+from sensitive_data_core.index import Indexes, ObjectPass, Stale, md5_fingerprint
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
@@ -229,12 +229,25 @@ class DriveSource:
         r = ItemReader(
             detector, self.ctx.settings, cov, now.isoformat(), dict(self.facts or {}), store, budget
         )
-        r.index = ObjectPass(self.indexes, self.id, self.kind)
-        st: dict[str, Any] = dict(cursor)
+        op = r.index = ObjectPass(
+            self.indexes, self.id, self.kind, columnar=r.columnar, budget=budget
+        )
+        st: dict[str, Any] = {k: v for k, v in cursor.items() if k not in ("indexed", "rescan")}
+        # The first pass lists every file; once one completes, every file has a row
+        # (`indexed`), and the changes feed brings only what changed.
+        indexed = bool(cursor.get("indexed"))
+        rescan = dict(cursor["rescan"]) if isinstance(cursor.get("rescan"), dict) else None
         note: str | None = None
         done = False
         try:
-            done = self._changes(st, r) if st.get("mode") == "changes" else self._list(st, r)
+            listing = st.get("mode") != "changes"
+            done = self._changes(st, r) if not listing else self._list(st, r)
+            indexed = indexed or (done and listing)
+            if done and (rescan is not None or op.needs_enumeration(indexed=indexed)):
+                # Then every file again, reading only the stale ones (#67), within the cap.
+                rescan = rescan or {}
+                if self._rescan(rescan, r):
+                    rescan, indexed = None, True
         except Exception as err:  # recorded by name on the source
             gap = gap_of(err)
             if self.drive is not None and error_name(err) == "NOT_FOUND":
@@ -246,7 +259,71 @@ class DriveSource:
         cov.pass_complete = done and cov.error is None
         if not done and cov.error is None:
             cov.backlog = True
+        if op.index is not None:
+            st["indexed"] = indexed
+            if rescan is not None:
+                st["rescan"] = rescan
+        op.settle(cov)
         return SourceRun(cov, st, note=note)
+
+    def _params(self) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "pageSize": "200",
+            "fields": f"nextPageToken,files({FILE_FIELDS})",
+            "q": "trashed=false" if self.drive is not None else "'me' in owners and trashed=false",
+            **self._scope(),
+        }
+        if self.drive is not None:
+            params["corpora"] = "drive"
+        return params
+
+    def _rescan(self, rs: dict[str, Any], r: ItemReader) -> bool:
+        """One listing of every file, reading the ones whose recorded components are stale;
+        resumable (`rs`). True when complete."""
+        token = rs.get("page")
+        skip = int(rs.get("skip") or 0)
+        for page, nxt, _ in self.api.pages(f"{DRIVE}/files", "files", self._params(), token=token):
+            for i, f in enumerate(page):
+                if i < skip:
+                    continue
+                if not (r.room() and self._candidate(f, r)):
+                    rs.clear()
+                    rs.update(page=token, skip=i)
+                    return False
+            skip = 0
+            token = nxt
+        return True
+
+    def _candidate(self, f: dict[str, Any], r: ItemReader) -> bool:
+        """One file of the enumeration: read when stale (or changed), else passed over. False
+        when a stale one did not fit the cap: the enumeration goes on there next run."""
+        fid = str(f.get("id") or "")
+        mime = str(f.get("mimeType") or "")
+        export = EXPORTS.get(mime)
+        size = int(f.get("size") or 0)
+        if not fid or mime in (FOLDER, SHORTCUT) or r.index is None:
+            return True
+        if (mime.startswith(GOOGLE_TYPE) and export is None) or (export is None and size == 0):
+            return True
+        if self.drive is None and f.get("ownedByMe") is False:
+            return True
+        if sample_point(fid) >= self.sample_percent:
+            return True
+        decision = r.index.decide(fid, changed=False, marker=file_marker(f))
+        if not (decision.read or decision.rescan):
+            return True
+        want = MAX_EXPORT_BYTES if export is not None else size
+        want = min(want, self.ctx.settings.max_object_bytes)
+        if decision.why is not None:
+            if not r.index.rescans.take(want, r.budget):
+                r.index.rescans.miss(decision.why)
+                return False
+        elif r.budget.has(want):
+            r.budget.take(want)
+        else:
+            return False
+        self._read_file(f, r, why=decision.why, charged=True)
+        return True
 
     def _room(self, r: ItemReader) -> bool:
         return self.read < self.ctx.settings.files_max and r.room()
@@ -256,14 +333,7 @@ class DriveSource:
             got = self.api.get(f"{DRIVE}/changes/startPageToken", self._scope() or None)
             st.clear()
             st.update(mode="list", start=str(got.get("startPageToken") or ""), page=None, skip=0)
-        params: dict[str, Any] = {
-            "pageSize": "200",
-            "fields": f"nextPageToken,files({FILE_FIELDS})",
-            "q": "trashed=false" if self.drive is not None else "'me' in owners and trashed=false",
-            **self._scope(),
-        }
-        if self.drive is not None:
-            params["corpora"] = "drive"
+        params = self._params()
         token = st.get("page")
         skip = int(st.get("skip") or 0)
         for page, nxt, _ in self.api.pages(f"{DRIVE}/files", "files", params, token=token):
@@ -332,7 +402,6 @@ class DriveSource:
         if mime == SHORTCUT:
             r.skip("linked_item")
             return
-        name = str(f.get("name") or "file")
         export = EXPORTS.get(mime)
         if mime.startswith(GOOGLE_TYPE) and export is None:
             r.skip("document")  # Forms, Drawings, Sites, Maps: no text export read
@@ -345,6 +414,16 @@ class DriveSource:
             r.cov.sampled_out += 1
             return
         self.read += 1
+        self._read_file(f, r)
+
+    def _read_file(
+        self, f: dict[str, Any], r: ItemReader, *, why: Stale | None = None, charged: bool = False
+    ) -> None:
+        """One file read (a change, or a rescan for `why`; `charged`: its budget is taken)."""
+        fid = str(f.get("id") or "")
+        name = str(f.get("name") or "file")
+        export = EXPORTS.get(str(f.get("mimeType") or ""))
+        size = int(f.get("size") or 0)
         link = drive_link(fid)
 
         def resource_for(column: str | None) -> dict[str, Any]:
@@ -366,7 +445,8 @@ class DriveSource:
                 mime_out, suffix = export
                 resp = self.api.call(f"{DRIVE}/files/{fid}/export", {"mimeType": mime_out, **scope})
                 data: bytes = resp.content[:MAX_EXPORT_BYTES]
-                r.budget.take(len(data))
+                if not charged:
+                    r.budget.take(len(data))
                 findings = r.file(
                     name + suffix,
                     len(data),
@@ -377,7 +457,8 @@ class DriveSource:
                     marker=file_marker(f),
                 )
             else:
-                r.budget.take(min(size, self.ctx.settings.max_object_bytes))
+                if not charged:
+                    r.budget.take(min(size, self.ctx.settings.max_object_bytes))
 
                 def fetch(start: int, end: int) -> bytes:
                     return self.api.download(
@@ -400,4 +481,6 @@ class DriveSource:
             r.cov.unreadable += 1
             log_event("item.unreadable", source=self.target, error=error_name(err))
             return
+        if r.index is not None:
+            r.index.rescanned(findings, why)
         r.store.replace_location(f"{self.id}\n{fid}", findings)
