@@ -29,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from .index import FileBackend, HttpsBackend, S3Backend
 from .push import SIGNATURE_HEADER, Revealable, sign
 from .safety import error_name
 
@@ -39,6 +40,14 @@ class StateStore(Protocol):
     def load(self) -> dict[str, Any] | None: ...
 
     def save(self, state: dict[str, Any]) -> None: ...
+
+
+def index_backend(store: StateStore) -> Any | None:
+    """Where the per-object index (#67, `index.py`) lives beside a state location: the same
+    place, with `.index/` after the state's own name (`/state/sds-state.json.index/`,
+    `s3://bucket/key.index/`, `https://.../state.index/`). None for a store that has none."""
+    make = getattr(store, "index_backend", None)
+    return make() if callable(make) else None
 
 
 def parse_state(raw: bytes, max_bytes: int) -> dict[str, Any] | None:
@@ -76,6 +85,9 @@ class FileState:
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_bytes(state_body(state))
         os.replace(tmp, self.path)
+
+    def index_backend(self) -> Any:
+        return FileBackend(str(self.path) + ".index")
 
 
 class S3State:
@@ -122,6 +134,9 @@ class S3State:
             Body=state_body(state),
             ContentType="application/json",
         )
+
+    def index_backend(self) -> Any:
+        return S3Backend(self.bucket, self.key + ".index/", client_factory=self._s3)
 
 
 class HttpsState:
@@ -172,6 +187,11 @@ class HttpsState:
         )
         with self._open(req, timeout=60):
             return
+
+    def index_backend(self) -> Any:
+        return HttpsBackend(
+            self._url, self._key, user_agent=self._agent, opener=self._open, clock=self._clock
+        )
 
 
 def valid_location(raw: str) -> str | None:

@@ -38,6 +38,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, Link
+from sensitive_data_core.index import Indexes, ObjectPass, md5_fingerprint
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
@@ -49,7 +50,7 @@ from .gws import VENDOR, GwsPerson, facts_of, fields_of, settings_of, tenant_of
 from .gws_gmail import gap_of, person_stores
 
 DRIVE = "https://www.googleapis.com/drive/v3"
-FILE_FIELDS = "id,name,mimeType,size,trashed,ownedByMe"
+FILE_FIELDS = "id,name,mimeType,size,trashed,ownedByMe,md5Checksum,version,modifiedTime"
 EXPORTS = {
     "application/vnd.google-apps.document": ("text/plain", ".txt"),
     "application/vnd.google-apps.spreadsheet": ("text/csv", ".csv"),
@@ -166,8 +167,16 @@ class SharedDriveAdapter:
         )
 
 
+def file_marker(f: dict[str, Any]) -> str:
+    """What changes when a Drive file changes: its version (bumped on every change), its
+    modified time and size."""
+    return f"{f.get('version') or ''}|{f.get('modifiedTime') or ''}|{f.get('size') or 0}"
+
+
 class DriveSource:
     """One drive: a person's My Drive, or a shared drive."""
+
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self,
@@ -220,6 +229,7 @@ class DriveSource:
         r = ItemReader(
             detector, self.ctx.settings, cov, now.isoformat(), dict(self.facts or {}), store, budget
         )
+        r.index = ObjectPass(self.indexes, self.id, self.kind)
         st: dict[str, Any] = dict(cursor)
         note: str | None = None
         done = False
@@ -292,6 +302,8 @@ class DriveSource:
                 f = c.get("file") if isinstance(c.get("file"), dict) else None
                 if c.get("removed") or f is None or f.get("trashed"):
                     r.store.remove_location(f"{self.id}\n{fid}")
+                    if r.index is not None:
+                        r.index.forget(fid)
                     continue
                 if self.drive is None and f.get("ownedByMe") is False:
                     continue  # another person's file: read in its owner's store
@@ -361,6 +373,8 @@ class DriveSource:
                     bytes_fetch(data),
                     resource_for=resource_for,
                     link=link,
+                    key=fid,
+                    marker=file_marker(f),
                 )
             else:
                 r.budget.take(min(size, self.ctx.settings.max_object_bytes))
@@ -370,8 +384,19 @@ class DriveSource:
                         f"{DRIVE}/files/{fid}", start, end, {"alt": "media", **scope}
                     )
 
-                findings = r.file(name, size, fetch, resource_for=resource_for, link=link)
+                findings = r.file(
+                    name,
+                    size,
+                    fetch,
+                    resource_for=resource_for,
+                    link=link,
+                    key=fid,
+                    marker=file_marker(f),
+                    fingerprint=md5_fingerprint(f.get("md5Checksum")),
+                )
         except Exception as err:  # one file must not stop the pass
+            if r.index is not None:
+                r.index.record(fid, marker=file_marker(f), unreadable=True)
             r.cov.unreadable += 1
             log_event("item.unreadable", source=self.target, error=error_name(err))
             return

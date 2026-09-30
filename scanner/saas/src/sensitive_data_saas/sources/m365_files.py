@@ -38,6 +38,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
@@ -46,7 +47,27 @@ from ..resources import saas_item, sharepoint_link
 from .base import Context, ItemReader, call_gap
 from .m365 import Person, facts_of, fields_of, people, settings_of, tenant_of
 
-ITEM_FIELDS = "id,name,size,file,folder,deleted,lastModifiedDateTime,sharepointIds"
+ITEM_FIELDS = "id,name,size,file,folder,deleted,lastModifiedDateTime,sharepointIds,cTag"
+
+
+def item_marker(item: dict[str, Any]) -> str:
+    """What changes when a drive item's content changes: its content tag (`cTag`), modified
+    time and size."""
+    return (
+        f"{item.get('cTag') or ''}|{item.get('lastModifiedDateTime') or ''}|{item.get('size') or 0}"
+    )
+
+
+def item_fingerprint(item: dict[str, Any]) -> str | None:
+    """The file's own hash from the listing: SHA-1 where Graph gives it, else QuickXorHash
+    (SharePoint and OneDrive for Business), each in its own namespace."""
+    f = item.get("file") if isinstance(item.get("file"), dict) else {}
+    hashes = (f or {}).get("hashes") if isinstance((f or {}).get("hashes"), dict) else {}
+    for name, prefix in (("sha1Hash", "sha1"), ("quickXorHash", "qxh")):
+        v = (hashes or {}).get(name)
+        if isinstance(v, str) and v.strip():
+            return f"{prefix}:{v.strip().lower()}"
+    return None
 
 
 @dataclass
@@ -194,6 +215,8 @@ class OneDriveAdapter:
 class DriveSource:
     """One drive: a site's document library, or a person's OneDrive (found when it runs)."""
 
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
+
     def __init__(
         self,
         ctx: Context,
@@ -239,6 +262,7 @@ class DriveSource:
         s = self.ctx.settings
         cov = Coverage(self.kind, self.target, sample_percent=self.sample_percent)
         r = ItemReader(detector, s, cov, now.isoformat(), dict(self.facts or {}), store, budget)
+        r.index = ObjectPass(self.indexes, self.id, self.kind)
         st: dict[str, Any] = dict(cursor)
         note: str | None = None
         done = False
@@ -294,6 +318,8 @@ class DriveSource:
         location = f"{self.id}\n{iid}"
         if item.get("deleted") is not None or "@removed" in item:
             r.store.remove_location(location)
+            if r.index is not None:
+                r.index.forget(iid)
             return 0
         if "file" not in item:
             return 0  # a folder, or the root
@@ -329,8 +355,19 @@ class DriveSource:
             )
 
         try:
-            findings = r.file(name, size, fetch, resource_for=resource_for, link=link)
+            findings = r.file(
+                name,
+                size,
+                fetch,
+                resource_for=resource_for,
+                link=link,
+                key=iid,
+                marker=item_marker(item),
+                fingerprint=item_fingerprint(item),
+            )
         except Exception as err:  # one file must not stop the pass
+            if r.index is not None:
+                r.index.record(iid, marker=item_marker(item), unreadable=True)
             r.cov.unreadable += 1
             log_event("item.unreadable", source=self.target, error=error_name(err))
             return 1

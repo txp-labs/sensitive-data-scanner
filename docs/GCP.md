@@ -425,6 +425,7 @@ masked.
 | `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's; Spanner too |
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
+| `OBJECT_INDEX`, `INDEX_MAX_OBJECTS` | on, 10,000,000 | The per-object index in the state bucket (`state/index/`, [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)): what each object was read with, as keyed hashes; and the most objects one source indexes ([ARCHITECTURE.md](ARCHITECTURE.md#the-object-index-and-component-versions)) |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on objects per run |
 | `STATE_BUCKET` | | The job's own bucket, `gs://<bucket>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |
 | `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters |

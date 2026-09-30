@@ -46,6 +46,9 @@ _HAS_CANDIDATE = re.compile(
 )
 MAX_LEAVES = 20_000
 MAX_DOC_CONTEXT = 2_000
+# The formats read as a conversation (prompt carryover, split turns, spoken digits): what a
+# change to the conversation spec can change (#67).
+CONVERSATION_FORMATS = frozenset({"connect_chat", "contact_lens", "lex_v2_log", "connect_flow_log"})
 
 
 def looks_binary(data: bytes) -> bool:

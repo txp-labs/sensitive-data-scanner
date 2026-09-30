@@ -42,6 +42,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass, md5_fingerprint
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
@@ -54,7 +55,8 @@ from .common import call_gap
 KIND = "gcs"
 ASSET_TYPE = "storage.googleapis.com/Bucket"
 LIST_FIELDS = (
-    "items(name,size,updated,generation,kmsKeyName,customerEncryption,storageClass),nextPageToken"
+    "items(name,size,updated,generation,kmsKeyName,customerEncryption,storageClass,md5Hash),"
+    "nextPageToken"
 )
 
 
@@ -133,10 +135,16 @@ def _time(v: Any) -> _dt.datetime | None:
         return None
 
 
+def gcs_marker(obj: dict[str, Any]) -> str:
+    """What changes when an object changes: its generation (a new one per write), and size."""
+    return f"{obj.get('generation') or ''}|{obj.get('size') or 0}|{obj.get('updated') or ''}"
+
+
 class GcsSource:
     """One bucket (or a prefix of it): its objects, listed in name order and read."""
 
     kind = KIND
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self,
@@ -167,6 +175,7 @@ class GcsSource:
         self.facts: dict[str, Any] | None = None  # the store's (runner)
         self.id = f"gcs:{target.bucket}/{prefix}"
         self.target = f"{target.bucket}/{prefix}"
+        self._op = ObjectPass(None, self.id, self.kind)
 
     def __repr__(self) -> str:
         return f"GcsSource({self.t!r})"
@@ -206,6 +215,8 @@ class GcsSource:
         done = False
         first_error: str | None = None
         note: str | None = None
+        generation = int(cursor.get("indexPass") or 0) + (0 if cursor.get("passStartedAt") else 1)
+        self._op = ObjectPass(self.indexes, self.id, self.kind, generation=generation)
         try:
             while budget.time_left():
                 items, next_token = self._page(token)
@@ -250,6 +261,7 @@ class GcsSource:
             log_event("source.failed", source=self.target, error=cov.error)
         if done and cov.error is None:
             cov.pass_complete = True
+            self._op.complete()
             new_cursor: dict[str, Any] = {"watermark": pass_started, "passStartedAt": None}
             cur_dir, cur_n = None, 0
         else:
@@ -264,6 +276,7 @@ class GcsSource:
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
+        new_cursor["indexPass"] = generation
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_error
         return SourceRun(cov, new_cursor, note=note)
@@ -285,6 +298,7 @@ class GcsSource:
         name = str(obj.get("name") or "")
         size = int(obj.get("size") or 0)
         cov.listed += 1
+        self._op.seen(name)
         updated = _time(obj.get("updated"))
         if since is not None and updated is not None and updated <= since:
             return cur_dir, cur_n, None
@@ -313,6 +327,7 @@ class GcsSource:
         try:
             self._read(obj, cov=cov, detector=detector, store=store, seen_at=seen_at)
         except Exception as err:  # one bad object must not stop the pass
+            self._op.record(name, marker=gcs_marker(obj), unreadable=True)
             cov.unreadable += 1
             e = error_name(err)
             log_event("item.unreadable", source=self.target, error=e)
@@ -351,6 +366,8 @@ class GcsSource:
             max_rows=self.max_rows,
             columnar=self.columnar,
         )
+        fingerprint = md5_fingerprint(obj.get("md5Hash"))
+        self._op.record(name, marker=gcs_marker(obj), fingerprint=fingerprint, got=got)
         facts = kms_facts(str(obj.get("kmsKeyName") or "") or None)
         where = self.t.where
         link = console_link(

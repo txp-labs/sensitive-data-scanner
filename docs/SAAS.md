@@ -493,6 +493,7 @@ by its id.
 | `LOOKBACK_DAYS` | 90 | How far back the first run reads mail and messages |
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES`, `COLUMNAR_MAX_ROWS` | 20 MiB, 100 MiB, 10000 | Per file or attachment |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
+| `OBJECT_INDEX`, `INDEX_MAX_OBJECTS` | on, 10,000,000 | With `STATE_LOCATION`: the per-object index beside it (`<location>.index/`; for HTTPS, `<URL>.index/<file>` with the same signed PUTs, and signed DELETEs) ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)): what each OneDrive, SharePoint and Drive file was read with, as keyed hashes; and the most files one source indexes ([ARCHITECTURE.md](ARCHITECTURE.md#the-object-index-and-component-versions)) |
 | `MAX_THROTTLE_WAIT_SECONDS` | 120 | The longest `Retry-After` waited for; a longer one stops that store until the next run (`throttled`) |
 | `STATE_LOCATION` | | Where cursors and carried findings are kept: an absolute path on a mounted volume, `s3://bucket/key`, or `https://…` (signed PUTs with the push key). Without it every run starts afresh |
 | `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push to Mermera's collector ([DATABASES.md](DATABASES.md#verifying-a-push)) |

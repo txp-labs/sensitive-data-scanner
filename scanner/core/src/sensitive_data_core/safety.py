@@ -60,6 +60,9 @@ EVENTS: Final = frozenset(
         "discovery.failed",
         "source.deferred",
         "source.refused",
+        # The object index (#67): written, or not (the next run then decides without it).
+        "index.saved",
+        "index.failed",
     }
 )
 

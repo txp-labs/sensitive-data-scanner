@@ -1,0 +1,951 @@
+"""The per-object index (#67): what each object was read with, so a run knows what to read.
+
+For every object a source reads, the index keeps one row in the scanner's own
+state location (the AWS results bucket, the Azure state container, the Google
+Cloud state bucket, or a container runner's `STATE_LOCATION`), one index per
+source:
+
+- **key**: HMAC-SHA256 of the object's key (its name, path or item id), 12 bytes;
+- **marker**: HMAC of the source's change marker (ETag, version, generation, mtime,
+  content tag), 8 bytes;
+- **fingerprint**: HMAC of the content fingerprint (an MD5 or SHA-1 the listing gives,
+  or one of the bytes read), 12 bytes;
+- **profile**: what the read met (the detected type, the readers used, the kinds no
+  reader read, the skip reason) and the **component-version vector** it was read with
+  (`components.json`);
+- **flags**: disguised, conversation, text-bearing, duplicate, unreadable;
+- **duplicate of**: the key hash of the object whose bytes this one repeats;
+- **generation**: the listing pass that last saw it, so objects gone are swept.
+
+**Never a value.** Keys, markers and fingerprints are HMACs under a random salt
+(`index_salt`) kept in the runner's state document, never in the index file, the
+same rule as the DynamoDB source's item keys: a short number in a name is quickly
+guessed from a plain hash, not from a keyed one. The profile holds names of kinds,
+readers and versions only. The no-leak suite plants values in keys and names and
+looks for them in the index's bytes.
+
+**Format.** SQLite (the standard library's), held in memory and stored gzipped,
+one file per shard: `<source>/<shard>.db.gz` beside `<source>/meta.json`. A
+source's index starts as one shard and splits by the key hash's first byte when
+it passes `SHARD_ROWS` rows per shard, up to `MAX_SHARDS`; a run loads only the
+shards it touches and writes only the ones it changed. About 35 bytes a row
+gzipped, **about 35 MB per million objects** (docs/ARCHITECTURE.md; measured by
+`tests/test_index.py`). A source
+indexes at most `max_rows` objects (`INDEX_MAX_OBJECTS`); past that, objects are
+read as before, by their change at the source only.
+
+An index that cannot be read, was written under another salt, or is of another
+format version is no index: the run starts a fresh one. Saving is best effort:
+a failed save costs the next run its rescan decisions, never findings.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import gzip
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import sqlite3
+import time
+import urllib.request
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
+from functools import cache
+from importlib import resources
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
+
+from .push import SIGNATURE_HEADER, Revealable, sign
+from .safety import error_name, log_event
+
+if TYPE_CHECKING:
+    from .scan.objects import ObjectResult
+
+FORMAT_VERSION = 1
+SHARD_ROWS = 250_000
+MAX_SHARDS = 256
+DEFAULT_MAX_ROWS = 10_000_000
+KEY_BYTES = 12
+MARKER_BYTES = 8
+FINGERPRINT_BYTES = 12
+
+# Row flags.
+DISGUISED = 1
+CONVERSATION = 2
+TEXT = 4
+DUPLICATE = 8
+UNREADABLE = 16
+
+_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY, body TEXT NOT NULL UNIQUE)",
+    "CREATE TABLE IF NOT EXISTS objects(k BLOB PRIMARY KEY, m BLOB, f BLOB,"
+    " p INTEGER NOT NULL, fl INTEGER NOT NULL DEFAULT 0, d BLOB,"
+    " g INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID",
+)
+# Built in memory when a run first looks up a fingerprint, and never stored: it would add
+# about a third to the file.
+_BY_FINGERPRINT = "CREATE INDEX IF NOT EXISTS objects_f ON objects(f) WHERE f IS NOT NULL"
+
+
+# ------------------------------------------------------------------ the component manifest
+
+
+@dataclass(frozen=True)
+class Manifest:
+    """The component versions this build was made from (`components.json`,
+    scripts/components.py): what each object's vector is compared with."""
+
+    components: Mapping[str, str]
+    reader_kinds: Mapping[str, tuple[str, ...]]
+
+    @classmethod
+    def load(cls) -> Manifest:
+        return _manifest()
+
+    @classmethod
+    def parse(cls, doc: Mapping[str, Any]) -> Manifest:
+        kinds = doc.get("readerKinds") or {}
+        return cls(
+            dict(doc.get("components") or {}),
+            {str(k): tuple(v) for k, v in kinds.items()},
+        )
+
+    def version(self, name: str) -> str | None:
+        return self.components.get(name)
+
+    def adapter(self, kind: str) -> str | None:
+        return self.components.get(f"adapter:{kind}")
+
+    def reader(self, name: str) -> str | None:
+        return self.components.get(f"reader:{name}")
+
+    @property
+    def classes(self) -> dict[str, str]:
+        """`spec-standalone/<class>`: each class's own rules' version."""
+        prefix = "spec-standalone/"
+        return {k[len(prefix) :]: v for k, v in self.components.items() if k.startswith(prefix)}
+
+    def readers_for(self, kind: str) -> tuple[str, ...]:
+        """The readers that read objects of a kind (`pdf` reads `pdf`)."""
+        return tuple(sorted(r for r, kinds in self.reader_kinds.items() if kind in kinds))
+
+    @property
+    def digest(self) -> str:
+        body = json.dumps(dict(sorted(self.components.items())), separators=(",", ":"))
+        return hashlib.sha256(body.encode()).hexdigest()[:12]
+
+
+@cache
+def _manifest() -> Manifest:
+    raw = resources.files("sensitive_data_core").joinpath("components.json").read_text("utf-8")
+    return Manifest.parse(json.loads(raw))
+
+
+# ------------------------------------------------------------------ what an object was read with
+
+
+@dataclass(frozen=True)
+class Profile:
+    """What one read met, and the component versions it was read with (the vector).
+
+    Many objects share a profile (every PDF read by this build, every image counted), so a
+    shard stores each once. Kinds, reader names, skip reasons and versions only."""
+
+    adapter: str
+    adapter_v: str | None = None
+    detected: str | None = None
+    readers: tuple[tuple[str, str | None], ...] = ()
+    unread: tuple[str, ...] = ()
+    skip: str | None = None
+    sniffer_v: str | None = None
+    standalone_v: str | None = None
+    classes: tuple[tuple[str, str], ...] = ()
+    conversation_v: str | None = None
+
+    def body(self) -> str:
+        out: dict[str, Any] = {"a": self.adapter, "av": self.adapter_v}
+        if self.detected is not None:
+            out["t"] = self.detected
+        if self.readers:
+            out["r"] = dict(self.readers)
+        if self.unread:
+            out["u"] = list(self.unread)
+        if self.skip is not None:
+            out["s"] = self.skip
+        out |= {
+            "sn": self.sniffer_v,
+            "ss": self.standalone_v,
+            "sc": dict(self.classes),
+            "cv": self.conversation_v,
+        }
+        return json.dumps(out, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def parse(cls, body: str) -> Profile:
+        d = json.loads(body)
+        return cls(
+            adapter=str(d.get("a") or ""),
+            adapter_v=d.get("av"),
+            detected=d.get("t"),
+            readers=tuple(sorted((str(k), v) for k, v in (d.get("r") or {}).items())),
+            unread=tuple(sorted(str(u) for u in d.get("u") or [])),
+            skip=d.get("s"),
+            sniffer_v=d.get("sn"),
+            standalone_v=d.get("ss"),
+            classes=tuple(sorted((str(k), str(v)) for k, v in (d.get("sc") or {}).items())),
+            conversation_v=d.get("cv"),
+        )
+
+    def reader_names(self) -> frozenset[str]:
+        return frozenset(r for r, _ in self.readers)
+
+
+def profile_for(
+    manifest: Manifest,
+    adapter: str,
+    got: ObjectResult | None = None,
+    *,
+    readers: tuple[str, ...] = (),
+    detected: str | None = None,
+    skip: str | None = None,
+) -> Profile:
+    """The profile of one read: an object's (`got`), or a table's or item's (`readers`)."""
+    names = set(readers)
+    unread: frozenset[str] = frozenset()
+    if got is not None:
+        names |= got.readers
+        unread = got.unread
+        detected = detected or got.detected
+        skip = skip or got.skipped
+    return Profile(
+        adapter=adapter,
+        adapter_v=manifest.adapter(adapter),
+        detected=detected,
+        readers=tuple(sorted((r, manifest.reader(r)) for r in names)),
+        unread=tuple(sorted(unread)),
+        skip=skip,
+        sniffer_v=manifest.version("sniffer"),
+        standalone_v=manifest.version("spec-standalone"),
+        classes=tuple(sorted(manifest.classes.items())),
+        conversation_v=manifest.version("spec-conversation"),
+    )
+
+
+def flags_for(got: ObjectResult | None, *, unreadable: bool = False, text: bool = False) -> int:
+    fl = UNREADABLE if unreadable else 0
+    if text:
+        fl |= TEXT
+    if got is not None:
+        if got.disguised:
+            fl |= DISGUISED
+        if got.conversation:
+            fl |= CONVERSATION
+        if got.text_bearing:
+            fl |= TEXT
+    return fl
+
+
+# ------------------------------------------------------------------ keyed hashes
+
+
+def md5_fingerprint(raw: Any) -> str | None:
+    """A listing's MD5 of an object's bytes as a fingerprint (`md5:<hex>`): raw bytes (Azure's
+    `content_md5`), base64 (Cloud Storage's `md5Hash`) or hex (an ETag, Drive's
+    `md5Checksum`). Anything else is no fingerprint."""
+    if raw is None:
+        return None
+    if isinstance(raw, bytes | bytearray):
+        return f"md5:{bytes(raw).hex()}" if len(raw) == 16 else None
+    text = str(raw).strip().strip('"').lower()
+    if len(text) == 32 and all(c in "0123456789abcdef" for c in text):
+        return f"md5:{text}"
+    try:
+        data = base64.b64decode(str(raw).strip(), validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    return f"md5:{data.hex()}" if len(data) == 16 else None
+
+
+def index_salt(state: Mapping[str, Any]) -> str:
+    """The salt the index's HMACs are keyed with: the one in the runner's state document, or
+    a new one (the runner writes it back with its state)."""
+    salt = state.get("indexSalt")
+    if isinstance(salt, str) and len(salt) >= 32:
+        return salt
+    return secrets.token_hex(16)
+
+
+class Hasher:
+    """HMAC-SHA256 under the index salt, one domain per field: a key's, a marker's and a
+    fingerprint's hashes never compare equal to each other."""
+
+    def __init__(self, salt: str) -> None:
+        self._salt = salt.encode()
+
+    def __repr__(self) -> str:
+        return "Hasher(***)"
+
+    def _mac(self, domain: bytes, text: str) -> bytes:
+        data = domain + b"\0" + text.encode("utf-8", "surrogatepass")
+        return hmac.new(self._salt, data, hashlib.sha256).digest()
+
+    def key(self, text: str) -> bytes:
+        return self._mac(b"key", text)[:KEY_BYTES]
+
+    def marker(self, text: str) -> bytes:
+        return self._mac(b"marker", text)[:MARKER_BYTES]
+
+    def fingerprint(self, text: str) -> bytes:
+        return self._mac(b"fingerprint", text)[:FINGERPRINT_BYTES]
+
+    def name(self, text: str) -> str:
+        return self._mac(b"source", text)[:12].hex()
+
+    @property
+    def check(self) -> str:
+        """Says which salt an index was written under, and nothing about it."""
+        return self._mac(b"check", "index")[:8].hex()
+
+
+# ------------------------------------------------------------------ where the index lives
+
+
+class IndexBackend(Protocol):
+    """Bytes by name, in the scanner's own state location."""
+
+    def get_bytes(self, name: str) -> bytes | None: ...
+
+    def put_bytes(self, name: str, data: bytes) -> None: ...
+
+    def delete(self, name: str) -> None: ...
+
+
+class MemoryBackend:
+    """In memory (tests, and a run with nowhere to keep state)."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+
+    def __repr__(self) -> str:
+        return f"MemoryBackend({len(self.files)})"
+
+    def get_bytes(self, name: str) -> bytes | None:
+        return self.files.get(name)
+
+    def put_bytes(self, name: str, data: bytes) -> None:
+        self.files[name] = bytes(data)
+
+    def delete(self, name: str) -> None:
+        self.files.pop(name, None)
+
+
+def _safe(name: str) -> str:
+    parts = [p for p in name.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise ValueError("index file name")
+    return "/".join(parts)
+
+
+class FileBackend:
+    """A directory on a mounted volume; each file replaced atomically."""
+
+    def __init__(self, directory: str) -> None:
+        self.dir = Path(directory)
+
+    def __repr__(self) -> str:
+        return "FileBackend()"
+
+    def get_bytes(self, name: str) -> bytes | None:
+        try:
+            return (self.dir / _safe(name)).read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def put_bytes(self, name: str, data: bytes) -> None:
+        path = self.dir / _safe(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+    def delete(self, name: str) -> None:
+        (self.dir / _safe(name)).unlink(missing_ok=True)
+
+
+class S3Backend:
+    """Objects under a prefix of a bucket, through a client the platform's package makes."""
+
+    def __init__(
+        self,
+        bucket: str,
+        prefix: str,
+        client: Any | None = None,
+        *,
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self.bucket = bucket
+        self.prefix = prefix
+        self._client = client
+        self._factory = client_factory
+
+    def __repr__(self) -> str:
+        return "S3Backend()"
+
+    def _s3(self) -> Any:
+        if self._client is None:
+            if self._factory is None:
+                raise RuntimeError("no s3 client")
+            self._client = self._factory()
+        return self._client
+
+    def get_bytes(self, name: str) -> bytes | None:
+        try:
+            body = self._s3().get_object(Bucket=self.bucket, Key=self.prefix + _safe(name))
+        except Exception as err:
+            if error_name(err) in ("NoSuchKey", "404", "NotFound"):
+                return None
+            raise
+        data: bytes = body["Body"].read()
+        return data
+
+    def put_bytes(self, name: str, data: bytes) -> None:
+        self._s3().put_object(Bucket=self.bucket, Key=self.prefix + _safe(name), Body=data)
+
+    def delete(self, name: str) -> None:
+        self._s3().delete_object(Bucket=self.bucket, Key=self.prefix + _safe(name))
+
+
+class HttpsBackend:
+    """URLs under the state URL the customer serves (`<state URL>.index/<name>`): GET to
+    read, a signed PUT to write and a signed DELETE to remove, like the state itself."""
+
+    def __init__(
+        self,
+        base: Revealable,
+        key: Revealable,
+        *,
+        user_agent: str = "sensitive-data-scanner",
+        opener: Callable[..., Any] = urllib.request.urlopen,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._base = base
+        self._key = key
+        self._agent = user_agent
+        self._open = opener
+        self._clock = clock
+
+    def __repr__(self) -> str:
+        return "HttpsBackend(***)"
+
+    def _url(self, name: str) -> str:
+        return self._base.reveal() + ".index/" + _safe(name)
+
+    def _signed(self, method: str, name: str, body: bytes = b"") -> Any:
+        ts = str(int(self._clock()))
+        return urllib.request.Request(  # noqa: S310 - https only (each runner's settings)
+            self._url(name),
+            data=body if method == "PUT" else None,
+            method=method,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "User-Agent": self._agent,
+                SIGNATURE_HEADER: sign(self._key.reveal().encode(), ts, body),
+            },
+        )
+
+    def get_bytes(self, name: str) -> bytes | None:
+        req = urllib.request.Request(self._url(name), method="GET")  # noqa: S310 - https only
+        try:
+            with self._open(req, timeout=60) as resp:
+                data: bytes = resp.read()
+                return data
+        except Exception as err:
+            if getattr(err, "code", None) == 404:
+                return None
+            raise
+
+    def put_bytes(self, name: str, data: bytes) -> None:
+        with self._open(self._signed("PUT", name, data), timeout=60):
+            return
+
+    def delete(self, name: str) -> None:
+        try:
+            with self._open(self._signed("DELETE", name), timeout=60):
+                return
+        except Exception as err:
+            if getattr(err, "code", None) != 404:
+                raise
+
+
+class PrefixBackend:
+    """Another backend's names under a prefix (`state/index/` in a results bucket)."""
+
+    def __init__(self, inner: Any, prefix: str) -> None:
+        self.inner = inner
+        self.prefix = prefix
+
+    def __repr__(self) -> str:
+        return f"PrefixBackend({self.inner!r})"
+
+    def get_bytes(self, name: str) -> bytes | None:
+        data: bytes | None = self.inner.get_bytes(self.prefix + _safe(name))
+        return data
+
+    def put_bytes(self, name: str, data: bytes) -> None:
+        self.inner.put_bytes(self.prefix + _safe(name), data)
+
+    def delete(self, name: str) -> None:
+        self.inner.delete(self.prefix + _safe(name))
+
+
+# ------------------------------------------------------------------ one source's index
+
+
+@dataclass(frozen=True)
+class Row:
+    """One object's row. Hashes, a profile and flags: nothing that could be a value."""
+
+    key: bytes
+    marker: bytes | None
+    fingerprint: bytes | None
+    profile: Profile
+    flags: int = 0
+    duplicate_of: bytes | None = None
+    generation: int = 0
+
+    def __repr__(self) -> str:
+        return f"Row(flags={self.flags}, generation={self.generation})"
+
+
+@dataclass
+class _Shard:
+    conn: sqlite3.Connection
+    profiles: dict[str, int] = field(default_factory=dict)
+    by_id: dict[int, Profile] = field(default_factory=dict)
+    dirty: bool = False
+
+
+class ObjectIndex:
+    """One source's index: rows by key hash, in shards loaded as they are touched."""
+
+    def __init__(
+        self,
+        backend: IndexBackend,
+        name: str,
+        hasher: Hasher,
+        *,
+        max_rows: int = DEFAULT_MAX_ROWS,
+        shard_rows: int = SHARD_ROWS,
+    ) -> None:
+        self.backend = backend
+        self.name = name
+        self.hasher = hasher
+        self.max_rows = max_rows
+        self.shard_rows = shard_rows
+        self._shards: dict[int, _Shard] = {}
+        self._meta: dict[str, Any] | None = None
+        self.full = 0  # objects not indexed because the index was full
+        self.fresh = False  # no usable index was found: every row is new this run
+
+    def __repr__(self) -> str:
+        return f"ObjectIndex(rows={self.rows})"
+
+    # --- layout
+
+    def _load_meta(self) -> dict[str, Any]:
+        if self._meta is None:
+            meta: dict[str, Any] | None = None
+            try:
+                raw = self.backend.get_bytes(f"{self.name}/meta.json")
+                meta = json.loads(raw) if raw else None
+            except Exception as err:  # unreadable: a fresh index
+                log_event("index.failed", error=error_name(err))
+            ok = (
+                isinstance(meta, dict)
+                and meta.get("version") == FORMAT_VERSION
+                and meta.get("check") == self.hasher.check
+                and isinstance(meta.get("shards"), int)
+                and 1 <= meta["shards"] <= MAX_SHARDS
+            )
+            if ok and meta is not None:
+                self._meta = {
+                    "shards": int(meta["shards"]),
+                    "rows": int(meta.get("rows") or 0),
+                    "stored": int(meta["shards"]),
+                }
+            else:
+                self.fresh = True
+                old = int(meta.get("shards") or 0) if isinstance(meta, dict) else 0
+                stored = old if isinstance(old, int) and 0 < old <= MAX_SHARDS else 0
+                self._meta = {"shards": 1, "rows": 0, "stored": stored, "reset": True}
+        return self._meta
+
+    @property
+    def shards(self) -> int:
+        return int(self._load_meta()["shards"])
+
+    @property
+    def rows(self) -> int:
+        return int(self._load_meta()["rows"])
+
+    def _file(self, i: int) -> str:
+        return f"{self.name}/{i:03d}.db.gz"
+
+    def _shard_of(self, k: bytes) -> int:
+        return k[0] % self.shards
+
+    def _shard(self, i: int) -> _Shard:
+        got = self._shards.get(i)
+        if got is not None:
+            return got
+        conn = sqlite3.connect(":memory:")
+        meta = self._load_meta()
+        if not meta.get("reset"):
+            try:
+                data = self.backend.get_bytes(self._file(i))
+                if data:
+                    conn.deserialize(gzip.decompress(data))
+            except Exception as err:  # a damaged shard: its rows are gone, the rest stand
+                log_event("index.failed", error=error_name(err))
+                conn.close()
+                conn = sqlite3.connect(":memory:")
+        for stmt in _SCHEMA:
+            conn.execute(stmt)
+        shard = _Shard(conn)
+        for pid, body in conn.execute("SELECT id, body FROM profiles"):
+            shard.profiles[body] = pid
+            shard.by_id[pid] = Profile.parse(body)
+        self._shards[i] = shard
+        return shard
+
+    def _all(self) -> Iterator[_Shard]:
+        for i in range(self.shards):
+            yield self._shard(i)
+
+    def _profile_id(self, shard: _Shard, profile: Profile) -> int:
+        body = profile.body()
+        pid = shard.profiles.get(body)
+        if pid is None:
+            cur = shard.conn.execute("INSERT INTO profiles(body) VALUES (?)", (body,))
+            pid = int(cur.lastrowid or 0)
+            shard.profiles[body] = pid
+            shard.by_id[pid] = profile
+        return pid
+
+    def _row(self, shard: _Shard, r: tuple[Any, ...]) -> Row:
+        k, m, f, p, fl, d, g = r
+        return Row(k, m, f, shard.by_id[p], fl, d, g)
+
+    # --- rows
+
+    def get(self, key: str) -> Row | None:
+        return self.get_hashed(self.hasher.key(key))
+
+    def get_hashed(self, k: bytes) -> Row | None:
+        shard = self._shard(self._shard_of(k))
+        r = shard.conn.execute(
+            "SELECT k, m, f, p, fl, d, g FROM objects WHERE k = ?", (k,)
+        ).fetchone()
+        return self._row(shard, r) if r else None
+
+    def put(
+        self,
+        key: str,
+        *,
+        profile: Profile,
+        marker: str | None = None,
+        fingerprint: str | None = None,
+        flags: int = 0,
+        duplicate_of: bytes | None = None,
+        generation: int = 0,
+    ) -> bool:
+        """Write one object's row; False when the index is full and the object is new."""
+        k = self.hasher.key(key)
+        shard = self._shard(self._shard_of(k))
+        exists = shard.conn.execute("SELECT 1 FROM objects WHERE k = ?", (k,)).fetchone()
+        if not exists and self.rows >= self.max_rows:
+            self.full += 1
+            return False
+        shard.conn.execute(
+            "INSERT OR REPLACE INTO objects(k, m, f, p, fl, d, g) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                k,
+                self.hasher.marker(marker) if marker is not None else None,
+                self.hasher.fingerprint(fingerprint) if fingerprint is not None else None,
+                self._profile_id(shard, profile),
+                flags,
+                duplicate_of,
+                generation,
+            ),
+        )
+        shard.dirty = True
+        if not exists:
+            self._load_meta()["rows"] += 1
+        return True
+
+    def touch(self, key: str, generation: int) -> None:
+        """The listing saw the object in pass `generation` (so a sweep keeps its row)."""
+        k = self.hasher.key(key)
+        shard = self._shard(self._shard_of(k))
+        cur = shard.conn.execute(
+            "UPDATE objects SET g = ? WHERE k = ? AND g < ?", (generation, k, generation)
+        )
+        if cur.rowcount:
+            shard.dirty = True
+
+    def delete(self, key: str) -> None:
+        k = self.hasher.key(key)
+        shard = self._shard(self._shard_of(k))
+        cur = shard.conn.execute("DELETE FROM objects WHERE k = ?", (k,))
+        if cur.rowcount:
+            shard.dirty = True
+            self._load_meta()["rows"] -= cur.rowcount
+
+    def sweep(self, generation: int) -> int:
+        """Drop the rows a complete pass (`generation`) did not see: objects gone."""
+        gone = 0
+        for shard in self._all():
+            cur = shard.conn.execute("DELETE FROM objects WHERE g < ?", (generation,))
+            if cur.rowcount:
+                shard.dirty = True
+                gone += cur.rowcount
+        self._load_meta()["rows"] -= gone
+        return gone
+
+    def by_fingerprint(self, fingerprint: str, *, exclude: str | None = None) -> Row | None:
+        """A row whose content fingerprint is this one (another object with the same bytes)."""
+        f = self.hasher.fingerprint(fingerprint)
+        skip = self.hasher.key(exclude) if exclude is not None else None
+        for shard in self._all():
+            shard.conn.execute(_BY_FINGERPRINT)
+            for r in shard.conn.execute(
+                "SELECT k, m, f, p, fl, d, g FROM objects WHERE f = ? ORDER BY k", (f,)
+            ):
+                if r[0] != skip and not r[4] & (DUPLICATE | UNREADABLE):
+                    return self._row(shard, r)
+        return None
+
+    def profile_counts(self) -> list[tuple[Profile, int]]:
+        """Every profile in the index and how many rows have it (the rescan backlog's basis)."""
+        out: dict[str, tuple[Profile, int]] = {}
+        for shard in self._all():
+            for p, n in shard.conn.execute("SELECT p, count(*) FROM objects GROUP BY p"):
+                prof = shard.by_id[p]
+                body = prof.body()
+                have = out.get(body)
+                out[body] = (prof, (have[1] if have else 0) + int(n))
+        return list(out.values())
+
+    # --- saving
+
+    def dirty(self) -> bool:
+        meta = self._load_meta()
+        return any(s.dirty for s in self._shards.values()) or bool(meta.get("reset"))
+
+    def _reshard(self) -> None:
+        """Split into more shards when the rows outgrow them (never fewer)."""
+        want = self.shards
+        while want < MAX_SHARDS and self.rows > want * self.shard_rows:
+            want *= 2
+        if want == self.shards:
+            return
+        old = list(self._all())
+        self._shards = {}
+        self._load_meta()["shards"] = want
+        new = [self._new_shard(i) for i in range(want)]
+        for shard in old:
+            bodies = {pid: prof for pid, prof in shard.by_id.items()}
+            for r in shard.conn.execute("SELECT k, m, f, p, fl, d, g FROM objects"):
+                target = new[r[0][0] % want]
+                pid = self._profile_id(target, bodies[r[3]])
+                target.conn.execute(
+                    "INSERT OR REPLACE INTO objects(k, m, f, p, fl, d, g)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (r[0], r[1], r[2], pid, r[4], r[5], r[6]),
+                )
+            shard.conn.close()
+        for i, shard in enumerate(new):
+            shard.dirty = True
+            self._shards[i] = shard
+
+    def _new_shard(self, i: int) -> _Shard:
+        conn = sqlite3.connect(":memory:")
+        for stmt in _SCHEMA:
+            conn.execute(stmt)
+        return _Shard(conn)
+
+    def save(self) -> int:
+        """Write the shards this run changed, then the meta. Returns the bytes written."""
+        if not self.dirty():
+            return 0
+        self._reshard()
+        meta = self._load_meta()
+        written = 0
+        for i, shard in sorted(self._shards.items()):
+            if not (shard.dirty or meta.get("reset")):
+                continue
+            shard.conn.execute("DROP INDEX IF EXISTS objects_f")
+            shard.conn.commit()
+            shard.conn.execute("VACUUM")
+            data = gzip.compress(shard.conn.serialize(), compresslevel=6, mtime=0)
+            self.backend.put_bytes(self._file(i), data)
+            written += len(data)
+            shard.dirty = False
+        if meta.get("reset"):
+            # Shards a reset index no longer has (written under another salt) are removed.
+            for i in range(meta["shards"], int(meta.get("stored") or 0)):
+                self.backend.delete(self._file(i))
+            for i in range(meta["shards"]):
+                if i not in self._shards:
+                    self._shards[i] = self._new_shard(i)
+                    data = gzip.compress(self._shards[i].conn.serialize(), mtime=0)
+                    self.backend.put_bytes(self._file(i), data)
+                    written += len(data)
+        body = {
+            "version": FORMAT_VERSION,
+            "check": self.hasher.check,
+            "shards": meta["shards"],
+            "rows": meta["rows"],
+        }
+        self.backend.put_bytes(f"{self.name}/meta.json", json.dumps(body).encode())
+        meta.pop("reset", None)
+        meta["stored"] = meta["shards"]
+        return written
+
+    def close(self) -> None:
+        for shard in self._shards.values():
+            shard.conn.close()
+        self._shards = {}
+
+
+# ------------------------------------------------------------------ one run's indexes
+
+
+class Indexes:
+    """The indexes of one run: one per source, opened when a source first asks."""
+
+    def __init__(
+        self,
+        backend: IndexBackend,
+        salt: str,
+        *,
+        manifest: Manifest | None = None,
+        max_rows: int = DEFAULT_MAX_ROWS,
+        shard_rows: int = SHARD_ROWS,
+    ) -> None:
+        self.backend = backend
+        self.salt = salt
+        self.hasher = Hasher(salt)
+        self.manifest = manifest or Manifest.load()
+        self.max_rows = max_rows
+        self.shard_rows = shard_rows
+        self._open: dict[str, ObjectIndex] = {}
+
+    def __repr__(self) -> str:
+        return f"Indexes({len(self._open)})"
+
+    def open(self, source_id: str) -> ObjectIndex:
+        got = self._open.get(source_id)
+        if got is None:
+            got = ObjectIndex(
+                self.backend,
+                "src-" + self.hasher.name(source_id),
+                self.hasher,
+                max_rows=self.max_rows,
+                shard_rows=self.shard_rows,
+            )
+            self._open[source_id] = got
+        return got
+
+    def save(self) -> int:
+        """Write every index this run changed; a failure is logged, never raised (the next
+        run then decides from what was saved before). Returns how many failed."""
+        failed = 0
+        for index in self._open.values():
+            try:
+                written = index.save()
+                if written:
+                    log_event("index.saved", rows=index.rows, bytes=written)
+            except Exception as err:
+                failed += 1
+                log_event("index.failed", error=error_name(err))
+            finally:
+                index.close()
+        self._open = {}
+        return failed
+
+
+class ObjectPass:
+    """One source's pass as the index sees it: each object read (or found unreadable) is
+    recorded with its marker, fingerprint and profile. With no index (`indexes` None, no
+    state location) it records nothing."""
+
+    def __init__(
+        self,
+        indexes: Indexes | None,
+        source_id: str,
+        adapter: str,
+        *,
+        generation: int = 0,
+    ) -> None:
+        self.indexes = indexes
+        self.adapter = adapter
+        self.generation = generation
+        self.index = indexes.open(source_id) if indexes is not None else None
+
+    def __repr__(self) -> str:
+        return f"ObjectPass({self.adapter!r})"
+
+    @property
+    def manifest(self) -> Manifest:
+        return self.indexes.manifest if self.indexes is not None else Manifest.load()
+
+    def record(
+        self,
+        key: str,
+        *,
+        marker: str | None = None,
+        fingerprint: str | None = None,
+        got: ObjectResult | None = None,
+        unreadable: bool = False,
+        readers: tuple[str, ...] = (),
+        skip: str | None = None,
+        text: bool = False,
+    ) -> None:
+        if self.index is None:
+            return
+        profile = profile_for(
+            self.manifest,
+            self.adapter,
+            got,
+            readers=readers,
+            skip="unreadable" if unreadable else skip,
+        )
+        self.index.put(
+            key,
+            profile=profile,
+            marker=marker,
+            fingerprint=fingerprint,
+            flags=flags_for(got, unreadable=unreadable, text=text),
+            generation=self.generation,
+        )
+
+    def seen(self, key: str) -> None:
+        """A listed object this pass did not read (unchanged, sampled out): keep its row."""
+        if self.index is not None and self.generation:
+            self.index.touch(key, self.generation)
+
+    def forget(self, key: str) -> None:
+        """An object the source says is gone (a delta feed's deletion)."""
+        if self.index is not None:
+            self.index.delete(key)
+
+    def complete(self) -> int:
+        """A listing pass saw every object: rows it did not see are gone. Returns how many."""
+        if self.index is None or not self.generation:
+            return 0
+        return self.index.sweep(self.generation)

@@ -509,6 +509,10 @@ class Config:
     # (`vendor`), or both, linked. `MACIE_LOOKBACK_DAYS`: how far back the first import goes.
     scan_mode: str = SCANNER
     macie_lookback_days: int = 90
+    # #67: the per-object index in the results bucket (`state/index/`), and its cap per
+    # source (objects past it are read by their change at the source only).
+    object_index: bool = True
+    index_max_objects: int = 10_000_000
 
     @property
     def exports_prefix(self) -> str:
@@ -617,6 +621,8 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         ),
         scan_mode=read_mode(e.get("SCAN_MODE")),
         macie_lookback_days=_int(e.get("MACIE_LOOKBACK_DAYS"), 90, 1, 3650),
+        object_index=_bool(e.get("OBJECT_INDEX", "true")),
+        index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn

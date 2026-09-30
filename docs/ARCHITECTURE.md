@@ -138,6 +138,8 @@ One run:
 | `DYNAMODB_MAX_TABLE_BYTES` | A discovered table larger than this, after sampling, is skipped as `too_large` (0: no cap) | 10 GiB |
 | `MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN` | Per-kind caps inside `MAX_ITEMS_PER_RUN` (0: no separate cap) | 0 |
 | `MAX_RUN_SECONDS` | Wall-time cap on a run, below the Lambda deadline (0: the deadline only) | 0 |
+| `OBJECT_INDEX` | The per-object index in the results bucket (`state/index/`, [below](#the-object-index-and-component-versions)) | on |
+| `INDEX_MAX_OBJECTS` | The most objects one source indexes; past it, objects are read by their change at the source only | 10,000,000 |
 | `COLUMNAR_MAX_ROWS` | Rows read per Parquet, ORC or Avro file (or catalog CSV/JSON object); the rest is `partial` | 10,000 |
 | `RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN` | The role RDS assumes to write snapshot exports, and the customer's KMS key to encrypt them. Both are needed to read RDS and Aurora | none: RDS stores are reported `export_not_configured` |
 | `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB) a run may start | 1 |
@@ -475,6 +477,104 @@ is a claim anyone can change, so the reader decides by the bytes:
 pypdf adds about 4 MB to each image and the Lambda zip; it has no
 dependencies of its own. Its log and warnings are silenced, since a message
 about a malformed object could quote it.
+
+### The object index and component versions
+
+A run needs to know more than "changed since the last pass" to read the right
+objects ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+what each object was read **with**. Two parts give it that.
+
+**Component versions.** Every part that decides what a read finds has a
+version. The version is the first 12 hex characters of a SHA-256 over the
+part's source. Nobody sets it by hand. `scripts/components.py` computes the
+versions and writes them to a manifest,
+`scanner/core/src/sensitive_data_core/components.json`, which ships in the
+core package:
+
+| Component | Made of |
+|---|---|
+| `adapter:<kind>` | The source module that reads a kind of store (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). The kinds are found from the `kind = "..."` names in every platform's `sources/` modules, plus the kinds a module sets at run time. A vendor's importer is its own (`adapter:macie`) |
+| `reader:<name>` | One of the core's readers: `text`, `transcript`, `docx`, `xlsx`, `pptx`, `pdf`, `archive-zip`, `archive-tar`, `archive-stream` (gzip, bzip2, xz, zstd), `columnar` (Parquet, ORC), `avro`, `rdb`, and for tables `sql` and `attributes`. A reader can be made of named functions of a shared file, so a change to `_pptx` in `scan/office.py` moves `reader:pptx` and not `reader:docx`. The manifest also lists the kinds of object each reader reads (`readerKinds`) |
+| `sniffer` | `scan/sniff.py`, and the routing in `scan/objects.py` that sends bytes to a reader |
+| `spec-standalone` | The unprompted engine: shape and context rules, the recognizers, the spec loader |
+| `spec-standalone/<class>` | One class's own rules in `spec/classes.yaml` (its shape, `standalone`, context words and exclusions, test numbers, and for `card` the brand table), so a change to one class, or a new class, is named |
+| `spec-conversation` | The prompts (`promptPhrases`), retry prefixes, carryover, the context window, `spec/normalize.yaml`, and the conversation and normalization engines |
+
+CI runs `uv run python ../scripts/components.py --check`, and
+`tests/test_components.py` runs it too. The check fails when a component's
+source changed and the manifest was not regenerated, so a version is never
+forgotten. It also fails when a new `sources/` module names no kind and is not
+a listed helper. To regenerate, run
+`uv run python ../scripts/components.py --write` in `scanner/` and commit the
+manifest.
+
+**The per-object index.** Each source that reads objects keeps one index in
+the scanner's own state location:
+
+- the AWS results bucket's `state/index/`;
+- the Azure state container's `state/index/`;
+- the Google Cloud state bucket's `state/index/`;
+- for a container runner, beside `STATE_LOCATION` (`<path>.index/`,
+  `s3://bucket/<key>.index/`, or `<URL>.index/<file>` with the state's signed
+  PUTs).
+
+Per object, it holds:
+
+- the object's key, as an HMAC-SHA256 (12 bytes). The salt is random, and it
+  is kept in the runner's state document (`indexSalt`), not in the index file,
+  the same rule as the DynamoDB source's item keys;
+- an HMAC of the source's change marker: the ETag, size and time for S3 and
+  Azure blobs, the generation for Cloud Storage, the `cTag` for OneDrive and
+  SharePoint, the version for Drive;
+- an HMAC of the content fingerprint, when the listing gives one: a
+  single-part S3 object's ETag, a blob's `Content-MD5`, a Cloud Storage
+  object's `md5Hash`, a Drive file's `md5Checksum`, a OneDrive or SharePoint
+  file's SHA-1 or QuickXorHash;
+- the detected type, the readers used (an archive's entries' readers too), the
+  kinds met that no reader in the build reads (images, 7z, older Office files,
+  and Parquet in the Lambda zip), and the skip reason;
+- flags (disguised, conversation, text-bearing, unreadable);
+- the **component-version vector** it was read with: its adapter's version,
+  each of its readers', the sniffer's, `spec-standalone`'s and each class's,
+  and `spec-conversation`'s.
+
+Many objects share one profile (the vector with the type, readers and skip),
+so a shard stores each profile once. **Nothing in the index is a value.** The
+no-leak suite plants values in object keys, in archive entries' names and in
+the objects themselves, then searches every byte of the index files (and each
+shard's SQL dump) for them.
+
+The index is SQLite (the standard library's), held in memory and stored
+gzipped. Each source starts with one shard (`<source>/000.db.gz` beside
+`<source>/meta.json`). A source splits by the key hash when it passes 250,000
+rows a shard, up to 256 shards. A run loads only the shards it touches and
+writes only the ones it changed.
+
+| | Per million objects |
+|---|---|
+| Stored (gzipped) | about **35 MB** (34.4 bytes a row, measured by `tests/test_index.py` on made-up keys with fingerprints) |
+| Building it (one row per object read) | about 8 s of CPU |
+| Saving it | about 5 s |
+| Loading a shard and looking up a key | well under a second |
+
+The index is bounded:
+
+- A source indexes at most `INDEX_MAX_OBJECTS` objects (10 million, about
+  350 MB). Past that, objects are read as before, by their change at the
+  source only.
+- A complete listing pass drops the rows of objects it did not list (objects
+  gone), and a delta feed's deletions drop theirs.
+- An index that cannot be read, or was written under another salt (the state
+  was reset), is no index: the run starts a fresh one.
+- Saving is best effort. A failed save is logged (`index.failed`) and costs
+  the next run its decisions, never findings.
+
+`OBJECT_INDEX=off` turns the index off.
+
+Today the index records S3 (and Glue tables and directory buckets), Azure Blob
+Storage and Files, Cloud Storage, and OneDrive, SharePoint and Drive files.
+Rescans chosen from it, change detection for tables and duplicate skipping
+build on it (#67).
 
 ### Glue Data Catalog and Lake Formation
 

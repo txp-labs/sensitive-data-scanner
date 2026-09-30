@@ -28,6 +28,7 @@ from sensitive_data_core.findings import (
     encryption_facts,
     finding_json,
 )
+from sensitive_data_core.index import ObjectPass
 from sensitive_data_core.safety import error_name
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.item import ItemResult, scan_item_text
@@ -147,6 +148,8 @@ class ItemReader:
     store: FindingStore
     budget: Budget
     columnar: bool = field(default_factory=pyarrow_available)
+    # The pass's object index (#67): a drive's files are recorded by their item id.
+    index: ObjectPass | None = None
 
     def __repr__(self) -> str:
         return f"ItemReader({self.cov.kind!r})"
@@ -185,9 +188,13 @@ class ItemReader:
         *,
         resource_for: Callable[[str | None], dict[str, Any]],
         link: str | None,
+        key: str | None = None,
+        marker: str | None = None,
+        fingerprint: str | None = None,
     ) -> list[dict[str, Any]]:
         """One file or attachment of `size` bytes, read with ranged `fetch`es. What it cannot
-        read is counted (`skipped` by kind, `too_large`); a failed fetch is raised."""
+        read is counted (`skipped` by kind, `too_large`); a failed fetch is raised. With a
+        `key` (a drive item's id), the read is recorded in the pass's object index."""
         if size <= 0:
             return []
         s = self.settings
@@ -201,6 +208,8 @@ class ItemReader:
             max_rows=s.columnar_max_rows,
             columnar=self.columnar,
         )
+        if self.index is not None and key is not None:
+            self.index.record(key, marker=marker, fingerprint=fingerprint, got=got)
         findings = record(
             got,
             self.cov,

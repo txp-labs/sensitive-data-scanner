@@ -59,11 +59,13 @@ import datetime as _dt
 import gzip
 import io
 import zlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.columnar import (
     TableResult,
@@ -170,10 +172,29 @@ class S3RangeFile(io.RawIOBase):
 
 # GetObject's encryption headers (the object's own, 1.5).
 _SSE_HEADERS = ("ServerSideEncryption", "SSEKMSKeyId")
+_MD5 = frozenset("0123456789abcdef")
+
+
+def object_marker(obj: Mapping[str, Any]) -> str:
+    """What changes when a listed object changes: its ETag, size and last-modified time."""
+    modified = obj.get("LastModified")
+    when = modified.isoformat() if isinstance(modified, _dt.datetime) else str(modified or "")
+    return f"{obj.get('ETag') or ''}|{obj.get('Size') or 0}|{when}"
+
+
+def object_fingerprint(obj: Mapping[str, Any]) -> str | None:
+    """A single-part object's ETag is the MD5 of its bytes (#67): the same bytes under
+    another key have the same one. A multipart ETag (`...-3`) says nothing of the bytes."""
+    etag = str(obj.get("ETag") or "").strip('"').lower()
+    if len(etag) == 32 and set(etag) <= _MD5:
+        return f"md5:{etag}"
+    return None
 
 
 class S3Source:
     kind = "s3"
+    # The run's object indexes (#67), set by the runner; None records nothing.
+    indexes: Indexes | None = None
 
     def __init__(
         self,
@@ -297,6 +318,10 @@ class S3Source:
         first_read_error: str | None = None
         cur_dir: str | None = cursor.get("prefixDir")
         cur_n = int(cursor.get("prefixCount") or 0)
+        # Each listing pass is a generation of the index: a complete pass drops the rows of
+        # objects it did not list (gone from the bucket).
+        generation = int(cursor.get("indexPass") or 0) + (0 if cursor.get("passStartedAt") else 1)
+        op = ObjectPass(self.indexes, self.id, self.kind, generation=generation)
         try:
             while not done and budget.time_left():
                 args: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
@@ -315,6 +340,7 @@ class S3Source:
                 for obj in contents[done_before:]:
                     key = obj["Key"]
                     cov.listed += 1
+                    op.seen(key)
                     modified = obj.get("LastModified")
                     if since is not None and modified is not None and modified <= since:
                         start_after = key
@@ -353,8 +379,11 @@ class S3Source:
                             detector=detector,
                             store=store,
                             seen_at=seen_at,
+                            op=op,
+                            listed=obj,
                         )
                     except Exception as err:  # one bad object must not stop the pass
+                        op.record(key, marker=object_marker(obj), unreadable=True)
                         cov.unreadable += 1
                         if is_kms_denial(err):
                             cov.kms_denied += 1
@@ -376,6 +405,7 @@ class S3Source:
             log_event("source.failed", source=self.target, error=cov.error)
         if done and cov.error is None:
             cov.pass_complete = True
+            op.complete()
             new_cursor: dict[str, Any] = {
                 "watermark": pass_started,
                 "passStartedAt": None,
@@ -395,6 +425,7 @@ class S3Source:
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
+        new_cursor["indexPass"] = generation
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_read_error
         return SourceRun(cov, new_cursor)
@@ -408,14 +439,20 @@ class S3Source:
         detector: Detector,
         store: FindingStore,
         seen_at: str,
+        op: ObjectPass | None = None,
+        listed: Mapping[str, Any] | None = None,
     ) -> None:
         """One object, read by the core's reader (`read_object`) through ranged GETs of one
         version: the first GET's version is pinned for the rest, and its encryption headers
-        are the object's. A catalog table's CSV or JSON files are read by its columns."""
+        are the object's. A catalog table's CSV or JSON files are read by its columns. The
+        read is recorded in the object index (`op`) with the listing's marker."""
         self._object_facts = None
+        obj: Mapping[str, Any] = listed or {"Key": key, "Size": size}
         if self.serde == "json" or (self.serde == "csv" and self.columns):
             self._catalog_text(key, size=size, cov=cov, detector=detector, store=store,
                                seen_at=seen_at)  # fmt: skip
+            if op is not None:
+                op.record(key, marker=object_marker(obj), readers=("columnar",), text=True)
             return
         version: str | None = None
         headers: dict[str, Any] | None = None
@@ -448,6 +485,8 @@ class S3Source:
             columnar=self.columnar,
         )
         self._headers(headers)
+        if op is not None:
+            op.record(key, marker=object_marker(obj), fingerprint=object_fingerprint(obj), got=got)
         findings = record(
             got,
             cov,
