@@ -93,6 +93,7 @@ def pdf_text(data: bytes, *, max_chars: int) -> PdfText:
             if size + len(text) > max_chars:
                 out.append(text[: max(0, max_chars - size)])
                 partial = True
+                size = max_chars
                 break
             out.append(text)
             size += len(text) + 1
@@ -102,7 +103,13 @@ def pdf_text(data: bytes, *, max_chars: int) -> PdfText:
             for k in _INFO_KEYS:
                 v = meta.get(k)
                 if isinstance(v, str) and v.strip():
-                    info.append(str(v)[:4096])
+                    # Within the same cap as the pages (#77): the text never passes max_chars.
+                    room = max_chars - size - 1
+                    if room <= 0:
+                        partial = True
+                        break
+                    info.append(str(v)[: min(4096, room)])
+                    size += len(info[-1]) + 1
         except Exception:  # noqa: S110 - document information is optional
             pass
     if n and not any_text:

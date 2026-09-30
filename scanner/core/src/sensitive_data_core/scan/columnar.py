@@ -336,7 +336,7 @@ def json_rows(text: str) -> tuple[list[str], list[dict[str, Any]]]:
     if t.startswith("["):
         try:
             data = json.loads(t)
-        except ValueError:
+        except (ValueError, RecursionError):
             data = []
         rows = [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
     else:
@@ -346,7 +346,7 @@ def json_rows(text: str) -> tuple[list[str], list[dict[str, Any]]]:
                 continue
             try:
                 r = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(r, dict):
                 rows.append(r)

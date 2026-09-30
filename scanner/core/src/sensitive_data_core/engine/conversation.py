@@ -476,9 +476,17 @@ class _Classifier:
         return self.result
 
 
+_ASTRAL = re.compile("[\U00010000-\U0010ffff]")
+
+
 def utf16_index(text: str, index: int) -> int:
-    """A code-point index in `text` as a UTF-16 code-unit index (the spec's offset unit)."""
-    return index + sum(1 for c in text[:index] if ord(c) > 0xFFFF)
+    """A code-point index in `text` as a UTF-16 code-unit index (the spec's offset unit).
+
+    Linear in `index` at C speed, and constant for ASCII text: a large object with many
+    findings must not be quadratic in Python (#77)."""
+    if text.isascii() or _ASTRAL.search(text, 0, max(0, index)) is None:
+        return index
+    return index + len(_ASTRAL.findall(text, 0, max(0, index)))
 
 
 def _to_utf16(result: Result, turns: list[Turn], norms: list[Normalized]) -> Result:

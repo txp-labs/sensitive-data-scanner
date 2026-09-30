@@ -277,7 +277,7 @@ class EventBridgeReplaySource:
                 body = str(m.get("Body") or "")
                 try:
                     event = json.loads(body)
-                except ValueError:
+                except (ValueError, RecursionError):
                     event = {}
                 if isinstance(event, dict) and event.get("replay-name") == c["replay"]:
                     c["read"] = int(c.get("read") or 0) + 1

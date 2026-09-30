@@ -16,7 +16,7 @@ from presidio_analyzer.nlp_engine import NoOpNlpEngine
 
 from ..engine.conversation import Turn
 from ..engine.spec import Spec, load_spec
-from .enhancer import SpecContextEnhancer
+from .enhancer import WINDOW_AFTER, WINDOW_BEFORE, SpecContextEnhancer
 from .entities import (
     ENTITY_TO_CLASS,
     META_CONFIDENCE,
@@ -96,6 +96,24 @@ def build_conversation_engine(spec: Spec, now: _dt.date | None) -> AnalyzerEngin
     )
 
 
+CHUNK_CHARS = 64 * 1024
+
+
+def _chunks(text: str, size: int) -> list[tuple[int, int]]:
+    """`text` cut into pieces of about `size` characters, each ending after a line break
+    (or at `size` characters when a line is longer)."""
+    out = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + size)
+        if end < len(text):
+            nl = text.rfind("\n", start, end)
+            end = nl + 1 if nl > start else end
+        out.append((start, end))
+        start = end
+    return out
+
+
 def _analysis(results: list[RecognizerResult], turn_offsets: list[int] | None) -> Analysis:
     out = Analysis()
     grouped: dict[int, list[RecognizerResult]] = {}
@@ -149,9 +167,29 @@ class Detector:
         self._conversation = build_conversation_engine(self.spec, now)
 
     def analyze_text(self, text: str, context: list[str] | None = None) -> Analysis:
-        """Stored text: card, SSN and ITIN patterns and checksums, dates of birth, spoken digits."""
-        results = self._text.analyze(text=text, language="en", context=context or [])
-        return _analysis(results, None)
+        """Stored text: card, SSN and ITIN patterns and checksums, dates of birth, spoken digits.
+
+        A text longer than `CHUNK_CHARS` is read in chunks that end at a line break, each
+        with the context window around it (#77): Presidio's de-duplication compares every
+        result with every other, so one large object with many findings would otherwise
+        take time quadratic in its findings. A value belongs to the chunk it starts in."""
+        if len(text) <= CHUNK_CHARS:
+            results = self._text.analyze(text=text, language="en", context=context or [])
+            return _analysis(results, None)
+        out = Analysis()
+        for start, end in _chunks(text, CHUNK_CHARS):
+            lo, hi = max(0, start - WINDOW_BEFORE), min(len(text), end + WINDOW_AFTER)
+            kept = []
+            for r in self._text.analyze(text=text[lo:hi], language="en", context=context or []):
+                if start <= r.start + lo < end:
+                    r.start += lo
+                    r.end += lo
+                    kept.append(r)
+            part = _analysis(kept, None)
+            out.detections += part.detections
+            out.test_values += part.test_values
+            out.suppressed += part.suppressed
+        return out
 
     def analyze_conversation(self, turns: list[Turn]) -> Analysis:
         """A transcript: prompt carryover, split turns, spoken forms, shape and context."""

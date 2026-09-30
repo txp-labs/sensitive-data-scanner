@@ -45,3 +45,22 @@ def turns_of(case: dict[str, Any]) -> list[Any]:
         Turn(t["speaker"], t["text"], t.get("channel"), t.get("beginMs"), t.get("endMs"))
         for t in case["turns"]
     ]
+
+
+# Hypothesis profiles for the reader fuzz tests (tests/test_fuzz_readers.py, #77). The
+# normal run is derandomized and short, so a failure is reproducible and CI is quick;
+# `--hypothesis-profile=fuzz` is CI's time-capped fuzz step, and `fuzz-long` a local run.
+def _hypothesis_profiles() -> None:
+    from hypothesis import HealthCheck, settings
+
+    common: dict[str, Any] = {
+        "deadline": None,
+        "suppress_health_check": [HealthCheck.too_slow, HealthCheck.data_too_large],
+    }
+    settings.register_profile("default", max_examples=40, derandomize=True, database=None, **common)
+    settings.register_profile("fuzz", max_examples=600, **common)
+    settings.register_profile("fuzz-long", max_examples=50_000, **common)
+    settings.load_profile("default")
+
+
+_hypothesis_profiles()
