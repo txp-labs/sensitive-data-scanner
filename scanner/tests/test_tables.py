@@ -368,6 +368,158 @@ def test_dynamodb_reads_only_what_changed_with_incremental_exports(
     assert cov["rescanned"] == {READER: 1}
 
 
+def _pitr(ddb: Any, name: str, status: str) -> None:
+    ddb.stub.add_response(
+        "describe_continuous_backups",
+        {
+            "ContinuousBackupsDescription": {
+                "ContinuousBackupsStatus": status,
+                "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": status},
+            }
+        },
+        {"TableName": name},
+    )
+
+
+def test_big_pitr_tables_below_the_scan_cap_are_exported_and_small_ones_sampled(
+    env: Env,
+) -> None:
+    """With DYNAMODB_EXPORT, a table under the Scan cap is read by export when PITR is on and
+    it holds at least DYNAMODB_EXPORT_MIN_BYTES or DYNAMODB_EXPORT_MIN_ITEMS (#67); a small
+    table, or a big one without PITR, keeps the sampled Scan and is never skipped for it."""
+    from ddb_fixtures import Ddb, describe
+    from sensitive_data_scanner.config import read_config
+    from sensitive_data_scanner.discovery import discover, export_worthy
+
+    ddb = Ddb()
+    env.clients.dynamodb = ddb.client
+    tables = {
+        # name: (bytes, items, PITR)
+        "orders": (2 * 1024**3, 5_000, "ENABLED"),  # over the byte threshold
+        "clicks": (300 * 1024**2, 4_000_000, "ENABLED"),  # over the item threshold
+        "audit": (3 * 1024**3, 9_000, "DISABLED"),  # big, but no PITR: sampled
+        "settings": (40 * 1024, 120, None),  # small: sampled, PITR never asked
+    }
+    ddb.stub.add_response("list_tables", {"TableNames": list(tables)})
+    for name, (size, items, pitr) in tables.items():
+        d = describe(name, sort_key=False)
+        d["Table"].update(
+            TableStatus="ACTIVE",
+            TableSizeBytes=size,
+            ItemCount=items,
+            TableArn=f"arn:aws:dynamodb:us-west-2:123456789012:table/{name}",
+        )
+        ddb.stub.add_response("describe_table", d)
+        if pitr is not None:
+            _pitr(ddb, name, pitr)
+    cfg = config(s3_targets=[], discover=frozenset({"dynamodb"}), dynamodb_export=True)
+    got = {s.name: s for s in discover(cfg, env.clients, "us-west-2").stores}
+    ddb.stub.assert_no_pending_responses()
+    assert {n: s.extra.get("readBy") for n, s in got.items()} == {
+        "orders": "export",
+        "clicks": "export",
+        "audit": None,
+        "settings": None,
+    }
+    assert all(s.status == "pending" for s in got.values())  # none skipped
+    # The thresholds are settings; 0 turns a measure off; exports stay opt-in.
+    c = read_config({"RESULTS_BUCKET": RESULTS, "DYNAMODB_EXPORT_MIN_BYTES": "0"})
+    assert (c.dynamodb_export_min_bytes, c.dynamodb_export_min_items) == (0, 1_000_000)
+    assert not export_worthy(c, 50 * 1024**3, 10) and export_worthy(c, 0, 1_000_000)
+    assert read_config({"RESULTS_BUCKET": RESULTS}).dynamodb_export_min_bytes == 1024**3
+    off = config(s3_targets=[], discover=frozenset({"dynamodb"}), dynamodb_export=False)
+    ddb.stub.add_response("list_tables", {"TableNames": ["orders"]})
+    d = describe("orders", sort_key=False)
+    d["Table"].update(TableStatus="ACTIVE", TableSizeBytes=2 * 1024**3, ItemCount=5_000)
+    ddb.stub.add_response("describe_table", d)
+    assert discover(off, env.clients, "us-west-2").stores[0].extra.get("readBy") is None
+
+
+def test_a_big_pitr_table_below_the_cap_reads_only_what_changed(env: Env) -> None:
+    """Such a table's first export is full; the next holds only what was written since."""
+    from ddb_fixtures import Ddb, describe
+
+    ddb = Ddb()
+    env.clients.dynamodb = ddb.client
+    arn = "arn:aws:dynamodb:us-west-2:123456789012:table/orders"
+    cfg = config(s3_targets=[], discover=frozenset({"dynamodb"}), dynamodb_export=True)
+    prefix = f"exports/dynamodb/{hashlib.sha256(arn.encode()).hexdigest()[:12]}"
+    t0 = NOW
+
+    def estate() -> None:
+        ddb.stub.add_response("list_tables", {"TableNames": ["orders"]})
+        d = describe("orders", sort_key=False)
+        d["Table"].update(
+            TableStatus="ACTIVE", TableSizeBytes=2 * 1024**3, ItemCount=8_000_000, TableArn=arn
+        )
+        ddb.stub.add_response("describe_table", d)
+        _pitr(ddb, "orders", "ENABLED")
+
+    def start(kind: str, **spec: Any) -> None:
+        expected: dict[str, Any] = {
+            "TableArn": arn,
+            "S3Bucket": RESULTS,
+            "S3Prefix": prefix,
+            "ExportFormat": "DYNAMODB_JSON",
+            "ExportType": kind,
+            "ClientToken": ANY,
+            "S3SseAlgorithm": "AES256",
+            **spec,
+        }
+        ddb.stub.add_response(
+            "export_table_to_point_in_time",
+            {"ExportDescription": {"ExportArn": f"{arn}/export/{kind}"}},
+            expected,
+        )
+
+    def finish(export_id: str, lines: list[dict[str, Any]], at: dt.datetime | None) -> None:
+        base = f"{prefix}/AWSDynamoDB/{export_id}/"
+        body = gzip.compress("\n".join(json.dumps(x) for x in lines).encode())
+        env.clients.s3.put_object(Bucket=RESULTS, Key=f"{base}data/a.json.gz", Body=body)
+        env.clients.s3.put_object(Bucket=RESULTS, Key=f"{base}manifest-summary.json", Body=b"{}")
+        desc: dict[str, Any] = {
+            "ExportStatus": "COMPLETED",
+            "ExportManifest": f"{base}manifest-summary.json",
+        }
+        if at is not None:
+            desc["ExportTime"] = at
+        ddb.stub.add_response("describe_export", {"ExportDescription": desc})
+        ddb.stub.add_response("describe_table", describe("orders", sort_key=False))
+
+    def run(at: dt.datetime, then: Any) -> dict[str, Any]:
+        estate()
+        then()
+        doc = env.run(cfg, now=lambda: at)
+        assert doc is not None
+        ddb.stub.assert_no_pending_responses()  # no Scan: the export reads it
+        return doc
+
+    run(t0, lambda: start("FULL_EXPORT"))
+    card = {"pk": {"S": "O#1"}, "note": {"S": f"card {CARDS['visa']}"}}
+    first = run(t0 + dt.timedelta(minutes=30), lambda: finish("full-1", [{"Item": card}], t0))
+    assert {f["resource"]["key"]["pk"] for f in first["findings"]} == {"O#1"}
+    window = {
+        "ExportFromTime": t0,
+        "ExportToTime": t0 + dt.timedelta(hours=24),
+        "ExportViewType": "NEW_IMAGE",
+    }
+    pending = run(
+        t0 + dt.timedelta(days=1, hours=1),
+        lambda: start("INCREMENTAL_EXPORT", IncrementalExportSpecification=window),
+    )
+    orders = next(s for s in pending["discovery"]["stores"] if s["name"] == "orders")
+    assert (orders["readBy"], orders["exportType"]) == ("export", "incremental")
+    new = {
+        "Keys": {"pk": {"S": "O#2"}},
+        "NewImage": {"pk": {"S": "O#2"}, "note": {"S": f"ssn {dashed(SSN_B)}"}},
+    }
+    second = run(t0 + dt.timedelta(days=1, hours=2), lambda: finish("incr-1", [new], None))
+    assert {(f["resource"]["key"]["pk"], f["class"]) for f in second["findings"]} == {
+        ("O#1", "card"),
+        ("O#2", "us_ssn"),
+    }
+
+
 # ------------------------------------------------------------------ BigQuery
 
 

@@ -517,6 +517,11 @@ class Config:
     rescan_percent: int = 25
     # #67 part 3: after a table's full export, incremental exports of what changed.
     dynamodb_incremental: bool = True
+    # (#67) With DYNAMODB_EXPORT, a table below the Scan cap is read by export (then
+    # incrementally) when point-in-time recovery is on and it holds at least this many bytes
+    # or items; smaller tables keep the sampled Scan. 0 turns that measure off.
+    dynamodb_export_min_bytes: int = 1024**3
+    dynamodb_export_min_items: int = 1_000_000
     # #67 part 4: a bucket of at least this many objects is read from its S3 Inventory
     # report when it has one (and named as a recommendation when it has none).
     s3_inventory: bool = True
@@ -633,6 +638,8 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
         rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
         dynamodb_incremental=_bool(e.get("DYNAMODB_INCREMENTAL", "true")),
+        dynamodb_export_min_bytes=_int(e.get("DYNAMODB_EXPORT_MIN_BYTES"), 1024**3, 0, 1024**5),
+        dynamodb_export_min_items=_int(e.get("DYNAMODB_EXPORT_MIN_ITEMS"), 1_000_000, 0, 10**12),
         s3_inventory=_bool(e.get("S3_INVENTORY", "true")),
         s3_inventory_min_objects=_int(
             e.get("S3_INVENTORY_MIN_OBJECTS"), 1_000_000, 0, 10_000_000_000

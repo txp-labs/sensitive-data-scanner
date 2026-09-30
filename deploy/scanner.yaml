@@ -111,7 +111,7 @@ Parameters:
     Type: String
     AllowedValues: ["true", "false"]
     Default: "false"
-    Description: DYNAMODB_EXPORT - read tables too large to Scan from an Export to S3 (needs PITR).
+    Description: DYNAMODB_EXPORT - read tables too large to Scan, and tables past 1 GiB or 1M items with PITR on, from Exports to S3, then only what changed (needs PITR).
   DynamoDBExportKmsKeyArn:
     Type: String
     Default: ""

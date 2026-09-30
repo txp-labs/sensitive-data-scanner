@@ -240,8 +240,33 @@ def _discover_dynamodb(config: Config, clients: Clients, out: Discovery) -> None
         store.facts = dynamodb_facts(classifier(clients), dict(desc.get("SSEDescription") or {}))
         pct = store.sample_percent or 100
         cap = config.dynamodb_max_table_bytes
+        arn = str(desc.get("TableArn", ""))
         if cap and store.size_bytes * pct // 100 > cap:
-            _too_large_table(config, ddb, store, name, str(desc.get("TableArn", "")))
+            _too_large_table(config, ddb, store, name, arn)
+        elif config.dynamodb_export and export_worthy(
+            config, store.size_bytes, int(desc.get("ItemCount") or 0)
+        ):
+            _big_table(ddb, store, name, arn)
+
+
+def export_worthy(config: Config, size_bytes: int, items: int) -> bool:
+    """A table below the Scan cap that is big enough to read by export (#67): at least
+    `DYNAMODB_EXPORT_MIN_BYTES` or `DYNAMODB_EXPORT_MIN_ITEMS`. Its first export is full;
+    later ones hold only what changed, where a Scan would sample it all again each pass."""
+    by_bytes = config.dynamodb_export_min_bytes and size_bytes >= config.dynamodb_export_min_bytes
+    by_items = config.dynamodb_export_min_items and items >= config.dynamodb_export_min_items
+    return bool(by_bytes or by_items)
+
+
+def _pitr(ddb: Any, name: str) -> str | None:
+    """The table's point-in-time recovery status (`ENABLED`), from DescribeContinuousBackups."""
+    got = ddb.describe_continuous_backups(TableName=name)
+    status = (
+        (got.get("ContinuousBackupsDescription") or {})
+        .get("PointInTimeRecoveryDescription", {})
+        .get("PointInTimeRecoveryStatus")
+    )
+    return str(status) if status else None
 
 
 def _too_large_table(config: Config, ddb: Any, store: Store, name: str, arn: str) -> None:
@@ -250,12 +275,7 @@ def _too_large_table(config: Config, ddb: Any, store: Store, name: str, arn: str
         store.skip("too_large")
         return
     try:
-        pitr = ddb.describe_continuous_backups(TableName=name)
-        status = (
-            (pitr.get("ContinuousBackupsDescription") or {})
-            .get("PointInTimeRecoveryDescription", {})
-            .get("PointInTimeRecoveryStatus")
-        )
+        status = _pitr(ddb, name)
     except Exception as err:
         store.skip("too_large", error_name(err))
         return
@@ -265,6 +285,18 @@ def _too_large_table(config: Config, ddb: Any, store: Store, name: str, arn: str
         return
     store.extra["readBy"] = "export"
     store.extra["tableArn"] = arn
+
+
+def _big_table(ddb: Any, store: Store, name: str, arn: str) -> None:
+    """Below the Scan cap but big (`export_worthy`): read by export when PITR is on, else by
+    the sampled Scan as before (never skipped for it)."""
+    try:
+        status = _pitr(ddb, name)
+    except Exception:  # the Scan reads it, as before
+        return
+    if status == "ENABLED":
+        store.extra["readBy"] = "export"
+        store.extra["tableArn"] = arn
 
 
 def _glue_tags(clients: Clients, arn: str) -> dict[str, str]:
