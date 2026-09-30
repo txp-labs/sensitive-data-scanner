@@ -69,7 +69,13 @@ One run:
      - Parquet, ORC and Avro files are read by column
        ([Columnar and data-lake formats](#columnar-and-data-lake-formats)),
        and gzip or zstd text is inflated first.
-     - Audio, video, images, documents and archives are counted, not read.
+     - Word, Excel and PowerPoint's Open XML files (`.docx`, `.xlsx`,
+       `.pptx`) are read as their text by the core's reader
+       (`scan/office.py`) through ranged GETs of one version, within the
+       byte and inflate caps; a rights-managed one is counted as
+       `encrypted`. CodeCommit files and ECR layer files are read the same way.
+     - Audio, video, images, PDFs, the older binary Office formats and
+       archives are counted, not read.
      - Deleted objects drop out of the findings.
    - **CloudWatch Logs.** The source reads `FilterLogEvents` in windows of at
      most 24 hours from a watermark, up to two minutes ago. If a window

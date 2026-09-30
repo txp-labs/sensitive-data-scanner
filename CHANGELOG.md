@@ -483,6 +483,20 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - The Azure and Google Cloud scanners now read `.docx`, `.xlsx` and `.pptx`
   objects (they were counted as `document`), so findings can appear in files
   that were skipped before.
+- **The AWS scanner reads Word, Excel and PowerPoint files too** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
+  S3 objects (general purpose and directory buckets, and Glue tables'
+  locations), CodeCommit files and ECR layer files named `.docx`, `.xlsx` or
+  `.pptx` (and `.docm`, `.xlsm`) are read as their text by the core's Office
+  reader (`scan/office.py`), the one the Azure, Google Cloud and SaaS scanners
+  use, instead of being counted as `document`. An S3 object is read through
+  ranged GETs of one version (the zip's directory and its text parts), within
+  `MAX_OBJECT_BYTES` fetched and `MAX_INFLATED_BYTES` inflated; a CodeCommit
+  or ECR file from the bytes already read, within the same caps. A
+  rights-managed file is counted as `encrypted`; one that is not a readable
+  zip, or whose directory is past the byte cap, still as `document`. Findings
+  can appear in files that were skipped before, with the formats `docx`,
+  `xlsx` and `pptx`. Standard library only: the Lambda zip gains no
+  dependency. The no-leak suite covers all three.
 
 ### Security
 - (#55) The SaaS importers add `SecurityAlert.Read.All`, `auditlogs:read` and

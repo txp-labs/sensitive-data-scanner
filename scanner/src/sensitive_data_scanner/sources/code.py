@@ -6,7 +6,9 @@ default branch's head (`GetBranch`) is walked folder by folder (`GetFolder`,
 at most `CODECOMMIT_MAX_FOLDERS`), and a stable sample of its files, spread
 across the tree by a hash of the path, is read (`GetFile`, at most
 `CODECOMMIT_MAX_FILES`, each up to `MAX_OBJECT_BYTES`). Binary files and the
-kinds S3 skips (images, archives, ...) are counted, not read. A finding names
+kinds S3 skips (images, archives, ...) are counted, not read; Word, Excel and
+PowerPoint's Open XML files are read as their text by the core's reader, as
+S3 reads them (`scan/office.py`), up to `MAX_INFLATED_BYTES`. A finding names
 the repository and the file's path. A pass resumes across runs, and starts
 over when the branch moves. Nothing is pushed or merged; the role denies it.
 
@@ -29,8 +31,9 @@ from sensitive_data_core.coverage import Discovery, Store, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
-from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_text
-from sensitive_data_core.scan.objects import sample_point
+from sensitive_data_core.scan.item import ItemResult, classify_key, looks_binary, scan_item_text
+from sensitive_data_core.scan.objects import read_object, sample_point
+from sensitive_data_core.scan.office import office_kind
 
 from ..discovery import decide, needs_tags
 from ..resources import console_link
@@ -94,6 +97,7 @@ class CodeCommitAdapter:
             max_files=c.codecommit_max_files,
             max_folders=c.codecommit_max_folders,
             max_bytes=c.max_object_bytes,
+            max_inflated_bytes=c.max_inflated_bytes,
         )
 
 
@@ -113,6 +117,7 @@ class CodeCommitSource:
         max_files: int = 200,
         max_folders: int = 500,
         max_bytes: int = 20 * 1024**2,
+        max_inflated_bytes: int = 100 * 1024**2,
     ) -> None:
         self.client = client
         self.repository = repository
@@ -121,6 +126,7 @@ class CodeCommitSource:
         self.max_files = max_files
         self.max_folders = max_folders
         self.max_bytes = max_bytes
+        self.max_inflated_bytes = max_inflated_bytes
         self.id = f"codecommit:{hashlib.sha256(repository.encode()).hexdigest()[:16]}"
         self.target = repository
 
@@ -170,7 +176,7 @@ class CodeCommitSource:
             readable = []
             for p in paths:
                 read_it, _, kind = classify_key(p)
-                if read_it:
+                if read_it or office_kind(p) is not None:
                     readable.append(p)
                 else:
                     cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
@@ -234,17 +240,24 @@ class CodeCommitSource:
             log_event("item.unreadable", source=self.target, error=error_name(err))
             return
         data = bytes(r.get("fileContent") or b"")
-        if len(data) > self.max_bytes:
-            data = data[: self.max_bytes]
-            cov.partial += 1
-        budget.take(len(data))
-        if looks_binary(data):
-            cov.skipped["binary"] = cov.skipped.get("binary", 0) + 1
-            return
-        text = data.decode("utf-8", errors="replace")
-        item = scan_item_text(path, text, detector)
+        if office_kind(path) is not None:
+            item = self._office(path, data, cov=cov, budget=budget, detector=detector)
+            if item is None:
+                return
+            read = min(len(data), self.max_bytes)
+        else:
+            if len(data) > self.max_bytes:
+                data = data[: self.max_bytes]
+                cov.partial += 1
+            budget.take(len(data))
+            if looks_binary(data):
+                cov.skipped["binary"] = cov.skipped.get("binary", 0) + 1
+                return
+            text = data.decode("utf-8", errors="replace")
+            item = scan_item_text(path, text, detector)
+            read = len(data)
         cov.scanned += 1
-        cov.bytes_scanned += len(data)
+        cov.bytes_scanned += read
         cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
         cov.test_values += item.test_values
         cov.suppressed += item.suppressed
@@ -256,6 +269,36 @@ class CodeCommitSource:
             item.findings, resource, link, item.format, seen_at, facts=self.facts
         ):
             merge(store, f"{self.id}\n{path}", f, pass_id)
+
+    def _office(
+        self,
+        path: str,
+        data: bytes,
+        *,
+        cov: Coverage,
+        budget: Budget,
+        detector: Detector,
+    ) -> ItemResult | None:
+        """A `.docx`, `.xlsx` or `.pptx` file's text, by the core's reader over the bytes
+        `GetFile` returned: the zip's directory and text parts, up to `MAX_OBJECT_BYTES`
+        read and `MAX_INFLATED_BYTES` inflated. None when it was counted instead."""
+        budget.take(min(len(data), self.max_bytes))
+        got = read_object(
+            path,
+            len(data),
+            lambda start, end: data[start : end + 1],
+            detector,
+            max_object_bytes=self.max_bytes,
+            max_inflated_bytes=self.max_inflated_bytes,
+            max_rows=0,
+            columnar=False,
+        )
+        cov.partial += int(got.partial)
+        if got.skipped is not None or got.item is None:
+            kind = got.skipped or "document"
+            cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
+            return None
+        return got.item
 
 
 # ------------------------------------------------------------------ S3 directory buckets

@@ -1243,6 +1243,114 @@ def test_no_value_leaves_images_graphs_or_archives(
         assert leaks(blob_) == [], name_
 
 
+def test_no_value_leaves_office_files_in_s3_codecommit_or_ecr(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Word, Excel and PowerPoint files named with values and holding them, in an S3 bucket,
+    a CodeCommit repository and an ECR layer, read by the core's Office reader."""
+    import io
+
+    from botocore.stub import ANY
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from office_fixtures import OLE, docx, pptx, xlsx
+    from sensitive_data_core.scan.objects import sample_point
+    from test_images_archives import layer
+    from test_streams import stubs
+
+    env.put(f"hr/{SSN_A}/letter-{CARDS['visa']}.docx", docx([f"card {printed(CARDS['amex'])}"]))
+    env.put(f"hr/roster-{SSN_B}.xlsx", xlsx([["name", "ssn"], ["A", dashed(SSN_A)]]))
+    env.put(f"sales/{CARDS['jcb']}.pptx", pptx([f"card {CARDS['discover']}"]))
+    env.put(f"legal/{CARDS['mir']}.docx", OLE)
+    s = stubs(env, "codecommit", "ecr")
+    cc = s["codecommit"]
+    repo = f"repo-{SSN_B}"
+    cc.add_response(
+        "list_repositories", {"repositories": [{"repositoryName": repo, "repositoryId": "r"}]}
+    )
+    cc.add_response(
+        "get_repository",
+        {"repositoryMetadata": {"repositoryName": repo, "defaultBranch": "main", "Arn": "a"}},
+    )
+    cc.add_response("get_branch", {"branch": {"branchName": "main", "commitId": "c"}})
+    files = {
+        f"docs/{CARDS['unionpay']}.docx": docx([f"ssn {dashed(SSN_B)}"]),
+        f"data/{SSN_A}.xlsx": xlsx([["card"], [CARDS["maestro"]]]),
+    }
+    cc.add_response(
+        "get_folder",
+        {
+            "commitId": "c",
+            "folderPath": "/",
+            "files": [{"absolutePath": p, "relativePath": p, "blobId": "b"} for p in files],
+        },
+    )
+    for path in sorted(files, key=lambda p: (sample_point(p), p)):
+        cc.add_response(
+            "get_file",
+            {
+                "commitId": "c",
+                "blobId": "b",
+                "filePath": path,
+                "fileMode": "NORMAL",
+                "fileSize": len(files[path]),
+                "fileContent": files[path],
+            },
+        )
+    ecr = s["ecr"]
+    ecr.add_response(
+        "describe_repositories",
+        {
+            "repositories": [
+                {"repositoryName": f"app-{SSN_A}", "repositoryArn": "arn:aws:ecr:x:1:r"}
+            ]
+        },
+    )
+    digest = "sha256:" + "e" * 64
+    ecr.add_response("describe_images", {"imageDetails": [{"imageDigest": digest}]})
+    manifest = {
+        "layers": [{"digest": digest, "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"}]
+    }
+    ecr.add_response(
+        "batch_get_image",
+        {"images": [{"imageManifest": json.dumps(manifest)}]},
+        {"repositoryName": ANY, "imageIds": ANY, "acceptedMediaTypes": ANY},
+    )
+    ecr.add_response("get_download_url_for_layer", {"downloadUrl": "https://l.example/x"})
+    blob = layer(
+        {
+            f"app/{CARDS['visa13']}.pptx": pptx([f"ssn {dashed(SSN_B)}"]),
+            f"app/{SSN_B}.docx": docx([f"card {CARDS['mastercard']}"]),
+        }
+    )
+    env.clients.services["layer-fetch"] = lambda url, n: io.BytesIO(blob)
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            discover=frozenset({"codecommit", "ecr"}),
+            ecr_read=True,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    formats = {(f["resource"].get("service", "s3"), f["format"]) for f in doc["findings"]}
+    assert formats == {
+        ("s3", "docx"),
+        ("s3", "xlsx"),
+        ("s3", "pptx"),
+        ("codecommit", "docx"),
+        ("codecommit", "xlsx"),
+        ("ecr", "docx"),
+        ("ecr", "pptx"),
+    }
+    for name_, blob_ in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob_) == [], name_
+    assert leaks(json.dumps(doc)) == []
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

@@ -60,8 +60,9 @@ and its own image (`docker build --target azure`).
   the AWS scanner reads S3 objects, with the core's readers
   (`sensitive_data_core.scan.objects`): Parquet and ORC by column through
   ranged reads (footer first), Avro, gzip and zstd inflated, JSON and JSON
-  lines, CSV, conversation transcripts and text. Audio, video, images, office
-  documents and archives are counted, not read. ADLS Gen2 is read through the
+  lines, CSV, conversation transcripts and text, and Word, Excel and
+  PowerPoint files as their text. Audio, video, images, PDFs, the older binary
+  Office formats and archives are counted, not read. ADLS Gen2 is read through the
   same Blob endpoint; its directories are zero-length blobs and are skipped.
 - **Incremental.** A pass reads only the blobs modified since the previous
   complete pass started (less `skew`), and a pass cut short by the budget

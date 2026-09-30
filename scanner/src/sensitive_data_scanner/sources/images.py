@@ -11,7 +11,11 @@ for it (`GetDownloadUrlForLayer`), at most `ECR_MAX_LAYER_BYTES`, and read as
 a stream: gzip or plain tar (a zstd layer is counted, not read). Up to
 `ECR_MAX_FILES_PER_LAYER` regular files per layer are read, outside the
 operating system's own directories (`usr/`, `lib/`, `bin/`, ...), each to
-`MAX_OBJECT_BYTES`, with the kinds S3 skips counted instead. A finding names
+`MAX_OBJECT_BYTES`, with the kinds S3 skips counted instead; Word, Excel and
+PowerPoint's Open XML files are read as their text by the core's reader, as S3
+reads them (`scan/office.py`), from the member's first `MAX_OBJECT_BYTES` (a
+larger one's zip directory is past the cap, so it is counted as `document`).
+A finding names
 the repository, the layer (its digest, a hash) and the file's path. An image
 is read once; a newer push starts a new pass. Nothing is pushed, tagged or
 deleted; the role denies it.
@@ -36,7 +40,9 @@ from sensitive_data_core.coverage import Discovery, Store
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
 from sensitive_data_core.safety import error_name, log_event
-from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_text
+from sensitive_data_core.scan.item import ItemResult, classify_key, looks_binary, scan_item_text
+from sensitive_data_core.scan.objects import read_object
+from sensitive_data_core.scan.office import office_kind
 
 from ..discovery import decide, needs_tags
 from ..resources import console_link
@@ -134,6 +140,7 @@ class EcrAdapter:
             max_layer_bytes=c.ecr_max_layer_bytes,
             max_files=c.ecr_max_files_per_layer,
             max_file_bytes=c.max_object_bytes,
+            max_inflated_bytes=c.max_inflated_bytes,
         )
 
 
@@ -154,6 +161,7 @@ class EcrSource:
         max_layer_bytes: int = 256 * 1024**2,
         max_files: int = 200,
         max_file_bytes: int = 20 * 1024**2,
+        max_inflated_bytes: int = 100 * 1024**2,
     ) -> None:
         self.ecr = ecr
         self.fetch = fetcher
@@ -163,6 +171,7 @@ class EcrSource:
         self.max_layer_bytes = max_layer_bytes
         self.max_files = max_files
         self.max_file_bytes = max_file_bytes
+        self.max_inflated_bytes = max_inflated_bytes
         self.id = f"ecr:{hashlib.sha256(repository.encode()).hexdigest()[:16]}"
         self.target = repository
 
@@ -267,6 +276,28 @@ class EcrSource:
                 if f is not None:
                     yield m.name, f, int(m.size)
 
+    def _office(
+        self, path: str, data: bytes, cov: Coverage, detector: Detector
+    ) -> ItemResult | None:
+        """A `.docx`, `.xlsx` or `.pptx` member's text, by the core's reader over the bytes
+        read from the layer (a tar stream cannot seek). None when it was counted instead."""
+        got = read_object(
+            path,
+            len(data),
+            lambda start, end: data[start : end + 1],
+            detector,
+            max_object_bytes=self.max_file_bytes,
+            max_inflated_bytes=self.max_inflated_bytes,
+            max_rows=0,
+            columnar=False,
+        )
+        if got.skipped is not None or got.item is None:
+            kind = got.skipped or "document"
+            cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
+            return None
+        cov.partial += int(got.partial)
+        return got.item
+
     def _layer(  # noqa: PLR0917 - one layer of the pass
         self,
         layer: dict[str, Any],
@@ -292,7 +323,8 @@ class EcrSource:
                 if path.split("/", 1)[0] in SYSTEM_DIRS:
                     continue
                 read_it, _, kind = classify_key(path)
-                if not read_it:
+                office = office_kind(path) is not None
+                if not read_it and not office:
                     cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
                     continue
                 if files >= self.max_files or not budget.has(size):
@@ -301,11 +333,17 @@ class EcrSource:
                 data = f.read(self.max_file_bytes)
                 cov.partial += int(size > self.max_file_bytes)
                 budget.take(len(data))
-                if looks_binary(data):
+                item: ItemResult | None
+                if office:
+                    item = self._office(path, data, cov, detector)
+                    if item is None:
+                        continue
+                elif looks_binary(data):
                     cov.skipped["binary"] = cov.skipped.get("binary", 0) + 1
                     continue
+                else:
+                    item = scan_item_text(path, data.decode("utf-8", "replace"), detector)
                 files += 1
-                item = scan_item_text(path, data.decode("utf-8", "replace"), detector)
                 cov.scanned += 1
                 cov.bytes_scanned += len(data)
                 cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
