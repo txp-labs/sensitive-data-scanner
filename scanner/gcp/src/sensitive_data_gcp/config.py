@@ -12,7 +12,9 @@ its value.
 - The scope, exactly one of: `GCP_ORGANIZATION` (an organization's number),
   `GCP_FOLDERS` (folder numbers, comma-separated) or `GCP_PROJECTS` (project
   ids, comma-separated). Cloud Asset Inventory lists every store under it.
-- `DISCOVER`: the kinds to discover (`gcs`, ...; `all`); by default, every kind.
+- `DISCOVER`: the kinds to discover (`gcs`, `bigquery`, ...; `all`); by default,
+  every kind.
+- `BIGQUERY_MAX_ROWS`: rows read per BigQuery table (`tabledata.list`).
 - `DISCOVER_ALLOW`, `DISCOVER_DENY`, `DISCOVER_SAMPLING`: the core's rules, by
   kind and name (`gcs:prod-*`, `tag:scan=false`; a store's tags are its labels).
 - `SAMPLE_PERCENT`, `GCS_MAX_OBJECTS_PER_PREFIX`: object sampling, a stable
@@ -49,7 +51,7 @@ from sensitive_data_core.rules import (
 from sensitive_data_core.safety import Secret
 
 # Every kind this package discovers, and the ones discovered by default.
-KINDS: tuple[str, ...] = ("gcs",)
+KINDS: tuple[str, ...] = ("gcs", "bigquery")
 DEFAULT_KINDS: tuple[str, ...] = KINDS
 # Rule and DISCOVER prefixes: each kind, and shorter names for it.
 KIND_ALIASES = {
@@ -57,6 +59,7 @@ KIND_ALIASES = {
     "storage": "gcs",
     "bucket": "gcs",
     "buckets": "gcs",
+    "bq": "bigquery",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -104,6 +107,8 @@ class Settings:
     hmac_key: Secret | None = field(default=None, repr=False)
     pubsub_topic: str | None = None
     findings_file: str | None = None
+    # BigQuery: rows read per table with tabledata.list.
+    bigquery_max_rows: int = 1000
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -254,4 +259,5 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         hmac_key=key,
         pubsub_topic=topic,
         findings_file=findings_file,
+        bigquery_max_rows=_int(e.get("BIGQUERY_MAX_ROWS"), 1000, 1, 100_000),
     )

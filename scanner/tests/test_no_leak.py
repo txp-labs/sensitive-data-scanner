@@ -2076,3 +2076,56 @@ def test_no_value_leaves_the_gcp_scanner(capsys: pytest.CaptureFixture[str]) -> 
     for where, blob in blobs.items():
         assert leaks(blob) == [], where
         assert CARDS["amex"] not in blob and SSN_B not in blob and SSN_A not in blob, where
+
+
+def test_no_value_leaves_bigquery(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in rows, and in project, dataset, table and column names, a nested field's name
+    and Google's error messages: none of them leave."""
+    from gcp_fakes import (
+        NOW,
+        BigQuery,
+        BqDataset,
+        BqTable,
+        Cloud,
+        dataset_row,
+        error,
+        project_row,
+        settings,
+    )
+    from sensitive_data_gcp.runner import run_scan
+
+    project, number = f"p-{SSN_A}", "421000000078"
+    dataset, table = f"d_{CARDS['visa']}", f"t_{dashed(SSN_B)}"
+    fields: list[dict[str, Any]] = [
+        {"name": f"card_{CARDS['amex']}", "type": "STRING"},
+        {"name": "r", "type": "RECORD", "fields": [{"name": f"s_{SSN_B}", "type": "STRING"}]},
+    ]
+    rows = [{f"card_{CARDS['amex']}": CARDS["discover"], "r": {f"s_{SSN_B}": dashed(SSN_A)}}]
+    c = Cloud()
+    bq = BigQuery(c)
+    c.assets["cloudresourcemanager.googleapis.com/Project"] = [project_row(project, number)]
+    c.assets["bigquery.googleapis.com/Dataset"] = [
+        dataset_row(project, dataset, number),
+        dataset_row(project, f"x_{CARDS['mir']}", number),
+    ]
+    bq.datasets[(project, dataset)] = BqDataset(
+        tables={
+            table: BqTable(fields, rows),
+            f"bad_{SSN_A}": BqTable(
+                fields, fail=error(403, "PERMISSION_DENIED", message=f"no on {table}")
+            ),
+        }
+    )
+    bq.datasets[(project, f"x_{CARDS['mir']}")] = BqDataset(
+        fail=error(500, "INTERNAL", message=f"failed {dataset} {CARDS['jcb']}")
+    )
+    s = settings(DISCOVER="bigquery")
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, c.clients(), detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob and SSN_A not in blob and CARDS["amex"] not in blob, where

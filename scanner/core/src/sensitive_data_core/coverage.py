@@ -178,6 +178,9 @@ NOTES = {
     "driver_missing": ("skipped", "driver_missing"),
     # (1.7) A Cloud Storage bucket whose reads are billed to the reader's project.
     "requester_pays": ("skipped", "requester_pays"),
+    # (1.7) A BigQuery table with row-level access policies: a sample would hold only the rows
+    # the scanner is granted.
+    "row_level_policy": ("skipped", "row_level_policy"),
 }
 
 

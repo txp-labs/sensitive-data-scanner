@@ -9,9 +9,11 @@ from __future__ import annotations
 from sensitive_data_core.adapter import Adapter
 
 from .base import Context
+from .bigquery import BigQueryAdapter
 from .gcs import GcsAdapter
 
 _ALL: list[Adapter[Context]] = [
     GcsAdapter(),
+    BigQueryAdapter(),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}

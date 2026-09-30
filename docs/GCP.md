@@ -38,6 +38,7 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 | Kind (`DISCOVER`) | Store | Read with | Default |
 |---|---|---|---|
 | `gcs` (`storage`, `bucket`) | A Cloud Storage bucket | `cloudasset.assets.searchAllResources` (discovery); `storage.objects.list` and `storage.objects.get` (List Objects, ranged media reads) | read |
+| `bigquery` (`bq`) | A BigQuery table, `project.dataset.table` | `bigquery.datasets.get` and `bigquery.tables.list` (discovery), `bigquery.tables.get`, `bigquery.rowAccessPolicies.list` and `bigquery.tables.getData` (`tabledata.list`): BigQuery Data Viewer's reads | read; views, external tables, tables with row-level policies are gaps |
 
 ### Cloud Storage
 
@@ -74,6 +75,46 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
   printf %s projects/<project>/locations/<location>/keyRings/<ring>/cryptoKeys/<key> | shasum -a 256
   ```
 
+### BigQuery
+
+- **Discovery.** Cloud Asset Inventory lists every dataset in scope. Each
+  dataset's record (its access list and default key, `datasets.get`) and its
+  tables (`tables.list`) come from the BigQuery API. A store is one table,
+  `project.dataset.table`, so each gap has its own reason. A dataset that
+  cannot be read is one store, `project.dataset.*`, with its error.
+- **Reading** is `tabledata.list`: the first `BIGQUERY_MAX_ROWS` (1000) rows of
+  each table, read by column; a `RECORD` column is read inside, and `BYTES`
+  are not read. `tabledata.list` **runs no query and bills no bytes**, so it is
+  used rather than a `TABLESAMPLE` query, which would bill the bytes of the
+  blocks it samples and needs `bigquery.jobs.create` (creating a job is a
+  write the service account does not hold). A table unchanged since its last
+  complete read (`lastModifiedTime`) is not read again; its findings stay. A
+  finding is a `store_field` with `service: bigquery`, the dataset as `store`,
+  the table as `table` and the column as `field`, `readBy: tabledata_list`,
+  format `json`.
+- **Gaps, never escalating:**
+  - **Views and materialized views** are never read: reading one is a query.
+    A plain view is `unsupported` with `tableType: VIEW`.
+  - An **authorized view** (one that a dataset's access list authorizes) is
+    `authorized_view`. It can read tables the service account may not, so
+    the scanner never reads through it. The tables it reads are stores of
+    their own, read directly when the service account may, `access_denied`
+    otherwise.
+  - A table with **row-level access policies** is `row_level_policy`. A sample
+    would hold only the rows the service account is granted, which says
+    nothing about the rest, and the scanner is never granted more.
+  - **Columns under a policy tag** (column-level security) are left out of the
+    read (`selectedFields`) and counted as `protectedColumns`. The service
+    account is never given Fine-Grained Reader.
+  - **External tables** (Cloud Storage, Drive, Bigtable, BigLake) are
+    `unsupported` with `tableType: EXTERNAL`: their data is read where it
+    lives.
+  - A dataset inside a VPC Service Controls perimeter the job is outside of is
+    `network`.
+- **Encryption.** The table's own Cloud KMS key, else its dataset's default
+  key, is `customer_managed_key` (hashed as above); otherwise
+  `service_managed`.
+
 ## Findings
 
 A Google Cloud document says `"platform": "gcp"` and names its `site`
@@ -107,6 +148,7 @@ masked.
 | `GCS_MAX_OBJECTS_PER_PREFIX` | 0 (off) | At most n objects per directory per pass |
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES` | 20 MiB, 100 MiB | Bytes read from one object, and inflated from one compressed object |
 | `COLUMNAR_MAX_ROWS` | 10000 | Rows read from one table file |
+| `BIGQUERY_MAX_ROWS` | 1000 | Rows read from one BigQuery table (`tabledata.list`) |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on objects per run |
 | `STATE_BUCKET` | | The job's own bucket, `gs://<bucket>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |
