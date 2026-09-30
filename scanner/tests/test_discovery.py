@@ -308,9 +308,10 @@ def test_allow_by_tag(env: Env) -> None:
 
 def test_the_budget_defers_stores_and_the_next_run_starts_with_them(env: Env) -> None:
     names = [f"example-b{i}" for i in range(5)]
-    for n in names:
+    for i, n in enumerate(names):
+        # Bytes of their own: a copy across buckets would not be read (#67).
         bucket(env, n).put_object(
-            Bucket=n, Key="a.txt", Body=f"card {printed(CARDS['visa'])}".encode()
+            Bucket=n, Key="a.txt", Body=f"card {printed(CARDS['visa'])} in {i}".encode()
         )
     cfg = config(
         s3_targets=[],
