@@ -121,7 +121,8 @@ value shows up in findings, events, logs, exception messages or object reprs.
 - Version 1.11 ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67))
   narrows an adapter's version to its read path: `relisted` in coverage, when
   a change to how a store is listed made the run list it again from the start
-  (reading only what changed). All additive.
+  (reading only what changed); and the store recommendations
+  `s3_inventory_daily`, `blob_inventory` and `storage_insights`. All additive.
 
 ## Sources and modes (1.8)
 
@@ -902,7 +903,7 @@ coverage gap is visible rather than silent.
 | `engine`, `dbType`, `snapshotTime`, `exportStatus` | For RDS: the engine, cluster or instance, the snapshot read, and the export's state |
 | `readBy`, `pitr` | For DynamoDB: `export` when the table is read from an Export to S3; `pitr: false` when it is too large and has no point-in-time recovery |
 | `exportType` | (1.10) For DynamoDB read by export: `incremental` when this run's export holds only the items written since the last one |
-| `listedBy`, `recommendation` | (1.10) For S3: `listedBy: inventory` when the bucket's objects came from its own S3 Inventory report instead of a listing; `recommendation: s3_inventory` for a bucket large enough (`S3_INVENTORY_MIN_OBJECTS`) that an inventory would spare it a listing each pass. The scanner never creates one ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)) |
+| `listedBy`, `recommendation` | (1.10) For S3: `listedBy: inventory` when the bucket's objects came from its own S3 Inventory report instead of a listing; `recommendation: s3_inventory` for a bucket large enough (`S3_INVENTORY_MIN_OBJECTS`) that a daily inventory would spare it a listing each pass. (1.11) `recommendation: s3_inventory_daily` for a bucket read from a weekly inventory (a change can wait a week to be seen); `blob_inventory` for an Azure container past `AZURE_BLOB_INVENTORY_MIN_OBJECTS`, and `storage_insights` for a Cloud Storage bucket past `GCS_INVENTORY_MIN_OBJECTS`, whose inventory reports are designed and not read yet. The scanner never creates or changes one ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)) |
 | `deployment`, `database`, `state` | (1.3) `provisioned` or `serverless` (Redshift), `managed` or `serverless` (OpenSearch); the database connected to by default; and the store's state when that is why it was not read |
 | `resource`, `olderSnapshots` | (1.3) For EBS: `volume` or `snapshot`, and the earlier snapshots counted, not read; (1.5) for SageMaker, `feature_group` or `notebook_instance` |
 | `recoveryPoints` | (1.3) For a Backup vault: its recovery points by resource type |

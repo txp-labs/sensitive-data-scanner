@@ -501,3 +501,15 @@ def test_a_pass_resumes_mid_page_and_reads_each_blob_once() -> None:
     names = [n for n, _, _ in box.downloads]
     assert sorted(names) == sorted(set(names)) and len(names) == 7
     assert runs == 3 and cursor["watermark"]
+
+
+def test_a_large_container_is_named_for_a_blob_inventory() -> None:
+    """Blob Inventory is not built (#67, on demand): a container whose complete pass listed
+    at least AZURE_BLOB_INVENTORY_MIN_OBJECTS is named in the run summary, and listed as
+    before; a smaller one is not."""
+    t = tenant()
+    doc = run(t, AZURE_BLOB_INVENTORY_MIN_OBJECTS="5")
+    s = stores(doc)
+    assert s["contosolake/raw"]["recommendation"] == "blob_inventory"  # eight blobs listed
+    assert "recommendation" not in s["contosolake/curated"]  # one
+    assert "recommendation" not in stores(run(t))["contosolake/raw"]  # the default: a million
