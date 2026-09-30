@@ -117,6 +117,22 @@ class KeyClassifier:
         return encryption_facts(CUSTOMER_MANAGED_KEY, key_id)
 
 
+# The weakest first: what a store of many items says about all of them is its weakest item's.
+_STRENGTH = (NO_ENCRYPTION, UNKNOWN_ENCRYPTION, SERVICE_MANAGED, CUSTOMER_MANAGED_KEY)
+
+
+def weakest(items: list[dict[str, str]]) -> dict[str, str]:
+    """A store's facts from its items' (a Parameter Store of SecureString and String
+    parameters): the weakest item's encryption, with a key hash only when every item is
+    under that one key. No items: `unknown`."""
+    if not items:
+        return encryption_facts(UNKNOWN_ENCRYPTION)
+    low = min(items, key=lambda f: _STRENGTH.index(f.get("atRestEncryption", UNKNOWN_ENCRYPTION)))
+    if all(f == low for f in items):
+        return dict(low)
+    return encryption_facts(low.get("atRestEncryption", UNKNOWN_ENCRYPTION))
+
+
 def classifier(clients: Any) -> KeyClassifier:
     """The run's classifier, made on first use and kept with its clients."""
     made = clients.services.get(KEYS)

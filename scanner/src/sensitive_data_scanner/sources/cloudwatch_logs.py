@@ -15,6 +15,11 @@ the coverage says so (`partial`, one per window cut short).
 Lex V2 records are grouped by session within a window, so the bot's prompt in
 one record classes the customer's answer in the next.
 
+A group under a customer managed key is read through CloudWatch Logs, which
+decrypts with the scanner's credentials (`kms:Decrypt` through
+`logs.<region>.amazonaws.com`). A KMS denial ends the group's read for the
+run and is a coverage gap: `kmsDenied`, and the store's reason `kms_access`.
+
 A finding is one log event: group, stream and timestamp.
 """
 
@@ -29,7 +34,7 @@ from sensitive_data_core.detect.analyzer import Analysis, Detection, Detector
 from sensitive_data_core.engine.conversation import utf16_index
 from sensitive_data_core.findings import Coverage, Offset, finding_json
 from sensitive_data_core.parsers import Conversation, is_lex_record, parse_lex_records
-from sensitive_data_core.safety import error_name, log_event
+from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.item import ItemResult, _Collector, scan_log_event
 
 from ..resources import log_resource, logs_link
@@ -218,6 +223,10 @@ class CloudWatchLogsSource:
                     break
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
+            # A group under a customer managed key the scanner may not use (#94): a
+            # coverage gap (`kmsDenied`, reason `kms_access`), never a silent pass.
+            if is_kms_denial(err):
+                cov.kms_denied += 1
             log_event("source.failed", source=self.target, error=cov.error)
         cov.pass_complete = cov.error is None and start >= end
         cov.backlog = cov.error is None and start < end

@@ -97,7 +97,7 @@ Parameters:
     Default: "true"
     Description: >-
       Allow kms:Decrypt only through S3, DynamoDB, Kinesis, Step Functions,
-      Lambda, X-Ray and CodeCommit (kms:ViaService), so the
+      Lambda, X-Ray, CodeCommit and CloudWatch Logs (kms:ViaService), so the
       scanner can read stores encrypted with customer managed keys whose key
       policy allows the account. Without it, those stores are reported as
       kms_access.
@@ -1042,7 +1042,7 @@ Resources:
               Action: events:PutEvents
               Resource: !Ref FindingsEventBusArn
             - !Ref AWS::NoValue
-          # --- Customer managed keys, only through S3 and DynamoDB
+          # --- Customer managed keys, only through the services that read them
           - !If
             - KmsDecrypt
             - Sid: DecryptThroughS3AndDynamoDB
@@ -1059,6 +1059,9 @@ Resources:
                     - !Sub lambda.${AWS::Region}.amazonaws.com
                     - !Sub xray.${AWS::Region}.amazonaws.com
                     - !Sub codecommit.${AWS::Region}.amazonaws.com
+                    # A log group under a customer managed key: CloudWatch Logs decrypts
+                    # its events with the caller's credentials (#94).
+                    - !Sub logs.${AWS::Region}.amazonaws.com
             - !Ref AWS::NoValue
           - !If
             - MacieImport
@@ -1286,8 +1289,13 @@ Resources:
             Effect: Allow
             Action: iam:PassRole
             Resource: !GetAtt RdsExportRole.Arn
+            # StartExportTask evaluates the PassRole for RDS (`rds.amazonaws.com`), not for
+            # the export role's trust principal: conditioned on `export.rds.amazonaws.com`
+            # alone, every export was denied in a real account (#94). Either value still
+            # names RDS, and the resource is the export role only.
             Condition:
-              StringEquals: { iam:PassedToService: export.rds.amazonaws.com }
+              StringEquals:
+                iam:PassedToService: [rds.amazonaws.com, export.rds.amazonaws.com]
           - Sid: GrantOnTheExportKeyOnlyThroughRds
             Effect: Allow
             Action: kms:CreateGrant
