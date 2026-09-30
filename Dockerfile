@@ -32,7 +32,7 @@ RUN cd scanner \
  && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
- && /src/scripts/slim-site-packages.sh /opt/app \
+ && PYTHON=/usr/local/bin/python /src/scripts/slim-site-packages.sh /opt/app \
  && mkdir -p /opt/app/licenses \
  && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
  && cp -r /src/third_party /opt/app/licenses/
@@ -65,7 +65,7 @@ RUN cd scanner \
  && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
- && /src/scripts/slim-site-packages.sh /opt/app \
+ && PYTHON=/usr/local/bin/python /src/scripts/slim-site-packages.sh /opt/app \
  && mkdir -p /opt/app/licenses \
  && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
  && cp -r /src/third_party /opt/app/licenses/
@@ -110,7 +110,7 @@ RUN cd scanner \
  && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-azure --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
- && /src/scripts/slim-site-packages.sh /opt/app \
+ && PYTHON=/usr/local/bin/python /src/scripts/slim-site-packages.sh /opt/app \
  && mkdir -p /opt/app/licenses \
  && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
  && cp -r /src/third_party /opt/app/licenses/
@@ -160,7 +160,7 @@ RUN cd scanner \
  && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-gcp --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
- && /src/scripts/slim-site-packages.sh /opt/app \
+ && PYTHON=/usr/local/bin/python /src/scripts/slim-site-packages.sh /opt/app \
  && mkdir -p /opt/app/licenses \
  && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
  && cp -r /src/third_party /opt/app/licenses/
@@ -205,7 +205,7 @@ RUN cd scanner \
  && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-saas --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
- && /src/scripts/slim-site-packages.sh /opt/app \
+ && PYTHON=/usr/local/bin/python /src/scripts/slim-site-packages.sh /opt/app \
  && mkdir -p /opt/app/licenses \
  && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
  && cp -r /src/third_party /opt/app/licenses/

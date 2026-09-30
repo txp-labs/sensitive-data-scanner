@@ -29,6 +29,8 @@ from sensitive_data_core.rules import sampling_rules as _sampling_rules
 from sensitive_data_core.rules import store_rules as _store_rules
 from sensitive_data_core.scan.paths import parse_path
 
+from .events import bus_region
+
 
 def _list(v: str | None) -> list[str]:
     return [s.strip() for s in (v or "").split(",") if s.strip()]
@@ -62,6 +64,16 @@ def s3_targets(buckets: list[str], prefixes: list[str]) -> list[tuple[str, str]]
 
 
 _TABLE_NAME = re.compile(r"^[A-Za-z0-9_.-]{3,255}$")
+
+
+def _bus_arn(raw: str | None) -> str | None:
+    """`FINDINGS_EVENT_BUS_ARN`: an EventBridge bus ARN, in any region (#94), or unset."""
+    arn = (raw or "").strip() or None
+    if arn is not None:
+        bus_region(arn)
+    return arn
+
+
 _TARGET_FIELDS = frozenset(
     {
         "table",
@@ -567,7 +579,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         max_bytes_per_run=_int(e.get("MAX_BYTES_PER_RUN"), 2 * 1024**3, 1024, 50 * 1024**3),
         max_object_bytes=_int(e.get("MAX_OBJECT_BYTES"), 20 * 1024**2, 1024, 200 * 1024**2),
         max_inflated_bytes=_int(e.get("MAX_INFLATED_BYTES"), 100 * 1024**2, 1024, 500 * 1024**2),
-        event_bus_arn=e.get("FINDINGS_EVENT_BUS_ARN") or None,
+        event_bus_arn=_bus_arn(e.get("FINDINGS_EVENT_BUS_ARN")),
         s3_skew_seconds=_int(e.get("S3_CLOCK_SKEW_SECONDS"), 300, 0, 3600),
         dynamodb_targets=dynamodb_targets(e.get("SCAN_DYNAMODB")),
         dynamodb_page_size=_int(e.get("DYNAMODB_PAGE_SIZE"), 100, 1, 1000),

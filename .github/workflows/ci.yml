@@ -278,6 +278,26 @@ jobs:
           print("ok")
           '
 
+      - name: Cold start in the image (#94)
+        # Lambda gives init 10 s. The handler imports nothing heavy (the rest comes on the
+        # first invoke), and the image carries bytecode, so nothing is compiled at start on
+        # Lambda's read-only file system.
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --read-only --entrypoint python sensitive-data-scanner:ci -c '
+          import time
+          t = time.perf_counter()
+          import sensitive_data_scanner.handler, awslambdaric
+          init = time.perf_counter() - t
+          t = time.perf_counter()
+          import sensitive_data_scanner.runner
+          from sensitive_data_core.detect.analyzer import Detector
+          invoke = time.perf_counter() - t
+          print(f"init imports {init:.2f} s, first-invoke imports {invoke:.2f} s")
+          assert init < 3, init
+          assert invoke < 8, invoke
+          '
+
       - name: Build the databases runner image (every engine, and PostgreSQL and MySQL only)
         run: |
           set -euo pipefail

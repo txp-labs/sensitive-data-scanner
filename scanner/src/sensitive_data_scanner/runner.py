@@ -159,7 +159,11 @@ def _put_json(s3: S3Client, bucket: str, key: str, body: Any) -> None:
 
 
 def _take_lock(s3: S3Client, bucket: str, key: str, run_id: str) -> bool:
-    """A conditional put of the lock object; a lock older than 20 minutes is stale."""
+    """A conditional put of the lock object; a lock older than 20 minutes is stale.
+
+    One run at a time (#94): a second invoke while a run holds the lock (a CLI's retry of
+    a synchronous invoke, a manual run beside the schedule) returns `locked` and changes
+    nothing. A Lambda run ends within 15 minutes, so a live run's lock is never stale."""
 
     def put() -> None:
         s3.put_object(
@@ -182,6 +186,19 @@ def _take_lock(s3: S3Client, bucket: str, key: str, run_id: str) -> bool:
         return True
     except Exception:  # another run took it first
         return False
+
+
+def _release_lock(s3: S3Client, bucket: str, key: str, run_id: str) -> None:
+    """Delete the lock if it is still this run's. A lock another run took over (this one
+    ran past `LOCK_STALE_SECONDS`) is that run's to release (#94)."""
+    try:
+        held = _read_json(s3, bucket, key)
+        if isinstance(held, dict) and held.get("runId") not in (None, run_id):
+            log_event("run.lock_lost")
+            return
+        s3.delete_object(Bucket=bucket, Key=key)
+    except Exception as err:  # a stale lock expires by itself
+        log_event("run.failed", error=error_name(err))
 
 
 def _s3_source(
@@ -644,7 +661,4 @@ def run_scan(
         log_event("run.failed", error=name)
         raise ScanError(name) from None
     finally:
-        try:
-            clients.s3.delete_object(Bucket=bucket, Key=keys.lock)
-        except Exception as err:  # a stale lock expires by itself
-            log_event("run.failed", error=error_name(err))
+        _release_lock(clients.s3, bucket, keys.lock, run_id)
