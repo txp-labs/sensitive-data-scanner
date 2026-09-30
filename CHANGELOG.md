@@ -37,10 +37,42 @@ bumps the minor version. Spec changes are listed under **Spec**.
     without reading or sending anything.
 - The core's findings take per-store facts (`finding_json(..., facts=)`),
   added to each finding and never replacing a field: the hook for recording
-  at-rest encryption ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35)). Nothing fills it yet.
+  at-rest encryption ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35)).
+- **At-rest encryption on every finding** ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35)): each finding
+  says what storage encryption its data sat under, from the store's own
+  configuration: `atRestEncryption` is `none`, `service_managed`,
+  `customer_managed_key` or `unknown`, and a customer managed key is named
+  only by `atRestKeyHash`, the SHA-256 of its key id (never the id, the ARN
+  or an alias). Every existing AWS adapter fills it: an S3 object from its
+  own `x-amz-server-side-encryption` header (the bucket's default is in the
+  run summary), CloudWatch Logs, DynamoDB (and its exports), RDS and Aurora
+  (export and Data API), Redshift and Serverless, OpenSearch domains and
+  collections, EBS, Kinesis, SQS, Parameter Store (per parameter), Secrets
+  Manager (per secret), Timestream and Keyspaces; Firehose destinations and
+  Glue tables through their S3 objects. AWS managed keys are told from the
+  customer's by one `kms:ListAliases` per run. The databases runner fills it
+  where the engine can tell: SQL Server's TDE and its encryptor, MySQL and
+  MariaDB tables all created encrypted, Snowflake and Atlas; anything else is
+  `unknown`, since TDE off does not mean the disk is unencrypted.
+- **PCI DSS notes** ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35)): `pciNote` on every `cvv` finding
+  (3.3.1, prohibited storage after authorization, whatever the encryption)
+  and on every `card` finding under storage-level encryption (3.5.1.2,
+  storage-level encryption alone does not render PAN unreadable), worded as
+  guidance for the customer's QSA, who decides.
+
+### Security
+- The scanner's role gains three read actions, each for the encryption
+  facts: `s3:GetEncryptionConfiguration` (a bucket's default),
+  `kinesis:DescribeStreamSummary` (a stream's `EncryptionType`) and
+  `kms:ListAliases` (which keys are AWS managed; metadata only, the one KMS
+  action not conditioned on `kms:ViaService`, and the template test holds it
+  to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.4**, additive: `platform` and `site` (a
+- `schemaVersion` is now **1.5**, additive: `atRestEncryption`,
+  `atRestKeyHash` and `pciNote` on a finding, and `atRestEncryption` and
+  `atRestKeyHash` on a store in the run summary.
+- Version **1.4**, additive: `platform` and `site` (a
   databases document names its site in place of an AWS account and
   region), the `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`,
   `snowflake` and `databricks` kinds, the reasons `db_user_can_write`,

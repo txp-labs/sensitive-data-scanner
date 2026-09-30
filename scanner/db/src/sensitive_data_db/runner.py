@@ -29,7 +29,12 @@ from sensitive_data_core.adapter import Budget, FindingStore, column_findings
 from sensitive_data_core.coverage import Store, apply_rules, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
-from sensitive_data_core.findings import Coverage, findings_document, store_field_resource
+from sensitive_data_core.findings import (
+    Coverage,
+    encryption_facts,
+    findings_document,
+    store_field_resource,
+)
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import TableResult
@@ -80,6 +85,8 @@ def check_database(
         store.extra["writeGrants"] = sorted(grants.write)[:MAX_WRITE_GRANTS]
         _refuse(store, "db_user_can_write")
         return store, None
+    # Only once the user is known to be read-only: what the database says of its storage.
+    store.facts = encryption_facts(session.encryption())
     return store, session
 
 
@@ -109,7 +116,7 @@ def _read(
             )
 
         location = f"{db.engine}:{db.name}\n{schema}\n{table}"
-        for f in column_findings(result, resource, None, seen_at):
+        for f in column_findings(result, resource, None, seen_at, facts=store.facts):
             findings.put(location, f)
 
     log_event("source.start", source=db.name, kind=db.engine)

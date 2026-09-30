@@ -33,6 +33,8 @@ COLLECTION_ENDPOINT = "abc123.us-west-2.aoss.amazonaws.com"
 def valid(doc: dict[str, Any]) -> None:
     errors = [f"{list(e.path)}: {e.message}" for e in SCHEMA.iter_errors(doc)]
     assert errors == []
+    # Every finding the runner writes says what storage encryption it sat under (1.5).
+    assert all("atRestEncryption" in f for f in doc["findings"])
 
 
 def stores(doc: dict[str, Any]) -> dict[str, dict[str, Any]]:

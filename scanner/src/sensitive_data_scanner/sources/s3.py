@@ -31,6 +31,11 @@ need pyarrow (the container image); the Lambda zip counts them as skipped
 A **catalog table** (a Glue table, `catalog` set) is this source over the
 table's S3 location: its findings also name the database and table, and a
 CSV or JSON table is read by the catalog's columns.
+
+**Encryption (1.5).** With a key classifier (`keys`), each object's findings
+carry the encryption it is stored under, from the `x-amz-server-side-encryption`
+header of the GetObject that read it (`encryption.s3_object_facts`): the
+object's own, which the bucket's default may postdate.
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_
 from sensitive_data_core.scan.raw import printable_text
 
 from ..resources import s3_link, s3_resource
+from .encryption import KeyClassifier, s3_object_facts
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
@@ -113,6 +119,7 @@ class S3RangeFile(io.RawIOBase):
         self.pos = 0
         self.bytes_read = 0
         self.cut = False
+        self.headers: dict[str, Any] | None = None  # the first GET's encryption headers
 
     def readable(self) -> bool:
         return True
@@ -152,11 +159,17 @@ class S3RangeFile(io.RawIOBase):
         r = self.client.get_object(**args)
         if self.version_id is None:
             self.version_id = r.get("VersionId") or "null"
+        if self.headers is None:
+            self.headers = {k: r.get(k) for k in _SSE_HEADERS}
         data = r["Body"].read()
         b[: len(data)] = data
         self.pos += len(data)
         self.bytes_read += len(data)
         return len(data)
+
+
+# GetObject's encryption headers (the object's own, 1.5).
+_SSE_HEADERS = ("ServerSideEncryption", "SSEKMSKeyId")
 
 
 def _compression(key: str) -> str | None:
@@ -208,8 +221,13 @@ class S3Source:
         delimiter: str = ",",
         skip_header: int = 0,
         columnar: bool | None = None,
+        keys: KeyClassifier | None = None,
     ) -> None:
         self.client = client
+        self.keys = keys
+        # Set per object from its headers when `keys` is given; else the store's (runner.plan).
+        self.facts: dict[str, Any] | None = None
+        self._object_facts: dict[str, Any] | None = None
         self.bucket = bucket
         self.prefix = prefix
         self.region = region
@@ -244,8 +262,17 @@ class S3Source:
         if partial:
             args["Range"] = f"bytes=0-{self.max_object_bytes - 1}"
         r = self.client.get_object(**args)
+        self._headers(dict(r))
         data = r["Body"].read()
         return data, len(data), r.get("VersionId"), partial
+
+    def _headers(self, response: dict[str, Any] | None) -> None:
+        """The object's own encryption, from the headers of the GET that read it."""
+        if self.keys is not None and response is not None:
+            self._object_facts = s3_object_facts(self.keys, response)
+
+    def _facts(self) -> dict[str, Any] | None:
+        return self._object_facts if self._object_facts is not None else self.facts
 
     def _text(self, key: str, data: bytes, cov: Coverage) -> str | None:
         compression = _compression(key)
@@ -302,6 +329,8 @@ class S3Source:
                 self._skip(cov, "columnar")  # the cap fell before a single batch
                 return None
             raise
+        if raw is not None:
+            self._headers(raw.headers)
         if raw is not None and raw.cut:
             result.partial = True
         if result.partial:
@@ -437,6 +466,7 @@ class S3Source:
         kind = columnar_kind(key)
         head: bytes | None = None
         version: str | None = None
+        self._object_facts = None
         if kind is None:
             head, read, version, partial = self._read(key, size, cov)
             kind = sniff(head) if _compression(key) is None else None
@@ -534,7 +564,9 @@ class S3Source:
             else None
         )
         findings = [
-            finding_json(resource, link, item.format, cf, seen_at, connect=connect)
+            finding_json(
+                resource, link, item.format, cf, seen_at, connect=connect, facts=self._facts()
+            )
             for cf in item.findings.values()
             if cf.count or cf.occurrences
         ]
@@ -562,7 +594,7 @@ class S3Source:
         for column, item in sorted(table.by_column.items()):
             resource = s3_resource(self.bucket, key, version, column=column, catalog=self.catalog)
             findings.extend(
-                finding_json(resource, link, table.format, cf, seen_at)
+                finding_json(resource, link, table.format, cf, seen_at, facts=self._facts())
                 for cf in item.findings.values()
                 if cf.count or cf.occurrences
             )

@@ -48,6 +48,7 @@ from sensitive_data_core.scan.item import looks_binary, scan_item_text
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
+from .encryption import classifier
 from .exports import drop_other_passes, merge
 from .s3 import S3Source
 
@@ -77,6 +78,7 @@ class _Sampled:
     """What the Kinesis and SQS sources share: one pass of reads merged into findings."""
 
     kind = ""
+    facts: dict[str, Any] | None = None  # the stream's or queue's encryption (1.5)
 
     def __init__(self, name: str, service: str, field: str, read_by: str, region: str) -> None:
         self.name = name
@@ -97,7 +99,9 @@ class _Sampled:
         cov.test_values += item.test_values
         cov.suppressed += item.suppressed
         cov.redaction_markers += item.redaction_markers
-        for f in class_findings(item.findings, self.resource, p.link, item.format, p.seen_at):
+        for f in class_findings(
+            item.findings, self.resource, p.link, item.format, p.seen_at, facts=self.facts
+        ):
             merge(p.store, f"{self.id}\n{self.name}", f, p.pass_id)
 
 
@@ -118,6 +122,18 @@ def _tags(raw: list[dict[str, Any]] | None) -> dict[str, str]:
 
 
 # ------------------------------------------------------------------ Kinesis
+
+
+def _stream_facts(ctx: Context, kinesis: Any, name: str) -> dict[str, str]:
+    """A stream's `EncryptionType` and key (DescribeStreamSummary); `unknown` if unreadable."""
+    keys = classifier(ctx.clients)
+    try:
+        d = kinesis.describe_stream_summary(StreamName=name)["StreamDescriptionSummary"]
+    except Exception:  # the stream is still read; its findings say `unknown`
+        return keys.facts(encrypted=None)
+    if str(d.get("EncryptionType") or "NONE") != "KMS":
+        return keys.facts(encrypted=False)
+    return keys.facts(key=d.get("KeyId"))
 
 
 class KinesisAdapter:
@@ -143,6 +159,8 @@ class KinesisAdapter:
                     except Exception as err:
                         tag_error = error_name(err)
                 decide(store, ctx.config, tag_error)
+                if store.status == "pending":
+                    store.facts = _stream_facts(ctx, kinesis, name)
 
     def source(self, ctx: Context, store: Store) -> KinesisSource:
         return KinesisSource(
@@ -376,12 +394,23 @@ class FirehoseAdapter:
                     if store.max_per_prefix is not None
                     else c.s3_max_objects_per_prefix,
                     max_rows=c.columnar_max_rows,
+                    keys=classifier(ctx.clients),
                 )
             )
         return out
 
 
 # ------------------------------------------------------------------ SQS dead-letter queues
+
+
+def _queue_facts(ctx: Context, a: dict[str, Any]) -> dict[str, str]:
+    """A queue's `KmsMasterKeyId` (SSE-KMS) or `SqsManagedSseEnabled` (SSE-SQS); neither: none."""
+    keys = classifier(ctx.clients)
+    if a.get("KmsMasterKeyId"):
+        return keys.facts(key=str(a["KmsMasterKeyId"]))
+    if str(a.get("SqsManagedSseEnabled") or "").lower() == "true":
+        return keys.facts(aws_owned=True)
+    return keys.facts(encrypted=False)
 
 
 class SqsAdapter:
@@ -438,6 +467,7 @@ class SqsAdapter:
                 store.skip("live_queue")  # never read: a receive would reach live consumers
                 continue
             store.extra["deadLetterQueue"] = True
+            store.facts = _queue_facts(ctx, a)
             if not ctx.config.sqs_dlq_read:
                 store.skip("read_not_configured")
                 continue

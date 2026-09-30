@@ -578,3 +578,90 @@ def test_the_new_dialects_quote_and_cap() -> None:
     assert "table_type IN ('MANAGED', 'EXTERNAL')" in tables_sql(DATABRICKS, ())[0]
     assert "table_schema NOT IN ('sys', 'INFORMATION_SCHEMA')" in tables_sql(SQLSERVER, ())[0]
     assert re.search(r"%\(s0\)s", tables_sql(SNOWFLAKE, ("PUBLIC",))[0])
+
+
+# ------------------------------------------------------------------ at-rest encryption (1.5)
+
+
+def sqlserver_ro(tde: list[dict[str, Any]] | Exception, encryptor: Any = None) -> Db:
+    db = Db(tables={("dbo", "people"): people()})
+    db.on(
+        r"IS_SRVROLEMEMBER", [{"sysadmin": 0, "db_owner": 0, "db_datawriter": 0, "db_ddladmin": 0}]
+    )
+    db.on(r"fn_my_permissions", [{"permission_name": "SELECT"}])
+    db.on(r"HAS_PERMS_BY_NAME", [{"objects": 0}])
+    db.on(r"is_encrypted", tde)
+    db.on(r"dm_database_encryption_keys", encryptor or PermissionError("VIEW DATABASE STATE"))
+    return db
+
+
+@pytest.mark.parametrize(
+    ("tde", "encryptor", "expected"),
+    [
+        # SQL Server: TDE with the customer's certificate, or its key in an EKM provider.
+        ([{"is_encrypted": 1, "edition": 3}], [{"encryptor_type": "CERTIFICATE"}], "customer"),
+        ([{"is_encrypted": 1, "edition": 2}], None, "customer"),
+        # Azure SQL: the service's certificate, or the customer's key in Key Vault.
+        ([{"is_encrypted": 1, "edition": 5}], [{"encryptor_type": "CERTIFICATE"}], "service"),
+        ([{"is_encrypted": 1, "edition": 8}], [{"encryptor_type": "ASYMMETRIC KEY"}], "customer"),
+        ([{"is_encrypted": 1, "edition": 5}], None, "unknown"),
+        # TDE off is not `none`: the host's disk may be encrypted.
+        ([{"is_encrypted": 0, "edition": 3}], None, "unknown"),
+        (PermissionError("denied"), None, "unknown"),
+    ],
+)
+def test_sqlserver_tde_is_the_findings_encryption(tde: Any, encryptor: Any, expected: str) -> None:
+    names = {
+        "customer": "customer_managed_key",
+        "service": "service_managed",
+        "unknown": "unknown",
+    }
+    driver = Driver(sqlserver_ro(tde, encryptor))
+    doc = scan(env(crm=f"sqlserver://ro:{MADE_UP_PW}@sql.internal/crm"), {"sqlserver": driver})
+    valid(doc)
+    card = next(f for f in doc["findings"] if f["class"] == "card")
+    assert card["atRestEncryption"] == names[expected]
+    assert stores(doc)["crm"]["atRestEncryption"] == names[expected]
+    assert "atRestKeyHash" not in card  # a database names no key
+    if expected == "unknown":
+        assert "pciNote" not in card
+    else:
+        assert card["pciNote"]["requirement"] == "3.5.1.2"
+    only_reads(driver)
+
+
+def test_mysql_every_table_encrypted_snowflake_and_atlas() -> None:
+    db = mysql_db(["GRANT SELECT ON `orders`.* TO `ro`@`%`"])
+    db.on(r"CREATE_OPTIONS", [{"tables_total": 3, "tables_encrypted": 3}])
+    doc = scan(env(orders="mysql://ro:pw@db/orders"), {"mysql": Driver(db)})
+    assert {f["atRestEncryption"] for f in doc["findings"]} == {"customer_managed_key"}
+    part = mysql_db(["GRANT SELECT ON `orders`.* TO `ro`@`%`"])
+    part.on(r"CREATE_OPTIONS", [{"tables_total": 3, "tables_encrypted": 2}])
+    doc = scan(env(orders="mysql://ro:pw@db/orders"), {"mysql": Driver(part)})
+    assert {f["atRestEncryption"] for f in doc["findings"]} == {"unknown"}
+
+    sf = Db(tables={("PUBLIC", "PEOPLE"): people()})
+    sf.on(r"CURRENT_ROLE", [{"ROLE": "READER", "NAME": "SCANNER"}])
+    sf.on(r"SHOW GRANTS TO USER", [{"role": "READER"}])
+    sf.on(r"SHOW GRANTS TO ROLE", [{"privilege": "SELECT", "granted_on": "TABLE", "name": "T"}])
+    url = f"snowflake://scanner:{MADE_UP_PW}@xy12345.us-east-1/APP?warehouse=W&role=READER"
+    doc = scan(env(dw=url), {"snowflake": Driver(sf)})
+    assert {f["atRestEncryption"] for f in doc["findings"]} == {"service_managed"}
+
+    def mongo(url: str) -> dict[str, Any]:
+        orders = Collection([{"card": CARDS["amex"]}])
+        client = MongoClient({"shop": MongoDb({"orders": orders})}, read_only_mongo_status())
+        return scan(env(m=url), {"mongodb": MongoDriver(client)})
+
+    atlas = mongo(f"mongodb+srv://ro:{MADE_UP_PW}@cluster0.ab1cd.mongodb.net/shop")
+    assert atlas["findings"][0]["atRestEncryption"] == "service_managed"
+    own = mongo("mongodb://ro:pw@h1.mongodb.net:27017,h2.internal:27017/shop?replicaSet=rs0")
+    assert own["findings"][0]["atRestEncryption"] == "unknown"
+
+
+def test_postgresql_findings_say_unknown() -> None:
+    driver = Driver(pg_db())
+    doc = scan(env(app=f"postgresql://ro:{MADE_UP_PW}@db/app"), {"postgresql": driver})
+    valid(doc)
+    assert {f["atRestEncryption"] for f in doc["findings"]} == {"unknown"}
+    assert not any("pciNote" in f for f in doc["findings"] if f["class"] == "card")

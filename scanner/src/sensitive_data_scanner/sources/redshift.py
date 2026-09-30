@@ -48,6 +48,7 @@ from sensitive_data_core.scan.sql import REDSHIFT, Params, sample_tables
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
+from .encryption import classifier
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).
@@ -108,6 +109,9 @@ class RedshiftAdapter:
                 store.extra.update(deployment="provisioned", database=str(c.get("DBName") or "dev"))
                 store.tags = _tags(c.get("Tags"))
                 out.stores.append(store)
+                store.facts = classifier(ctx.clients).facts(
+                    encrypted=bool(c.get("Encrypted")), key=c.get("KmsKeyId")
+                )
                 state = str(c.get("ClusterStatus") or "")
                 if state == "paused":
                     store.skip("paused")  # a query would not resume it; reported instead
@@ -121,9 +125,11 @@ class RedshiftAdapter:
     def _workgroups(self, ctx: Context, out: Discovery) -> None:
         sl = ctx.clients.client("redshift-serverless")
         dbs: dict[str, str] = {}
+        keys: dict[str, str | None] = {}
         for page in sl.get_paginator("list_namespaces").paginate():
             for n in page.get("namespaces", []):
                 dbs[str(n.get("namespaceName"))] = str(n.get("dbName") or "dev")
+                keys[str(n.get("namespaceName"))] = n.get("kmsKeyId")
         for page in sl.get_paginator("list_workgroups").paginate():
             for w in page.get("workgroups", []):
                 store = Store("redshift", str(w["workgroupName"]))
@@ -132,6 +138,11 @@ class RedshiftAdapter:
                     database=dbs.get(str(w.get("namespaceName")), "dev"),
                 )
                 out.stores.append(store)
+                # Serverless always encrypts: an AWS owned key, or the namespace's KMS key.
+                key = keys.get(str(w.get("namespaceName")))
+                store.facts = classifier(ctx.clients).facts(
+                    key=key, aws_owned=key in (None, "AWS_OWNED_KMS_KEY")
+                )
                 state = str(w.get("status") or "")
                 if state != "AVAILABLE":
                     store.skip("unsupported")
@@ -166,6 +177,7 @@ class RedshiftSource:
     """One cluster or workgroup: each database's tables, sampled, over the Data API."""
 
     kind = "redshift"
+    facts: dict[str, Any] | None = None  # the cluster's or namespace's encryption (1.5)
 
     def __init__(
         self,
@@ -300,6 +312,7 @@ class RedshiftSource:
                         ),
                         link,
                         seen_at,
+                        facts=self.facts,
                     )
                     for f in findings:
                         f["_pass"] = pass_id

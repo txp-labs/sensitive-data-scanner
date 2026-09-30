@@ -20,6 +20,10 @@ An allow list and a deny list (`DISCOVER_ALLOW`, `DISCOVER_DENY`) narrow what
 is read, by name glob or by tag. A deny rule wins over an allow rule. The
 scanner's own results bucket and log group are never read.
 
+Each store to be read also gets the storage encryption its own configuration
+names (`atRestEncryption`, sources/encryption.py): the bucket's default, the log
+group's key, the table's `SSEDescription`, the cluster's `StorageEncrypted`.
+
 Every store listed is reported in the run's summary
 (`sensitive_data_core.coverage`), **including the ones not read and why**
 (`denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `kms_access`,
@@ -43,6 +47,13 @@ from sensitive_data_core.rules import StoreRule
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 
 from .config import Config
+from .sources.encryption import (
+    classifier,
+    dynamodb_facts,
+    log_group_facts,
+    rds_facts,
+    s3_bucket_facts,
+)
 from .sources.rds import EXPORTABLE_ENGINES
 
 if TYPE_CHECKING:
@@ -96,6 +107,18 @@ def _s3_tags(clients: Clients, bucket: str) -> dict[str, str]:
             return {}
         raise
     return _tag_list(r.get("TagSet"))  # type: ignore[arg-type]
+
+
+def _s3_default(clients: Clients, bucket: str) -> list[dict[str, Any]] | None:
+    """The bucket's default encryption rules; [] when it has none, None when unreadable."""
+    try:
+        r = clients.s3.get_bucket_encryption(Bucket=bucket)
+    except Exception as err:
+        if error_name(err) == "ServerSideEncryptionConfigurationNotFoundError":
+            return []
+        return None
+    rules = (r.get("ServerSideEncryptionConfiguration") or {}).get("Rules") or []
+    return [dict(x) for x in rules]
 
 
 def _logs_tags(clients: Clients, arn: str) -> dict[str, str]:
@@ -154,6 +177,8 @@ def _discover_s3(config: Config, clients: Clients, region: str, out: Discovery) 
                 store.skip("self")
                 continue
             _with_tags(store, config, _s3_tags, clients, name)
+            if store.status == "pending":
+                store.facts = s3_bucket_facts(classifier(clients), _s3_default(clients, name))
 
 
 def _discover_logs(config: Config, clients: Clients, out: Discovery) -> None:
@@ -173,6 +198,8 @@ def _discover_logs(config: Config, clients: Clients, out: Discovery) -> None:
                 continue
             arn = str(g.get("logGroupArn") or str(g.get("arn", "")).removesuffix(":*"))
             _with_tags(store, config, _logs_tags, clients, arn)
+            if store.status == "pending":
+                store.facts = log_group_facts(classifier(clients), dict(g))
 
 
 def _discover_dynamodb(config: Config, clients: Clients, out: Discovery) -> None:
@@ -210,6 +237,7 @@ def _discover_dynamodb(config: Config, clients: Clients, out: Discovery) -> None
         _with_tags(store, config, _ddb_tags, clients, str(desc.get("TableArn", "")))
         if store.status != "pending":
             continue
+        store.facts = dynamodb_facts(classifier(clients), dict(desc.get("SSEDescription") or {}))
         pct = store.sample_percent or 100
         cap = config.dynamodb_max_table_bytes
         if cap and store.size_bytes * pct // 100 > cap:
@@ -380,8 +408,17 @@ def _glue_table(
     _with_tags(store, config, _glue_tags, clients, arn)
 
 
-def _rds_store(config: Config, identifier: str, db_type: str, engine: str, tags: Any) -> Store:
+def _rds_store(
+    config: Config,
+    identifier: str,
+    db_type: str,
+    engine: str,
+    tags: Any,
+    *,
+    facts: dict[str, str],
+) -> Store:
     store = Store("rds", identifier)
+    store.facts = facts
     store.extra.update(engine=engine, dbType=db_type)
     store.tags = _tag_list(tags)
     if engine not in EXPORTABLE_ENGINES:
@@ -409,6 +446,7 @@ def _discover_rds(config: Config, clients: Clients, out: Discovery) -> None:
                     "cluster",
                     str(c.get("Engine", "")),
                     c.get("TagList"),
+                    facts=rds_facts(classifier(clients), dict(c)),
                 )
             )
     for ipage in clients.rds.get_paginator("describe_db_instances").paginate():
@@ -422,6 +460,7 @@ def _discover_rds(config: Config, clients: Clients, out: Discovery) -> None:
                     "instance",
                     str(i.get("Engine", "")),
                     i.get("TagList"),
+                    facts=rds_facts(classifier(clients), dict(i)),
                 )
             )
 

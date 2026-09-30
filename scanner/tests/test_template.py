@@ -79,13 +79,14 @@ def actions(s: dict[str, Any]) -> list[str]:
 ALLOWED = [a for s in statements() if s["Effect"] == "Allow" for a in actions(s)]
 READ = re.compile(
     r"^(s3:(List|Get)|logs:(Describe|FilterLogEvents|ListTags)|dynamodb:(List|Describe|Scan|Query)"
-    r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|secretsmanager:GetSecretValue$"
+    r"|glue:Get|rds:Describe|kms:Decrypt$|kms:DescribeKey$|kms:ListAliases$"
+    r"|secretsmanager:GetSecretValue$"
     r"|redshift:DescribeClusters$|redshift-serverless:List"
     r"|redshift-data:(DescribeStatement|GetStatementResult|ListDatabases)$"
     r"|es:(ListDomainNames|DescribeDomains|ListTags|ESHttpGet)$|aoss:(List|BatchGet)"
     r"|ec2:Describe(Volumes|Snapshots)$|ebs:(ListSnapshotBlocks|GetSnapshotBlock)$|backup:List"
     r"|elasticfilesystem:Describe|fsx:Describe|docdb-elastic:List"
-    r"|kinesis:(List|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
+    r"|kinesis:(List|DescribeStreamSummary$|GetShardIterator$|GetRecords$)|firehose:(List|Describe)"
     r"|sqs:(ListQueues|GetQueueAttributes|ListQueueTags)$"
     r"|ssm:(DescribeParameters|GetParameters|GetParameter|ListTagsForResource)$"
     r"|secretsmanager:ListSecrets$"
@@ -179,9 +180,15 @@ def test_every_allow_is_a_read_or_an_aimed_write() -> None:
 
 
 def test_kms_is_used_only_through_a_service() -> None:
+    """Every key use goes through a service; the one exception is listing the account's aliases,
+    which names keys and uses none (to tell AWS managed keys from the customer's, #35)."""
     for s in statements():
-        if s["Effect"] == "Allow" and any(a.startswith("kms:") for a in actions(s)):
-            assert "kms:ViaService" in s["Condition"]["StringEquals"], s.get("Sid")
+        if s["Effect"] != "Allow" or not any(a.startswith("kms:") for a in actions(s)):
+            continue
+        if actions(s) == ["kms:ListAliases"]:
+            assert s["Sid"] == "ListKmsAliases" and s["Resource"] == "*"
+            continue
+        assert "kms:ViaService" in s["Condition"]["StringEquals"], s.get("Sid")
 
 
 def test_denies_keep_writes_home_and_lake_formation_out() -> None:
@@ -261,6 +268,7 @@ S3_ACTIONS = {
     "ListBuckets": "s3:ListAllMyBuckets",
     "HeadObject": "s3:GetObject",
     "DeleteObjects": "s3:DeleteObject",
+    "GetBucketEncryption": "s3:GetEncryptionConfiguration",
 }
 SERVICES = {
     "s3": "s3",
@@ -294,6 +302,7 @@ SERVICES = {
     "timestream-query": "timestream",
     "timestream-influxdb": "timestream-influxdb",
     "keyspaces": "cassandra",
+    "kms": "kms",
 }
 
 

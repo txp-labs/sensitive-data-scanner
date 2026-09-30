@@ -34,6 +34,7 @@ _INTERNAL = frozenset(
         "s3Locations",
         "names",
         "tableName",
+        "itemFacts",
     }
 )
 
@@ -58,6 +59,10 @@ class Store:
     extra: dict[str, Any] = field(default_factory=dict)
     # An adapter's own description of where the store's rows are (AWS: a Glue table).
     table: Any = None
+    # What the store's own configuration says about all of its data (1.5: `atRestEncryption`
+    # and `atRestKeyHash`, `findings.encryption_facts`). Its sources give each finding these,
+    # and the run summary shows them.
+    facts: dict[str, Any] = field(default_factory=dict)
 
     def skip(self, reason: str, error: str | None = None) -> None:
         self.status = "skipped"
@@ -92,6 +97,9 @@ class Store:
             if k in _INTERNAL:
                 continue
             out[k] = redact_digits(v) if isinstance(v, str) else v
+        for k in ("atRestEncryption", "atRestKeyHash"):
+            if self.facts.get(k):
+                out[k] = self.facts[k]
         return out
 
 

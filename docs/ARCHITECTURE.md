@@ -960,6 +960,33 @@ values masked the way S3 object keys are. Like the S3 source's resume key,
 the cursor in `state/` holds the last key read, and `state/` is the
 scanner's own.
 
+### At-rest encryption on every finding
+
+Each store's adapter reads the storage encryption its data sits under from
+the listing it already makes, and every finding carries it
+(`atRestEncryption`: `none`, `service_managed`, `customer_managed_key` or
+`unknown`; a customer's key named only by `atRestKeyHash`, the SHA-256 of its
+key id), with a PCI DSS note for the assessor on `card` and `cvv` findings
+([FINDINGS.md](FINDINGS.md#at-rest-encryption-and-pci-dss-notes-15) has the
+table of where each store's value comes from, and the notes).
+
+- **S3** reads it per object, from the `x-amz-server-side-encryption` header
+  of the GET that read it, because an object stored before its bucket's
+  default encryption is still unencrypted. The bucket's default
+  (`GetBucketEncryption`) is on the store in the run summary.
+- **AWS managed or the customer's.** An AWS managed key (`aws/s3`,
+  `aws/ebs`, ...) and a customer managed key look alike in most services'
+  descriptions. One `kms:ListAliases` per run and region lists the key ids
+  behind the `alias/aws/*` aliases; any other key is the customer's. Without
+  it, a key is `unknown`, with its hash. No key is described or used.
+- **Configured stores** look theirs up once: a DynamoDB table in its own
+  `DescribeTable`, a log group with `DescribeLogGroups`, a Data API cluster
+  with `DescribeDBClusters`. A lookup that fails leaves the findings without
+  the field; the read goes on.
+- The core (`sensitive_data_core.findings`) adds `pciNote` from the class
+  and the store's value; the databases runner fills the value from what each
+  engine reports ([DATABASES.md](DATABASES.md)).
+
 ### Permissions (least privilege)
 
 - **Read**, on the named stores only:
@@ -1020,7 +1047,7 @@ named resources because the stores are not known in advance. They are read-only:
 
 | Kind | Actions | Resource |
 |---|---|---|
-| `s3` | `s3:ListAllMyBuckets`; `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`; `s3:GetBucketTagging` only with tag rules | `*` (buckets `arn:aws:s3:::*`, objects `arn:aws:s3:::*/*`) |
+| `s3` | `s3:ListAllMyBuckets`; `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`; `s3:GetEncryptionConfiguration` (the bucket's default encryption, for the run summary); `s3:GetBucketTagging` only with tag rules | `*` (buckets `arn:aws:s3:::*`, objects `arn:aws:s3:::*/*`) |
 | `logs` | `logs:DescribeLogGroups`, `logs:FilterLogEvents`; `logs:ListTagsForResource` only with tag rules | `*` |
 | `dynamodb` | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`; `dynamodb:ListTagsOfResource` only with tag rules | `*` |
 | `glue` | `glue:GetDatabases`, `glue:GetTables`; `glue:GetTags` only with tag rules; plus the S3 read actions on each table's location | `*` (catalog, databases and tables) |
@@ -1031,12 +1058,13 @@ named resources because the stores are not known in advance. They are read-only:
 | `redshift` | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `redshift-serverless:ListNamespaces`; `redshift-serverless:ListTagsForResource` only with tag rules | `*` |
 | `opensearch` | `es:ListDomainNames`, `es:DescribeDomains`, `aoss:ListCollections`, `aoss:BatchGetCollection`; `es:ListTags`, `aoss:ListTagsForResource` only with tag rules; `es:ESHttpGet` on the domains; with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on the collections | `*`; this account's domains and collections |
 | `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx` | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `rds:DescribeDBClusters`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`; with `EbsDirectRead`, `ebs:ListSnapshotBlocks` and `ebs:GetSnapshotBlock` on this region's snapshots, and `kms:Decrypt` through EBS | `*`; `snapshot/*` |
-| `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
+| `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:DescribeStreamSummary` (the stream's encryption), `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
 | `ssm`, `secretsmanager` | `ssm:DescribeParameters`, `ssm:GetParameters` (on this account's parameters), `secretsmanager:ListSecrets`; `ssm:ListTagsForResource` only with tag rules; with `SsmDecrypt`, `kms:Decrypt` through SSM; with `SecretsRead`, `secretsmanager:GetSecretValue` on this account's secrets and `kms:Decrypt` through Secrets Manager | `*`; the ARNs named |
 | `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
 | KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
+| Encryption facts (1.5) | `kms:ListAliases`, once per run: which key ids are AWS managed (`alias/aws/*`), so each store's key is told apart ([At-rest encryption](#at-rest-encryption-on-every-finding)). No key is described or used | `*` |
 
 A deny list in configuration is not an IAM boundary. To keep the scanner
 out of a store for certain, deny it in IAM as well (an explicit `Deny` on
@@ -1156,12 +1184,13 @@ several things:
 | Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` (it lists `exports/`, and it makes a missing state file a 404, not a 403) | the results bucket and its objects | |
 | Its configuration document, with `ConfigLocation` in SSM | `ssm:GetParameter` | parameters under `/sensitive-data-scanner/` in this account and region | |
 | Its own logs | `logs:CreateLogStream`, `logs:PutLogEvents` | its log group | |
-| S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
+| S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`, `s3:GetEncryptionConfiguration`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
 | CloudWatch Logs | `logs:DescribeLogGroups`, `logs:FilterLogEvents`, `logs:ListTagsForResource` | `*` | |
 | DynamoDB | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`, `dynamodb:Query`, `dynamodb:ListTagsOfResource` | `*` | |
 | Glue Data Catalog | `glue:GetDatabases`, `glue:GetTables`, `glue:GetTags` | `*` | |
 | RDS and Aurora (discovery) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBClusterSnapshots`, `rds:DescribeDBSnapshots`, `rds:DescribeExportTasks` | `*` | |
 | KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>`, `dynamodb.<region>` or `kinesis.<region>` (`AllowKmsDecrypt`) |
+| KMS aliases (1.5) | `kms:ListAliases` | `*` | The one KMS action with no `kms:ViaService`: it lists names and names no key material (`ListKmsAliases`) |
 | Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
 | RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
 | | `iam:PassRole` | the export role only | `iam:PassedToService` is `export.rds.amazonaws.com` |
@@ -1183,7 +1212,7 @@ several things:
 | Snapshots, backups, file systems (discovery) | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource` (DocumentDB and Neptune clusters use `rds:DescribeDBClusters`, above) | `*` | |
 | EBS snapshot blocks (opt-in) | `ebs:ListSnapshotBlocks`, `ebs:GetSnapshotBlock` | this region's `snapshot/*` | only with `EbsDirectRead` |
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `ebs.<region>` or `ec2.<region>`; only with `EbsDirectRead` |
-| Streams and queues | `kinesis:ListStreams`, `kinesis:ListShards`, `kinesis:ListTagsForStream`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sqs:ListQueueTags` | `*` | Firehose destinations are read with the S3 statements |
+| Streams and queues | `kinesis:ListStreams`, `kinesis:DescribeStreamSummary`, `kinesis:ListShards`, `kinesis:ListTagsForStream`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sqs:ListQueueTags` | `*` | Firehose destinations are read with the S3 statements |
 | SQS dead-letter queues (opt-in) | `sqs:ReceiveMessage` | this account's queues in the region (`sqs:<region>:<account>:*`) | only with `SqsDlqRead`; the code receives from dead-letter queues only |
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `sqs.<region>`; only with `SqsDlqRead` |
 | Parameter Store and Secrets Manager (listing) | `ssm:DescribeParameters`, `ssm:ListTagsForResource`, `secretsmanager:ListSecrets` | `*` | |

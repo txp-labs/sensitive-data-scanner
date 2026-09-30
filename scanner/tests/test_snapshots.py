@@ -34,6 +34,8 @@ T2 = dt.datetime(2026, 9, 29, 6, 0, tzinfo=dt.UTC)
 def valid(doc: dict[str, Any]) -> None:
     errors = [f"{list(e.path)}: {e.message}" for e in SCHEMA.iter_errors(doc)]
     assert errors == []
+    # Every finding the runner writes says what storage encryption it sat under (1.5).
+    assert all("atRestEncryption" in f for f in doc["findings"])
 
 
 def stores(doc: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:

@@ -37,6 +37,7 @@ from sensitive_data_core.scan.item import scan_item_text
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
+from .encryption import classifier
 from .exports import drop_other_passes
 
 # The services this module calls (test_template.py checks every call against them).
@@ -98,6 +99,15 @@ class SsmAdapter:
             return {str(t["Key"]): str(t.get("Value", "")) for t in r.get("TagList", [])}
 
         secure = {str(p["Name"]) for p in params if p.get("Type") == "SecureString"}
+        keys = classifier(ctx.clients)
+        # A SecureString's KMS key (`alias/aws/ssm` by default). A String or StringList
+        # parameter names no key: AWS documents none, so its findings say `unknown`.
+        item_facts = {
+            str(p["Name"]): keys.facts(key=p.get("KeyId") or "alias/aws/ssm")
+            if p.get("Type") == "SecureString"
+            else keys.facts(encrypted=None)
+            for p in params
+        }
         own = [str(p["Name"]) for p in params if str(p["Name"]).startswith(OWN_PARAMETERS)]
         params = [p for p in params if not str(p["Name"]).startswith(OWN_PARAMETERS)]
         kept, excluded = _members(
@@ -119,17 +129,20 @@ class SsmAdapter:
             store.skip("denied" if excluded.get("denied") else "not_allowed")
             return
         store.extra["names"] = kept
+        store.extra["itemFacts"] = {k: item_facts[k] for k in kept if k in item_facts}
 
     def source(self, ctx: Context, store: Store) -> ParameterSource | None:
         names = store.extra.get("names")
         if not names:
             return None
-        return ParameterSource(
+        src = ParameterSource(
             ctx.clients.client("ssm"),
             names=list(names),
             region=ctx.region,
             decrypt=ctx.config.ssm_decrypt,
         )
+        src.item_facts = dict(store.extra.get("itemFacts") or {})
+        return src
 
 
 class SecretsAdapter:
@@ -155,6 +168,12 @@ class SecretsAdapter:
             for s in secrets
         ]
         kept, excluded = _members(ctx, "secretsmanager", items, None)
+        keys = classifier(ctx.clients)
+        # Every secret is encrypted: `aws/secretsmanager` unless it names a key of its own.
+        item_facts = {
+            str(s["Name"]): keys.facts(key=s.get("KmsKeyId"), aws_owned=not s.get("KmsKeyId"))
+            for s in secrets
+        }
         if excluded:
             store.extra["excluded"] = dict(sorted(excluded.items()))
         if not secrets:
@@ -167,14 +186,17 @@ class SecretsAdapter:
             store.skip("denied" if excluded.get("denied") else "not_allowed")
             return
         store.extra["names"] = kept
+        store.extra["itemFacts"] = {k: item_facts[k] for k in kept if k in item_facts}
 
     def source(self, ctx: Context, store: Store) -> SecretSource | None:
         names = store.extra.get("names")
         if not names:
             return None
-        return SecretSource(
+        src = SecretSource(
             ctx.clients.client("secretsmanager"), names=list(names), region=ctx.region
         )
+        src.item_facts = dict(store.extra.get("itemFacts") or {})
+        return src
 
 
 class _ValueSource:
@@ -186,6 +208,8 @@ class _ValueSource:
     batch = 1
 
     def __init__(self, client: Any, *, names: list[str], region: str) -> None:
+        # Each parameter's or secret's own encryption (1.5), by name.
+        self.item_facts: dict[str, dict[str, Any]] = {}
         self.client = client
         self.names = sorted(names)
         self.region = region
@@ -235,7 +259,12 @@ class _ValueSource:
                         service=self.service, store=name, field="value", read_by=self.read_by
                     )
                     found = class_findings(
-                        item.findings, resource, self.link(name), item.format, seen_at
+                        item.findings,
+                        resource,
+                        self.link(name),
+                        item.format,
+                        seen_at,
+                        facts=self.item_facts.get(name),
                     )
                     for f in found:
                         f["_pass"] = pass_id

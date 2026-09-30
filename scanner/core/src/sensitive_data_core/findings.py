@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.4,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.5,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -25,7 +25,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.4"
+FINDINGS_SCHEMA_VERSION = "1.5"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -43,6 +43,67 @@ SEVERITY = {
     "us_ssn_last4": "low",
 }
 _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
+
+# The storage encryption a finding's data sat under (1.5, #35): the store's own
+# configuration says which. `service_managed` is a key the service or the cloud holds
+# (SSE-S3, `aws/dynamodb`, an AWS owned key); `customer_managed_key` is the customer's own,
+# named only by `atRestKeyHash`, never by its identifier.
+NO_ENCRYPTION = "none"
+SERVICE_MANAGED = "service_managed"
+CUSTOMER_MANAGED_KEY = "customer_managed_key"
+UNKNOWN_ENCRYPTION = "unknown"
+AT_REST = (NO_ENCRYPTION, SERVICE_MANAGED, CUSTOMER_MANAGED_KEY, UNKNOWN_ENCRYPTION)
+STORAGE_ENCRYPTED = frozenset({SERVICE_MANAGED, CUSTOMER_MANAGED_KEY})
+
+# Guidance for the customer's QSA (1.5, #35), never a verdict: the assessor decides.
+PCI_STORAGE_ENCRYPTION_NOTE = {
+    "requirement": "3.5.1.2",
+    "guidance": (
+        "PCI DSS 3.5.1.2: storage-level encryption (disk, volume or the service's at-rest "
+        "encryption) alone does not render PAN unreadable on non-removable media; PAN is "
+        "also to be rendered unreadable by one of the methods in 3.5.1. For your QSA to "
+        "assess; the QSA decides."
+    ),
+}
+PCI_CVV_NOTE = {
+    "requirement": "3.3.1",
+    "guidance": (
+        "PCI DSS 3.3.1: sensitive authentication data is not retained after authorization, "
+        "even if encrypted; 3.3.1.2 names the card verification code. A card verification "
+        "code found in storage is prohibited storage after authorization, whatever the "
+        "encryption. For your QSA to assess; the QSA decides."
+    ),
+}
+
+
+def pci_note(cls: str, at_rest: str | None) -> dict[str, str] | None:
+    """The PCI DSS note for a finding of class `cls` stored under `at_rest` (1.5), or None.
+
+    A `cvv` finding always gets 3.3.1; a `card` finding gets 3.5.1.2 when the store encrypts
+    at the storage level (`service_managed` or `customer_managed_key`)."""
+    if cls == "cvv":
+        return dict(PCI_CVV_NOTE)
+    if cls == "card" and at_rest in STORAGE_ENCRYPTED:
+        return dict(PCI_STORAGE_ENCRYPTION_NOTE)
+    return None
+
+
+def key_hash(key_id: str) -> str:
+    """How a customer managed key is named in a finding: the SHA-256 of its key id (the part
+    after `key/` in its ARN), lower-case hex. A key id is never written, even masked; hash
+    your own key's id to match."""
+    return hashlib.sha256(key_id.strip().encode()).hexdigest()
+
+
+def encryption_facts(at_rest: str, key_id: str | None = None) -> dict[str, str]:
+    """The store facts for one storage encryption (1.5): `atRestEncryption`, and
+    `atRestKeyHash` when the key is the customer's (or its kind is unknown) and its id known."""
+    if at_rest not in AT_REST:
+        raise ValueError("not an at-rest encryption value")
+    out = {"atRestEncryption": at_rest}
+    if key_id and at_rest in (CUSTOMER_MANAGED_KEY, UNKNOWN_ENCRYPTION):
+        out["atRestKeyHash"] = key_hash(key_id)
+    return out
 
 
 @dataclass(frozen=True)
@@ -168,7 +229,10 @@ def finding_json(
     """One finding. `facts` are what an adapter knows about the store from its own
     configuration, the same for every finding in it (#35: `atRestEncryption`); each is
     added to the finding and never replaces a field the contract already has. A fact
-    joins the findings schema (a minor bump) in the change that first fills it."""
+    joins the findings schema (a minor bump) in the change that first fills it.
+
+    Every `card` and `cvv` finding also gets its `pciNote` (1.5), from its class and the
+    store's `atRestEncryption` (`pci_note`)."""
     offsets = [o.as_json() for o in cf.offsets[:MAX_OFFSETS_PER_FINDING]]
     out: dict[str, Any] = {
         "id": finding_id(resource, cf.cls),
@@ -192,7 +256,10 @@ def finding_json(
     for k, v in (facts or {}).items():
         if k in out:
             raise ValueError("a store fact may not replace a finding field")
-        out[k] = redact_digits(v) if isinstance(v, str) else v
+        out[k] = redact_digits(v) if isinstance(v, str) and k != "atRestKeyHash" else v
+    note = pci_note(cf.cls, out.get("atRestEncryption"))
+    if note is not None:
+        out["pciNote"] = note
     return out
 
 

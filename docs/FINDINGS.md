@@ -1,4 +1,4 @@
-# Findings, schema version 1.4
+# Findings, schema version 1.5
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.4"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.5"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -43,6 +43,11 @@ value shows up in findings, events, logs, exception messages or object reprs.
   `databricks` kinds, the store reasons `db_user_can_write`,
   `grants_unverifiable` and `driver_missing`, and the store field
   `writeGrants`. All additive: an AWS document is 1.3's with a new version.
+- Version 1.5 adds the storage encryption each finding's data sat under
+  (`atRestEncryption`, `atRestKeyHash`) and the PCI DSS notes (`pciNote`) on
+  a finding, and `atRestEncryption` and `atRestKeyHash` on a store in the
+  run summary ([At-rest encryption and PCI DSS notes](#at-rest-encryption-and-pci-dss-notes-15)).
+  All additive.
 
 ## Where findings go
 
@@ -326,6 +331,65 @@ So a DynamoDB item keyed by a tenant id with a bare nine-digit run, such as
 and finds the item from the masked key and the finding's other fields. In
 0.2.0 and earlier, any masking dropped the link.
 
+### At-rest encryption and PCI DSS notes (1.5)
+
+Every finding says what storage encryption its data sat under, from the
+store's own configuration, and a card or CVV finding carries a note for the
+customer's PCI DSS assessor:
+
+```json
+{
+  "class": "card",
+  "resource": { "type": "s3_object", "bucket": "example-lake", "key": "exports/cards.csv", "versionId": "null" },
+  "atRestEncryption": "customer_managed_key",
+  "atRestKeyHash": "5c2a…(64 hex)",
+  "pciNote": {
+    "requirement": "3.5.1.2",
+    "guidance": "PCI DSS 3.5.1.2: storage-level encryption (disk, volume or the service's at-rest encryption) alone does not render PAN unreadable on non-removable media; PAN is also to be rendered unreadable by one of the methods in 3.5.1. For your QSA to assess; the QSA decides."
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `atRestEncryption` | `none` (the store says the data is not encrypted at rest), `service_managed` (a key the service holds: SSE-S3, an AWS owned key, an AWS managed key such as `aws/dynamodb` or `aws/ebs`, a database platform's own encryption), `customer_managed_key` (a KMS key, or a database's TDE key, the customer holds) or `unknown` (the store does not say, or its key could not be told apart). Absent on a finding stored before 1.5 until its location is read again |
+| `atRestKeyHash` | For `customer_managed_key` (and for `unknown` when a key id is known): the SHA-256 of the key's id, the part after `key/` in its ARN, as lower-case hex. The key's id, ARN and aliases are never written. Hash your key's id to match: `printf %s 1234abcd-12ab-34cd-56ef-1234567890ab \| shasum -a 256` |
+| `pciNote` | Guidance for the customer's QSA, never a verdict: `requirement` and `guidance` (below). Present only on the findings it applies to |
+
+Where each store's value comes from:
+
+| Store | From |
+|---|---|
+| S3 object (and Glue tables, Firehose destinations, exported caches) | The object's own `x-amz-server-side-encryption` header, from the GET that read it: `AES256` is `service_managed`; `aws:kms` and `aws:kms:dsse` go by the key; no header is an object stored without encryption, `none`, whatever the bucket's default is now. The run summary gives the bucket's default (`GetBucketEncryption`) |
+| CloudWatch Logs | The group's `kmsKeyId`, else `service_managed` (every group is encrypted) |
+| DynamoDB (and its exports) | The table's `SSEDescription`: none is the AWS owned key; `KMS` goes by the key |
+| RDS and Aurora (export and Data API) | The cluster's or instance's `StorageEncrypted` and `KmsKeyId`, not the export's |
+| Redshift | A cluster's `Encrypted` and `KmsKeyId`; a Serverless namespace's `kmsKeyId` (`AWS_OWNED_KMS_KEY` is `service_managed`) |
+| OpenSearch | A domain's `EncryptionAtRestOptions`; a collection's `kmsKeyArn` (`auto` is `service_managed`) |
+| EBS | The volume's (or, for a snapshot whose volume is gone, the snapshot's) `Encrypted` and `KmsKeyId` |
+| Kinesis | `DescribeStreamSummary`'s `EncryptionType` and `KeyId` |
+| SQS | `KmsMasterKeyId`, or `SqsManagedSseEnabled` (`service_managed`); neither is `none` |
+| Parameter Store | Per parameter: a `SecureString`'s `KeyId` (`alias/aws/ssm` by default); a `String` or `StringList` is `unknown` (AWS documents no key for them) |
+| Secrets Manager | Per secret: its `KmsKeyId`, else `aws/secretsmanager` (`service_managed`) |
+| Timestream, Keyspaces | The database's `KmsKeyId`; the table's `encryptionSpecification` |
+| The databases runner | SQL Server: TDE on (`sys.databases.is_encrypted`) is `customer_managed_key` (a certificate in the customer's own master database, or an asymmetric key in Key Vault or an EKM provider), except Azure SQL's service-managed certificate (`service_managed`). MySQL and MariaDB: every base table created encrypted is `customer_managed_key`. Snowflake and MongoDB Atlas: `service_managed`. Everything else, TDE off included, is `unknown`: a database cannot see the disk under it. A database names no key, so no hash |
+
+A KMS key named by its id or ARN is told apart with one `kms:ListAliases`
+per run: a key behind an `alias/aws/…` alias is AWS managed; any other key,
+including one in another account, is the customer's. Without that listing,
+only an `alias/aws/…` name is known, and any other key is `unknown` with its
+hash.
+
+**The PCI DSS notes.** They are guidance; the customer's QSA decides:
+
+| `requirement` | On | Says |
+|---|---|---|
+| `3.3.1` | every `cvv` finding, whatever `atRestEncryption` | Sensitive authentication data is not retained after authorization, even if encrypted (3.3.1.2 names the card verification code): a card verification code in storage is prohibited storage after authorization |
+| `3.5.1.2` | a `card` finding whose `atRestEncryption` is `service_managed` or `customer_managed_key` | Storage-level encryption (disk, volume, or the service's at-rest encryption) alone does not render PAN unreadable on non-removable media; PAN is also to be rendered unreadable by one of the methods in 3.5.1 |
+
+A `card` finding under `none` or `unknown` carries no note: its storage
+encryption is not what makes it a question for the assessor.
+
 ### Coverage
 
 One entry per source says what was, and was not, read:
@@ -394,6 +458,7 @@ coverage gap is visible rather than silent.
 | `destinations` | (1.3) For Firehose: where the stream delivers (`S3`, `Redshift`, `OpenSearch`, `Splunk`, `HttpEndpoint`, `Snowflake`, `Iceberg`) |
 | `deadLetterQueue`, `approximateMessages` | (1.3) For SQS: the queue is a dead-letter queue; its approximate message count |
 | `snapshots` | (1.3) For ElastiCache and MemoryDB: the cache's snapshots, counted |
+| `atRestEncryption`, `atRestKeyHash` | (1.5) The store's storage encryption, as on its findings: for S3, the bucket's default; for a database, what the engine reports |
 | `writeGrants` | (1.4) The databases runner: the write privileges the database user holds, by name (`superuser`, `table_write`, `INSERT`, `db_datawriter`, `MODIFY`, ...), when the store is refused as `db_user_can_write` |
 | `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`) |
 

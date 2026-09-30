@@ -318,10 +318,10 @@ Resources:
                 Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub ${LogGroup.Arn}
-              # --- S3: discover the buckets, read the objects
+              # --- S3: discover the buckets (and their default encryption), read the objects
               - Sid: DiscoverS3
                 Effect: Allow
-                Action: [s3:ListAllMyBuckets, s3:GetBucketTagging]
+                Action: [s3:ListAllMyBuckets, s3:GetBucketTagging, s3:GetEncryptionConfiguration]
                 Resource: "*"
               - Sid: ReadS3
                 Effect: Allow
@@ -434,6 +434,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - kinesis:ListStreams
+                  - kinesis:DescribeStreamSummary
                   - kinesis:ListShards
                   - kinesis:ListTagsForStream
                   - kinesis:GetShardIterator
@@ -528,6 +529,12 @@ Resources:
                 Effect: Allow
                 Action: cassandra:Select
                 Resource: !Sub arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*
+              # --- Which KMS keys are AWS managed (alias/aws/*), to tell each store's
+              # at-rest key apart (#35). Metadata only: no key is described or used.
+              - Sid: ListKmsAliases
+                Effect: Allow
+                Action: kms:ListAliases
+                Resource: "*"
               # --- Push findings to the central sink
               - !If
                 - HasBus
