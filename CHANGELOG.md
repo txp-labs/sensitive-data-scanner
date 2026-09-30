@@ -603,6 +603,26 @@ bumps the minor version. Spec changes are listed under **Spec**.
     SharePoint and Drive files.
 
 ### Changed
+- **An adapter's version is its read path; a listing change re-lists, never
+  re-reads** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
+  - Every adapter whose objects the index records (S3, Glue tables and
+    directory buckets, CodeCommit, ECR, the RDS Data API, DynamoDB exports,
+    Azure Blob Storage, Files and databases, Cloud Storage, BigQuery, Cloud SQL
+    and AlloyDB, OneDrive, SharePoint and Drive) keeps the functions that
+    fetch and interpret its data in `sources/<name>_read.py`, which is
+    `adapter:<kind>`. Discovery, listing, inventory reports, configuration and
+    logging stay in `sources/<name>.py` and are `listing:<kind>` (with
+    `inventory.py` for S3, `exports.py` for RDS and DynamoDB).
+  - A change to `listing:<kind>` rescans nothing: the next run lists the store
+    again from the start (the cursor records the version it listed with) and
+    decides every object by its row. A delta feed re-listed from no link
+    downloads only the files whose content tag or version moved. Coverage says
+    `relisted: true`.
+  - Rows recorded under the whole-module versions (manifest version 1) are
+    not rescanned for it: a pass that meets one unchanged gives it this build's
+    read-path version.
+  - The manifest is version 2. CI fails when a module that records objects in
+    the index has no read module, or a read module has no adapter beside it.
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
   the opt-in `RDS_DATA_API` read now runs the databases runner's own user
   check (moved to the core as `sensitive_data_core.grants`) before listing a
@@ -724,7 +744,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+- `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+  `relisted` in coverage.
+- Version **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
   a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage; the
@@ -836,7 +858,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   --check`, [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)); the no-leak suite
   plants values in object keys and archive entries' names and searches every
   byte of the object index, and each shard's SQL dump, for them. New log
-  events: `index.saved`, `index.failed`.
+  events: `index.saved`, `index.failed`, and `source.relist` (a store listed
+  again from the start after its `listing:<kind>` moved).
 - The databases runner's state location (a path, S3, signed HTTPS) moved to the
   core (`sensitive_data_core.state`), which the SaaS scanner uses too; the
   databases runner keeps its 64 KiB document and its API.

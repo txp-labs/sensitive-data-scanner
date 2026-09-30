@@ -23,12 +23,8 @@ from conftest import REPO
 from ddb_fixtures import Ddb, describe
 from sensitive_data_scanner.config import DataApiTarget, data_api_targets, read_config
 from sensitive_data_scanner.sources.exports import ExportQuota, delete_prefix, due
-from sensitive_data_scanner.sources.rds import (
-    export_table_of,
-    quote_identifier,
-    select_sql,
-    tables_sql,
-)
+from sensitive_data_scanner.sources.rds import tables_sql
+from sensitive_data_scanner.sources.rds_read import export_table_of, quote_identifier, select_sql
 from synthetic import CARDS, SSN_A, SSN_B, dashed
 from table_fixtures import arrow_table, parquet_bytes
 
@@ -456,7 +452,8 @@ def test_data_api_refuses_a_user_that_can_write_before_any_read(
     assert (cov["scanned"], cov["listed"]) == (0, 0)
     assert cov["error"] == ("DbUserCanWrite" if grants else "GrantsUnverifiable")
     state = next(v for k, v in env.state()["cursors"].items() if k.startswith("rdsdata:"))
-    assert state == {}
+    # No position: only the listing version the cursor would resume under (#67).
+    assert set(state) == {"listing"}
 
 
 def test_data_api_rolls_back_when_a_statement_fails(env: Env) -> None:

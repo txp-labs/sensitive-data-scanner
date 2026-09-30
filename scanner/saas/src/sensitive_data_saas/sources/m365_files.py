@@ -38,36 +38,17 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
-from sensitive_data_core.index import Indexes, ObjectPass, Stale
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
 from ..graph import Graph
-from ..resources import saas_item, sharepoint_link
+from . import m365_files_read as _read_path
 from .base import Context, ItemReader, call_gap
 from .m365 import Person, facts_of, fields_of, people, settings_of, tenant_of
+from .m365_files_read import item_marker
 
 ITEM_FIELDS = "id,name,size,file,folder,deleted,lastModifiedDateTime,sharepointIds,cTag"
-
-
-def item_marker(item: dict[str, Any]) -> str:
-    """What changes when a drive item's content changes: its content tag (`cTag`), modified
-    time and size."""
-    return (
-        f"{item.get('cTag') or ''}|{item.get('lastModifiedDateTime') or ''}|{item.get('size') or 0}"
-    )
-
-
-def item_fingerprint(item: dict[str, Any]) -> str | None:
-    """The file's own hash from the listing: SHA-1 where Graph gives it, else QuickXorHash
-    (SharePoint and OneDrive for Business), each in its own namespace."""
-    f = item.get("file") if isinstance(item.get("file"), dict) else {}
-    hashes = (f or {}).get("hashes") if isinstance((f or {}).get("hashes"), dict) else {}
-    for name, prefix in (("sha1Hash", "sha1"), ("quickXorHash", "qxh")):
-        v = (hashes or {}).get(name)
-        if isinstance(v, str) and v.strip():
-            return f"{prefix}:{v.strip().lower()}"
-    return None
 
 
 @dataclass
@@ -215,6 +196,9 @@ class OneDriveAdapter:
 class DriveSource:
     """One drive: a site's document library, or a person's OneDrive (found when it runs)."""
 
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("page", "skip", "delta", "full", "rescan")
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -241,6 +225,7 @@ class DriveSource:
         self.tenant = tenant_of(ctx)
         key = drive.drive_id if drive is not None else (owner.principal_hash if owner else "")
         self.id = f"{kind}:{key}"
+        self._full = False  # this pass lists every item (no delta link)
         self.target = store_name if drive is None else f"{store_name}/{drive.name}"
 
     def __repr__(self) -> str:
@@ -271,6 +256,7 @@ class DriveSource:
         # A pass from no delta link lists every item (`full`); once one completes, every item
         # has a row (`indexed`), and later passes list only what changed.
         full = bool(cursor.get("full")) or not (st.get("page") or st.get("delta"))
+        self._full = full
         indexed = bool(cursor.get("indexed"))
         rescan = dict(cursor["rescan"]) if isinstance(cursor.get("rescan"), dict) else None
         note: str | None = None
@@ -397,68 +383,28 @@ class DriveSource:
         size = int(item.get("size") or 0)
         if size == 0:
             return 0
+        want = min(size, self.ctx.settings.max_object_bytes)
+        if self._full and r.index is not None:
+            # A pass from no delta link (the first, a re-list, or an expired link) lists
+            # every file: one whose row has its content tag is not read again (#67).
+            decision = r.index.decide(iid, changed=True, marker=item_marker(item))
+            if not decision.read:
+                if decision.why is None:
+                    return 0
+                if sample_point(iid) >= self.sample_percent:
+                    return 0
+                if not r.index.rescans.take(want, r.budget):
+                    r.index.rescans.miss(decision.why)
+                    return 0
+                self._read_item(drive, item, r, decision.why)
+                return 1
         r.cov.eligible += 1
         if sample_point(iid) >= self.sample_percent:
             r.cov.sampled_out += 1
             return 0
-        r.budget.take(min(size, self.ctx.settings.max_object_bytes))
+        r.budget.take(want)
         self._read_item(drive, item, r)
         return 1
 
-    def _read_item(
-        self, drive: Drive, item: dict[str, Any], r: ItemReader, why: Stale | None = None
-    ) -> None:
-        """One file read (a change, or a rescan for `why`) and its findings stored."""
-        iid = str(item.get("id") or "")
-        size = int(item.get("size") or 0)
-        location = f"{self.id}\n{iid}"
-        name = str(item.get("name") or "file")
-        ids = item.get("sharepointIds") if isinstance(item.get("sharepointIds"), dict) else {}
-        link = sharepoint_link(drive.host, str((ids or {}).get("listItemUniqueId") or ""))
-        path = f"/drives/{drive.drive_id}/items/{iid}/content"
-
-        def fetch(start: int, end: int) -> bytes:
-            return self.graph.download(path, start, end)
-
-        def resource_for(column: str | None) -> dict[str, Any]:
-            return saas_item(
-                "m365",
-                self.service,
-                self.tenant,
-                iid,
-                "file",
-                owner=self.owner.principal_hash if self.owner else None,
-                container=self.container,
-                channel=drive.name or None,
-                name=name,
-                column=column,
-            )
-
-        fingerprint = item_fingerprint(item)
-        prefix = f"{self.id}\n"
-        copied = r.duplicate(
-            iid, name, fingerprint, item_marker(item), resource_for, link, prefix, why
-        )
-        if copied is not None:
-            r.store.replace_location(location, copied)  # the same bytes as a file read
-            return
-        try:
-            findings = r.file(
-                name,
-                size,
-                fetch,
-                resource_for=resource_for,
-                link=link,
-                key=iid,
-                marker=item_marker(item),
-                fingerprint=item_fingerprint(item),
-            )
-        except Exception as err:  # one file must not stop the pass
-            if r.index is not None:
-                r.index.record(iid, marker=item_marker(item), unreadable=True)
-            r.cov.unreadable += 1
-            log_event("item.unreadable", source=self.target, error=error_name(err))
-            return
-        if r.index is not None:
-            r.index.rescanned(findings, why)
-        r.store.replace_location(location, findings)
+    # The read path (`m365_files_read.py`, the `adapter:<kind>` component, #67).
+    _read_item = _read_path._read_item

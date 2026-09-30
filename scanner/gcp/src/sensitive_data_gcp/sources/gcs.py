@@ -45,12 +45,14 @@ from sensitive_data_core.findings import Coverage
 from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale, md5_fingerprint
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import pyarrow_available
-from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
+from sensitive_data_core.scan.objects import planned_bytes, sample_point
 
 from ..clients import STORAGE_API, Rest
 from ..resources import Located, console_link, gcs_object_resource
+from . import gcs_read as _read_path
 from .base import Context, kms_facts, labels
 from .common import call_gap
+from .gcs_read import gcs_marker, object_url
 
 KIND = "gcs"
 ASSET_TYPE = "storage.googleapis.com/Bucket"
@@ -75,11 +77,6 @@ class BucketTarget:
 def _bucket_name(row: dict[str, Any]) -> str:
     name = str(row.get("name") or "")
     return str(row.get("displayName") or name.rsplit("/", 1)[-1])
-
-
-def object_url(bucket: str, name: str) -> str:
-    q = urllib.parse.quote
-    return f"{STORAGE_API}/b/{q(bucket, safe='')}/o/{q(name, safe='')}"
 
 
 class GcsAdapter:
@@ -135,15 +132,13 @@ def _time(v: Any) -> _dt.datetime | None:
         return None
 
 
-def gcs_marker(obj: dict[str, Any]) -> str:
-    """What changes when an object changes: its generation (a new one per write), and size."""
-    return f"{obj.get('generation') or ''}|{obj.get('size') or 0}|{obj.get('updated') or ''}"
-
-
 class GcsSource:
     """One bucket (or a prefix of it): its objects, listed in name order and read."""
 
     kind = KIND
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("passStartedAt", "token", "skip", "prefixDir", "prefixCount")
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -399,63 +394,8 @@ class GcsSource:
             return e
         return None
 
-    def _read(
-        self,
-        obj: dict[str, Any],
-        *,
-        cov: Coverage,
-        detector: Detector,
-        store: FindingStore,
-        seen_at: str,
-        why: Stale | None = None,
-    ) -> None:
-        name = str(obj.get("name") or "")
-        size = int(obj.get("size") or 0)
-        generation = str(obj.get("generation") or "") or None
-        url = object_url(self.t.bucket, name)
-
-        def fetch(start: int, end: int) -> bytes:
-            params = {"alt": "media", **({"generation": generation} if generation else {})}
-            resp = self.rest.call(
-                "GET", url, params=params, headers={"Range": f"bytes={start}-{end}"}
-            )
-            data: bytes = resp.content
-            return data
-
-        got = read_object(
-            name,
-            size,
-            fetch,
-            detector,
-            max_object_bytes=self.max_object_bytes,
-            max_inflated_bytes=self.max_inflated_bytes,
-            max_rows=self.max_rows,
-            columnar=self.columnar,
-        )
-        fingerprint = md5_fingerprint(obj.get("md5Hash"))
-        self._op.record(name, marker=gcs_marker(obj), fingerprint=fingerprint, got=got)
-        facts = kms_facts(str(obj.get("kmsKeyName") or "") or None)
-        where = self.t.where
-        link = console_link(
-            f"storage/browser/{urllib.parse.quote(self.t.bucket, safe='')}",
-            {"project": where.project},
-            self.t.bucket,
-        )
-        findings = record(
-            got,
-            cov,
-            resource_for=lambda column: gcs_object_resource(
-                where, self.t.bucket, name, generation, column=column
-            ),
-            link=link,
-            seen_at=seen_at,
-            facts=facts,
-        )
-        self._op.rescanned(findings, why)
-        if findings is None:
-            return
-        location = f"{self.id}\n{name}"
-        store.replace_location(location, findings)
+    # The read path (`gcs_read.py`, the `adapter:<kind>` component, #67).
+    _read = _read_path._read
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:
         """Drop stored findings whose object is gone."""

@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
-import io
 import json
 import secrets
 from typing import TYPE_CHECKING, Any
@@ -45,26 +44,22 @@ from sensitive_data_core.findings import (
     UNKNOWN_ENCRYPTION,
     Coverage,
     encryption_facts,
-    finding_json,
 )
 from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
-from sensitive_data_core.scan.columnar import TableResult, scan_parquet
+from sensitive_data_core.scan.columnar import TableResult
 from sensitive_data_core.scan.sql import (
-    MYSQL,
-    POSTGRESQL,
-    Dialect,
     Params,
-    sample_sql,
     sample_tables,
 )
 from sensitive_data_core.scan.sql import tables_sql as generic_tables_sql
 
 from ..config import DataApiTarget
-from ..resources import rds_link, rds_resource
+from ..resources import rds_link
+from . import rds_read as _read_path
 from .encryption import rds_facts
-from .exports import ExportQuota, delete_prefix, drop_other_passes, due, list_keys, merge
-from .s3 import S3RangeFile
+from .exports import ExportQuota, delete_prefix, drop_other_passes, due
+from .rds_read import _dialect, _findings
 
 if TYPE_CHECKING:
     from mypy_boto3_rds import RDSClient
@@ -77,46 +72,6 @@ EXPORTABLE_ENGINES = frozenset(
     {"aurora", "aurora-mysql", "aurora-postgresql", "mysql", "mariadb", "postgres"}
 )
 RUNNING = frozenset({"STARTING", "IN_PROGRESS", "CANCELING"})
-
-
-def _findings(
-    table: TableResult,
-    *,
-    engine: str,
-    identifier: str,
-    db_type: str,
-    database: str,
-    name: str,
-    read_by: str,
-    snapshot_time: str | None,
-    link: str,
-    seen_at: str,
-    facts: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    out = []
-    for column, item in sorted(table.by_column.items()):
-        resource = rds_resource(
-            engine=engine,
-            identifier=identifier,
-            db_type=db_type,
-            database=database,
-            table=name,
-            column=column,
-            read_by=read_by,
-            snapshot_time=snapshot_time,
-        )
-        for cf in item.findings.values():
-            cf.offsets = []  # the rows are gone with the export: counts only
-            out.append(finding_json(resource, link, table.format, cf, seen_at, facts=facts))
-    return out
-
-
-def export_table_of(relative: str) -> tuple[str, str] | None:
-    """`<db>/<schema.table>/<partition>/part-….parquet` to (db, schema.table)."""
-    parts = relative.split("/")
-    if len(parts) < 3 or not parts[-1].endswith(".parquet"):
-        return None
-    return parts[0], parts[1]
 
 
 class RdsExportSource:
@@ -280,99 +235,14 @@ class RdsExportSource:
         cov.backlog = True
         return SourceRun(cov, started, "export_pending", self._extra(started, "STARTING"))
 
-    def _scan(
-        self,
-        c: dict[str, Any],
-        cov: Coverage,
-        *,
-        budget: Budget,
-        detector: Detector,
-        store: FindingStore,
-        now: _dt.datetime,
-    ) -> SourceRun:
-        base = f"{self.prefix}{c['task']}/"
-        seen_at = now.isoformat()
-        link = rds_link(self.region, self.identifier, self.db_type)
-        done = True
-        for obj in list_keys(self.s3, self.bucket, base, c.get("after")):
-            key = obj["Key"]
-            cov.listed += 1
-            where = export_table_of(key[len(base) :])
-            if where is None:  # export_info_*.json and the like
-                c["after"] = key
-                continue
-            cov.eligible += 1
-            size = int(obj.get("Size", 0))
-            if not budget.has(min(size, self.max_object_bytes)):
-                done = False
-                break
-            budget.take(min(size, self.max_object_bytes))
-            raw = S3RangeFile(self.s3, self.bucket, key, size=size, max_bytes=self.max_object_bytes)
-            try:
-                table = scan_parquet(io.BufferedReader(raw, 256 * 1024), detector, self.max_rows)
-            except Exception as err:  # one bad file must not stop the pass
-                cov.unreadable += 1
-                if is_kms_denial(err):
-                    cov.kms_denied += 1
-                log_event("item.unreadable", source=self.target, error=error_name(err))
-                c["after"] = key
-                continue
-            cov.scanned += 1
-            cov.bytes_scanned += raw.bytes_read
-            cov.formats["parquet"] = cov.formats.get("parquet", 0) + 1
-            cov.partial += int(table.partial or raw.cut)
-            cov.test_values += table.test_values
-            cov.suppressed += table.suppressed
-            cov.redaction_markers += table.redaction_markers
-            database, name = where
-            for f in _findings(
-                table,
-                engine=self.engine,
-                identifier=self.identifier,
-                db_type=self.db_type,
-                database=database,
-                name=name,
-                read_by="snapshot_export",
-                snapshot_time=c.get("snapshotAt"),
-                link=link,
-                seen_at=seen_at,
-                facts=self.facts,
-            ):
-                merge(store, f"{self.id}\n{database}/{name}", f, c["passId"])
-            c["after"] = key
-        if not done:
-            cov.backlog = True
-            return SourceRun(cov, c, None, self._extra(c, "COMPLETE"))
-        gone = drop_other_passes(store, self.id, c["passId"])
-        if gone:
-            log_event("finding.gone", source=self.target, count=gone)
-        delete_prefix(self.s3, self.bucket, base)
-        cov.pass_complete = True
-        finished = {
-            "lastSnapshot": c.get("snapshot"),
-            "lastSnapshotAt": c.get("snapshotAt"),
-            "lastExportAt": now.isoformat(),
-        }
-        return SourceRun(cov, finished, None, self._extra(c, "COMPLETE"))
-
-
-def _dialect(engine: str) -> Dialect:
-    return MYSQL if engine == "mysql" else POSTGRESQL
-
-
-def quote_identifier(name: str, engine: str) -> str:
-    """A SQL identifier, quoted so that nothing in it is SQL (the core's scan/sql.py)."""
-    return _dialect(engine).ident(name)
+    # The read path (`rds_read.py`, the `adapter:<kind>` component, #67).
+    _scan = _read_path._scan
 
 
 def tables_sql(engine: str, schemas: tuple[str, ...]) -> tuple[str, list[dict[str, Any]]]:
     """The statement that lists base tables, and its Data API parameters (never inlined)."""
     sql, params = generic_tables_sql(_dialect(engine), schemas)
     return sql, [{"name": n, "value": {"stringValue": v}} for n, v in params]
-
-
-def select_sql(engine: str, schema: str, table: str, limit: int) -> str:
-    return sample_sql(_dialect(engine), schema, table, limit)
 
 
 class RdsDataApiSource:
@@ -383,6 +253,9 @@ class RdsDataApiSource:
     facts: dict[str, Any] | None = None
     rds: Any = None
     keys: Any = None
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("after",)
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(self, client: RDSDataServiceClient, *, target: DataApiTarget, region: str) -> None:
