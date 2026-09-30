@@ -34,6 +34,8 @@ Metadata:
         Parameters: [MskRead, MqRead, MqBrokers, MqSecretArns]
       - Label: { default: "Images, ML, graphs and archives (opt-in reads)" }
         Parameters: [EcrRead, SageMakerRead, NeptuneAnalyticsExportKmsKeyArn, EventBridgeReplay]
+      - Label: { default: "Who finds the data: this scanner, Amazon Macie, or both (#55)" }
+        Parameters: [ScanMode]
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
@@ -239,6 +241,16 @@ Parameters:
       day to a rule of the scanner's own, on the archive's bus, that sends only
       the scanner's replays to the scanner's own queue (FilterArns: no other
       rule sees them). Creates that queue. Off: archives are reported.
+  ScanMode:
+    Type: String
+    AllowedValues: [scanner, vendor, both]
+    Default: scanner
+    Description: >-
+      SCAN_MODE - scanner (this scanner reads the stores), vendor (Amazon
+      Macie's own findings are imported, S3 only, and this scanner reads
+      nothing), or both (read and import; findings at the same place and class
+      are linked). vendor and both allow the three Macie reads; the
+      occurrence samples Macie can reveal are denied either way.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -282,6 +294,7 @@ Conditions:
   SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
   SsmSecureStrings: !Equals [!Ref SsmDecrypt, "true"]
   SecretsValues: !Equals [!Ref SecretsRead, "true"]
+  MacieImport: !Not [!Equals [!Ref ScanMode, scanner]]
   MskReads: !Equals [!Ref MskRead, "true"]
   EcrReads: !Equals [!Ref EcrRead, "true"]
   NeptuneGraphExport: !Not [!Equals [!Ref NeptuneAnalyticsExportKmsKeyArn, ""]]
@@ -799,7 +812,34 @@ Resources:
                         - !Sub xray.${AWS::Region}.amazonaws.com
                         - !Sub codecommit.${AWS::Region}.amazonaws.com
                 - !Ref AWS::NoValue
+              - !If
+                - MacieImport
+                - Sid: ReadMacieFindings
+                  Effect: Allow
+                  Action:
+                    - macie2:GetMacieSession
+                    - macie2:ListFindings
+                    - macie2:GetFindings
+                  Resource: "*"
+                - !Ref AWS::NoValue
               # --- Defense in depth: never write anywhere else, never escalate
+              - Sid: NeverRevealOrChangeMacie
+                Effect: Deny
+                Action:
+                  - macie2:GetSensitiveDataOccurrences*
+                  - macie2:GetRevealConfiguration
+                  - macie2:UpdateRevealConfiguration
+                  - macie2:Create*
+                  - macie2:Update*
+                  - macie2:Delete*
+                  - macie2:Put*
+                  - macie2:Enable*
+                  - macie2:Disable*
+                  - macie2:Accept*
+                  - macie2:Decline*
+                  - macie2:Tag*
+                  - macie2:Untag*
+                Resource: "*"
               - Sid: NoWritesOutsideOwnBucket
                 Effect: Deny
                 Action:
@@ -1388,6 +1428,7 @@ Resources:
           SQS_DLQ_READ: !Ref SqsDlqRead
           SSM_DECRYPT: !Ref SsmDecrypt
           SECRETS_READ: !Ref SecretsRead
+          SCAN_MODE: !Ref ScanMode
           MSK_READ: !Ref MskRead
           MQ_READ: !Ref MqRead
           MQ_BROKERS: !Ref MqBrokers

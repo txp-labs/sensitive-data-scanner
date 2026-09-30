@@ -35,6 +35,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
+from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
 
 from .config import Config, DynamoTarget
@@ -46,6 +47,7 @@ from .sources.dynamodb import DynamoDBSource
 from .sources.dynamodb_export import DynamoDBExportSource
 from .sources.encryption import classifier
 from .sources.exports import ExportQuota
+from .sources.macie import MacieImporter
 from .sources.rds import RdsDataApiSource, RdsExportSource
 from .sources.s3 import S3Source
 
@@ -460,7 +462,20 @@ def run_scan(
             state = {}
         cursors: dict[str, Any] = dict(state.get("cursors") or {})
         sources = rotate(sources, stores, state.get("rotation"))
-        in_scope = {s.id for s in sources}
+        mode = config.scan_mode
+        importer = (
+            MacieImporter(clients, region, mode, lookback_days=config.macie_lookback_days)
+            if mode != SCANNER
+            else None
+        )
+        if mode == VENDOR:
+            # #55: Macie's findings stand for S3; this scanner reads nothing, and every
+            # other kind is what Macie does not cover.
+            for st in stores:
+                if st.status == "pending":
+                    st.skip("vendor_mode" if st.kind == "s3" else "vendor_not_covered")
+            sources = []
+        in_scope = {s.id for s in sources} | ({importer.id} if importer is not None else set())
         store = FindingStore(started.isoformat())
         for f in state.get("findings") or []:
             loc = f.get("_location", "")
@@ -469,6 +484,13 @@ def run_scan(
         if config.max_run_seconds:
             deadline = min(deadline, clock() + config.max_run_seconds)
         budget = Budget(config.max_items_per_run, config.max_bytes_per_run, deadline, clock)
+        vendor_coverage: list[VendorCoverage] = []
+        if importer is not None:
+            # First, and apart from the scanner's share: importing reads findings, not data.
+            imported, cursors[importer.id] = importer.run(
+                cursors.get(importer.id) or {}, budget, store, started
+            )
+            vendor_coverage.append(imported)
         caps = {
             "s3": config.max_objects_per_run,
             "s3_directory": config.max_objects_per_run,
@@ -527,6 +549,9 @@ def run_scan(
         run_summary = (
             summary(stores, found.list_errors if found else {}) if config.discover else None
         )
+        public = store.public()
+        if mode == BOTH:
+            link_duplicates(public)
         doc = findings_document(
             run_id=run_id,
             account=account,
@@ -535,8 +560,10 @@ def run_scan(
             finished_at=now().isoformat(),
             classes=list(load_spec().class_order),
             coverage=coverage,
-            findings=store.public(),
+            findings=public,
             discovery=run_summary,
+            scan_mode={"aws": mode},
+            vendor_coverage=[v.as_json() for v in vendor_coverage] if importer else None,
         )
         _put_json(
             clients.s3,

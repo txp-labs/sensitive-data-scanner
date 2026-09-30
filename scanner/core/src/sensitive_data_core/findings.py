@@ -328,9 +328,17 @@ def findings_document(
     platform: str | None = None,
     site: str | None = None,
     scanner_version: str | None = None,
+    scan_mode: Mapping[str, str] | None = None,
+    vendor_coverage: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The findings document. An AWS run names its account and region; a run of another
-    platform (1.4: `platform`, such as `database`) names the `site` it runs in instead."""
+    platform (1.4: `platform`, such as `database`) names the `site` it runs in instead.
+
+    (1.8, #55) Every finding says its `source` (`scanner` unless an importer made it);
+    `scan_mode` is the mode each platform ran in, and `vendor_coverage` each importer's run
+    (`modes.VendorCoverage`)."""
+    for f in findings:
+        f.setdefault("source", "scanner")
     ranked = sorted(findings, key=lambda f: (-_CONF_RANK[f["severity"]], -f["count"], f["id"]))
     kept = ranked[:MAX_FINDINGS_IN_DOCUMENT]
     totals: dict[str, int] = {}
@@ -363,4 +371,8 @@ def findings_document(
     }
     if discovery is not None:
         doc["discovery"] = discovery
+    if scan_mode:
+        doc["scanMode"] = dict(sorted(scan_mode.items()))
+    if vendor_coverage is not None:
+        doc["vendorCoverage"] = vendor_coverage
     return doc

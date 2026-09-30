@@ -92,10 +92,95 @@ value shows up in findings, events, logs, exception messages or object reprs.
   `confluence_space` kinds, the `docx`, `xlsx` and
   `pptx` formats (the core now reads Office Open XML files), the skip kinds
   `encrypted`, `too_large` and `linked_item`, the store reasons
-  `scope_unverified`, `unscoped_grant`, `protected_api`, `not_provisioned` and
+  `scope_unverified`, `unscoped_grant`, `protected_api`, `not_provisioned`,
   `throttled` and `not_a_member`, and links into Outlook on the web,
-  SharePoint, Teams, Google Drive, Slack, Jira and Confluence. All
+  SharePoint, Teams, Google Drive, Slack, Jira and Confluence; and (#55) the finding fields
+  `source`, `vendorType`, `vendorFindingId` and `linked`, the `vendor` format
+  and `via`, the class `other`, the document fields `scanMode` and
+  `vendorCoverage`, and the store reasons `vendor_mode` and
+  `vendor_not_covered` ([Sources and modes](#sources-and-modes-18)). All
   additive: an AWS document is 1.7's with a new version.
+
+## Sources and modes (1.8)
+
+A customer chooses, per platform, who finds its sensitive data
+([#55](https://github.com/txp-labs/sensitive-data-scanner/issues/55)):
+
+| Mode | What runs |
+|---|---|
+| `scanner` (the default) | This scanner reads the stores itself |
+| `vendor` | The platform's own detection has found it, and an **importer** turns the vendor's findings into this scanner's; this scanner reads nothing, and each store is `vendor_mode` (the vendor covers its kind) or `vendor_not_covered` |
+| `both` | The scanner reads and the importer imports; a finding of one at the same location and class as a finding of the other is **linked** (`linked`), never merged |
+
+Every finding says where it came from: `source` is `scanner`, or
+`vendor:<name>` (`vendor:macie`, `vendor:google_sdp`, `vendor:purview`,
+`vendor:google_workspace_dlp`, `vendor:slack_dlp`). The document says the mode
+each platform ran in (`scanMode`, `{"aws": "both"}`) and, for each importer,
+what it read and what its vendor does not cover (`vendorCoverage`).
+
+A vendor's finding **never carries a value**. The importer runs in the
+customer's environment, like the scanner, and keeps only:
+
+- the location, masked under the same rules as the scanner's (an S3 key, a
+  BigQuery column, a SaaS item named by hashes);
+- the vendor's detector type, as a name (`vendorType`: `CREDIT_CARD_NUMBER`),
+  masked, and the spec's class it maps to, or `other`;
+- the vendor's counts (`count`, `occurrences`) and its finding id
+  (`vendorFindingId`, masked);
+- the store's encryption, when the vendor reports it.
+
+Everything else a vendor keeps is dropped unread: snippets, samples, matched
+text, the positions of each match (a vendor finding has no `offsets`; its
+`format` and `via` are `vendor`), titles and descriptions. The no-leak suite
+plants values in each of those and fails if any reaches a finding, a log line,
+the state or an event.
+
+```json
+{
+  "id": "5b0e…",
+  "resource": { "type": "s3_object", "bucket": "example-lake", "key": "exports/cards.csv", "versionId": "v-1" },
+  "format": "vendor",
+  "class": "card",
+  "count": 2,
+  "occurrences": 2,
+  "confidence": "medium",
+  "via": ["vendor"],
+  "offsets": [],
+  "source": "vendor:macie",
+  "vendorType": "CREDIT_CARD_NUMBER",
+  "vendorFindingId": "6f1c…",
+  "linked": ["c877…"]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `source` | `scanner`, or `vendor:<name>` |
+| `vendorType` | The vendor's detector type, a name only; `other` findings name theirs here (a custom identifier: `custom:<name>`) |
+| `vendorFindingId` | The vendor's id for its finding or alert, masked |
+| `linked` | In `both` mode: the ids of the other source's findings at the same location and class |
+| `scanMode` (document) | The mode each platform ran in |
+| `vendorCoverage` (document) | Per importer: `vendor`, `platform`, `mode`, `status` (`read`, `not_enabled`, `access_denied`, `error`, `throttled`), `error`, `findings`, `covers` (the kinds it covers) and `limits` |
+
+`limits` name what a vendor's tool does not cover: `s3_only` (Macie reads S3
+alone), `profiled_stores_only`, `sampled_by_vendor`, `profiles_not_items`,
+`policy_matches_only`, `alerts_only`, `item_not_linkable` (the vendor names no
+item this scanner can link to), `counts_not_distinct` (the vendor's counts are
+occurrences) and `enterprise_grid_only`.
+
+| Platform | Vendor | Importer | Covers | Limits |
+|---|---|---|---|---|
+| AWS | Amazon Macie | `macie2:ListFindings` and `GetFindings`, category `CLASSIFICATION`, updated since the last run (`MACIE_LOOKBACK_DAYS` first) | `s3` | `s3_only`, `sampled_by_vendor`, `counts_not_distinct` |
+
+Macie's managed data identifiers map to the spec's classes:
+`CREDIT_CARD_NUMBER`, `CREDIT_CARD_NUMBER_(NO_KEYWORD)` and
+`CREDIT_CARD_MAGNETIC_STRIPE` to `card`, `CREDIT_CARD_SECURITY_CODE` to `cvv`,
+`USA_SOCIAL_SECURITY_NUMBER` to `us_ssn`,
+`USA_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER` to `us_itin`, `DATE_OF_BIRTH` to
+`dob`, `BANK_ACCOUNT_NUMBER` and `USA_BANK_ACCOUNT_NUMBER` to
+`account_number`; any other type, and each custom data identifier, to `other`.
+The scanner never calls `GetSensitiveDataOccurrences`, which reveals samples
+of the values, and its template denies it.
 
 ## Where findings go
 
