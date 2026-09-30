@@ -35,7 +35,8 @@ uv pip install \
 uv build --wheel --package sensitive-data-scanner-core --out-dir "$work/dist"
 uv build --wheel --package sensitive-data-scanner --out-dir "$work/dist"
 uv pip install --python 3.12 --target "$work/package" --no-deps "$work"/dist/*.whl
-"$root/scripts/slim-site-packages.sh" "$work/package"
+# Byte-compiled with the runtime's Python (3.12) for the cold start (#94).
+PYTHON="$(uv python find 3.12)" "$root/scripts/slim-site-packages.sh" "$work/package"
 mkdir -p "$work/package/licenses"
 cp "$root/LICENSE" "$root/NOTICE" "$work/package/licenses/"
 cp -r "$root/third_party" "$work/package/licenses/"
