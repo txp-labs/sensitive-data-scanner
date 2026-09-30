@@ -30,6 +30,16 @@ writes **findings only** to a results store in the same account:
   with the reason (denied, KMS access, too large, unsupported format, or
   deferred to the next run by the budget).
 
+**It reads what changed, and what an improvement could change.** Each run
+reads the objects that changed since the last. It also reads the tables whose
+engine says they changed, and DynamoDB's changed items through incremental
+exports. It keeps an index of what each object was read with: every adapter,
+reader and spec has a version from its source. So an unchanged object is read
+again only when a component that could change its result changed: a better
+PDF reader, or a new class. The index also skips identical copies. These
+rescans use at most a quarter of a run's budget and are spread over runs
+([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#how-rescans-are-chosen)).
+
 **It never records the values themselves.** No card number, SSN or other
 detected value is written to its results, events, logs or error messages. A
 test suite scans every test case end to end and enforces this. A reviewer
