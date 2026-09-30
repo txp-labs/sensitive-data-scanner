@@ -139,6 +139,22 @@ def test_opt_in_permissions_sit_in_their_own_roles_off_by_default() -> None:
     assert not any(verb(p) in OPT_IN_VERBS for p in t["locals"]["read_permissions"])
 
 
+def test_sdp_profiles_are_listed_only_in_vendor_or_both() -> None:
+    """#55: Sensitive Data Protection's data profiles, listed (never its inspection results,
+    which can quote matched text), by a role made only when scan_mode is not scanner."""
+    t = load()
+    perms = set(t["locals"]["sdp_permissions"])
+    assert perms == {"dlp.columnDataProfiles.list", "dlp.fileStoreProfiles.list"}
+    assert all(verb(p) == "list" for p in perms)
+    assert not perms & set(t["locals"]["read_permissions"])
+    assert t["variable"]["scan_mode"]["default"] == "scanner"
+    source = (DEPLOY / "main.tf").read_text()
+    assert re.search(
+        r'var\.scan_mode != "scanner" \? \{ sdp = \{[^}]*local\.sdp_permissions', source
+    )
+    assert "dlp.jobs" not in source and "inspectFindings" not in source
+
+
 def test_custom_roles_are_the_read_roles_and_only_they_are_bound_at_the_scope() -> None:
     r = load()["resource"]
     roles = r["google_organization_iam_custom_role"]

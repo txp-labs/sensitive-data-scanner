@@ -434,6 +434,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   read into it. Macie's managed identifiers map to the spec's classes; any
   other type is `other`. The document names the mode (`scanMode`) and the
   import's coverage and limits (`vendorCoverage`, `s3_only`).
+- **Google Cloud Sensitive Data Protection's profiles** ([#55](https://github.com/txp-labs/sensitive-data-scanner/issues/55)):
+  with `SCAN_MODE` `vendor` or `both` (Terraform `scan_mode`), the Google
+  Cloud scanner imports SDP's BigQuery column profiles (on the same resource
+  as its own BigQuery findings, so `both` links them) and Cloud Storage file
+  store profiles (per bucket), in each of `SDP_LOCATIONS`, keeping only the
+  location, the info types' names and the profile's hashed name; quotes and
+  samples are never read. `vendor` reads nothing (`vendor_mode` for BigQuery
+  and Cloud Storage, `vendor_not_covered` for the rest). A vendor finding's
+  id now includes its `vendorType`, so two `other` types at one place stay
+  two findings.
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -463,6 +473,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   that were skipped before.
 
 ### Security
+- (#55) The Google Cloud module lists SDP's data profiles with a role of its
+  own, made only when `scan_mode` is not `scanner`, holding
+  `dlp.columnDataProfiles.list` and `dlp.fileStoreProfiles.list` only; the
+  strict test holds it to that and keeps DLP jobs and inspection results out.
 - (#55) Macie is read only with `ScanMode` `vendor` or `both`
   (`macie2:GetMacieSession`, `ListFindings`, `GetFindings`), and a new deny,
   `NeverRevealOrChangeMacie`, keeps the scanner's role from Macie's occurrence

@@ -351,6 +351,31 @@ GRANT SELECT ON `shop`.* TO 'sds-scanner'@'%';
 Grant nothing else: any privilege but reads is refused, and a role you cannot
 narrow is refused rather than read.
 
+## Sensitive Data Protection's profiles (#55)
+
+With `SCAN_MODE` `vendor` or `both` (Terraform: `scan_mode`), the job imports
+the data profiles Sensitive Data Protection's discovery keeps, for the
+organization (or each project in scope) in each of `SDP_LOCATIONS`:
+
+- a **BigQuery column profile** becomes a finding on the same `store_field`
+  (dataset, table, column, `project`, `resourceNameHash`) as this scanner's
+  BigQuery findings, so in `both` mode the two are linked;
+- a **Cloud Storage file store profile** becomes a finding per info type on
+  the bucket (a profile names no object).
+
+Only the location, the info types' names and the hash of the profile's name
+are kept; its other matches, samples and quotes are never read, and its
+inspection results are never asked for. Info types map to the spec's classes
+(`CREDIT_CARD_NUMBER` and `CREDIT_CARD_TRACK_NUMBER` to `card`,
+`US_SOCIAL_SECURITY_NUMBER` to `us_ssn`,
+`US_INDIVIDUAL_TAXPAYER_IDENTIFICATION_NUMBER` to `us_itin`, `DATE_OF_BIRTH`
+to `dob`, `FINANCIAL_ACCOUNT_NUMBER` and `IBAN_CODE` to `account_number`); any
+other is `other`. The Terraform module adds a role that holds only
+`dlp.columnDataProfiles.list` and `dlp.fileStoreProfiles.list` when
+`scan_mode` is not `scanner`, and enables the DLP API. In `vendor` mode,
+BigQuery and Cloud Storage stores are `vendor_mode` and every other kind
+`vendor_not_covered`.
+
 ## Findings
 
 A Google Cloud document says `"platform": "gcp"` and names its `site`
@@ -400,6 +425,8 @@ masked.
 | `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters |
 | `FINDINGS_PUBSUB_TOPIC` | | Also publish each part as a message to this topic (`projects/<project>/topics/<topic>`), as the job's service account: `data` is the part as JSON, the attributes are `source` `sensitive-data-scanner`, `type` `Findings v1`, `runId` and `part`. The topic's owner grants the service account Pub/Sub Publisher on that topic only |
 | `FINDINGS_FILE` | | Also write the document to a file |
+| `SCAN_MODE` | `scanner` | Who finds the data (#55): `scanner`, `vendor` (Sensitive Data Protection's data profiles are imported; nothing is read) or `both` (linked) ([FINDINGS.md](FINDINGS.md#sources-and-modes-18)) |
+| `SDP_LOCATIONS`, `SDP_MAX_PROFILES` | `global`, 20000 | Where Sensitive Data Protection's discovery keeps its profiles, and the most imported a run |
 
 At least one of `STATE_BUCKET`, `FINDINGS_HTTPS_URL`, `FINDINGS_PUBSUB_TOPIC`
 and `FINDINGS_FILE` is required.

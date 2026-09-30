@@ -2664,3 +2664,39 @@ def test_no_vendor_snippet_or_matched_text_passes_through_macie(
         for value in (CARDS["visa"], CARDS["amex"], CARDS["jcb"], SSN_A, SSN_B):
             assert value not in blob, where
         assert "The S3 object contains" not in blob, where
+
+
+def test_no_vendor_snippet_or_matched_text_passes_through_sdp(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Sensitive Data Protection's profiles can carry quotes of matched text and sample
+    findings, and name tables, columns and buckets that hold values: no quote reaches the
+    findings, the logs or the state, and the names kept are masked."""
+    from gcp_fakes import NOW, STATE_BUCKET
+    from sensitive_data_gcp.runner import run_scan
+    from test_gcp_bigquery import cloud
+    from test_modes_sdp import Dlp, column_profile, file_store_profile
+
+    c, _ = cloud()
+    dlp = Dlp(c)
+    p = column_profile(f"sales_{SSN_A}", "orders", f"card_{CARDS['visa']}", "CREDIT_CARD_NUMBER")
+    p["columnInfoType"]["quote"] = CARDS["jcb"]
+    dlp.columns = [p]
+    dlp.file_stores = [file_store_profile(f"lake-{CARDS['mir']}", f"CUSTOM_{SSN_B}")]
+    from gcp_fakes import settings as gcp_settings
+
+    capsys.readouterr()
+    doc, _ = run_scan(
+        gcp_settings(DISCOVER="bigquery", SCAN_MODE="vendor"),
+        c.clients(),
+        detector=__import__("aws_fixtures").shared_detector(),
+        now=lambda: NOW,
+    )
+    assert doc is not None
+    out = capsys.readouterr().out
+    written = "\n".join(o.data.decode() for o in c.buckets[STATE_BUCKET].objects.values())
+    assert {f["source"] for f in doc["findings"]} == {"vendor:google_sdp"}
+    for where, blob in {"document": json.dumps(doc), "logs": out, "written": written}.items():
+        assert leaks(blob) == [], where
+        for value in (CARDS["amex"], CARDS["jcb"], CARDS["visa"], CARDS["mir"], SSN_A, SSN_B):
+            assert value not in blob, where
