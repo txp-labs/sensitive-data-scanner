@@ -146,7 +146,7 @@ class MailSource:
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
             gap = call_gap(err)
-            if cov.scanned == 0 and gap not in (None, "access_denied"):
+            if cov.scanned == 0 and gap is not None:
                 note = gap
             if gap == "throttled":
                 cov.error = None

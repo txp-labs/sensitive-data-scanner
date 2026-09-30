@@ -53,7 +53,18 @@ def vendor_facts(customer_key_id: str | None) -> dict[str, str]:
 
 
 # Vendor codes for a call the scanner may not make, beyond the core's ACCESS_DENIED.
-DENIED = frozenset({*ACCESS_DENIED, "Http401", "Http403", "InvalidAuthenticationToken"})
+DENIED = frozenset(
+    {
+        *ACCESS_DENIED,
+        "Http401",
+        "Http403",
+        "InvalidAuthenticationToken",
+        # Google: the delegation does not cover the scope or the user; a user or drive the
+        # caller may not see.
+        "unauthorized_client",
+        "UNAUTHENTICATED",
+    }
+)
 PROTECTED = frozenset({"ProtectedApiNotApproved"})
 NOT_PROVISIONED = frozenset(
     {

@@ -2430,3 +2430,74 @@ def test_no_value_leaves_the_saas_scanner_m365(
         for secret in (SSN_A, SSN_B, CARDS["visa"], "made-up-client-secret", "made-up-graph-token"):
             assert secret not in blob, where
         assert "@contoso.example" not in blob, where
+
+
+def test_no_value_leaves_the_saas_scanner_google_workspace(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Values in Gmail subjects, bodies and attachments, Drive files and Google exports, and
+    in addresses, file, attachment and shared drive names and Google's error messages: none
+    of them in the findings, the logs, the state or any repr, and no address at all."""
+    from gws_fakes import NOW, DFile, GMsg, Workspace, gerror, settings
+    from office_fixtures import docx
+    from sensitive_data_core.state import FileState
+    from sensitive_data_saas.runner import run_scan
+
+    ana = f"ssn.{SSN_A}@acme.example"
+    ben = f"card{CARDS['discover']}@acme.example"
+    w = Workspace()
+    w.user(ana)
+    w.user(ben, gmail=False)
+    w.mail(
+        ana,
+        GMsg(
+            "m1",
+            f"re: {CARDS['visa']}",
+            text=f"my card is {printed(CARDS['visa'])}, ssn {dashed(SSN_B)}",
+            attachments=[(f"ssn-{SSN_A}.docx", docx([f"card {printed(CARDS['amex'])}"]))],
+        ),
+    )
+    w.file(
+        "my", DFile("f1", f"{CARDS['jcb']}.txt", data=f"card {CARDS['jcb']}".encode(), owner=ana)
+    )
+    w.file(
+        "my",
+        DFile(
+            "f2",
+            f"Roster {SSN_A}",
+            mime="application/vnd.google-apps.spreadsheet",
+            data=f"ssn\n{dashed(SSN_B)}\n".encode(),
+            owner=ana,
+        ),
+    )
+    w.drive_names["0AshareFIN1"] = f"Fin {CARDS['mir']}"
+    w.drive_members["0AshareFIN1"] = {"admin@acme.example"}
+    w.file("0AshareFIN1", DFile("s1", "l.csv", data=f"card\n{CARDS['mastercard']}\n".encode()))
+    w.fail["/admin/directory/v1/groups/"] = gerror(
+        403, "PERMISSION_DENIED", f"{ben} {CARDS['visa']}"
+    )
+    s = settings(
+        tmp_path,
+        GWS_USERS=f"{ana},{ben},missing-{SSN_B}@acme.example",
+        GWS_GROUPS=f"g-{SSN_A}@acme.example",
+        GWS_SHARED_DRIVES="0AshareFIN1",
+    )
+    state = FileState(str(tmp_path / "state.json"))
+    clients = w.clients(s)
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, _ = run_scan(s, clients, detector=detector, now=lambda: NOW, state=state)
+    out = capsys.readouterr().out
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert {"gmail", "drive", "shared_drive"} <= {f["resource"]["service"] for f in doc["findings"]}
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        "state": (tmp_path / "state.json").read_text(),
+        "reprs": repr(s) + repr(clients) + repr(s.gws) + repr(clients.delegation),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        for secret in (SSN_A, SSN_B, CARDS["visa"], "made-up-tok", "PRIVATE KEY"):
+            assert secret not in blob, where
+        assert "@acme.example" not in blob, where
