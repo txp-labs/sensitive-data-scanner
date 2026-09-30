@@ -53,9 +53,11 @@ jobs:
 
       - name: Tests
         env:
-          # The parity test runs the TypeScript package with Node; in CI a
-          # missing Node is a failure, not a skip.
+          # The parity test runs the TypeScript package with Node, and the
+          # databases runner's PostgreSQL and MySQL tests run in Docker
+          # (testcontainers); in CI a missing Node or Docker is a failure.
           SDS_REQUIRE_PARITY: "1"
+          SDS_REQUIRE_DOCKER: "1"
         run: uv run pytest
 
   node:
@@ -184,5 +186,50 @@ jobs:
               buf = io.BytesIO(); write(t, buf); buf.seek(0)
               r = scan_table(kind, buf, d, 100)
               assert r.rows == 1, kind
+          print("ok")
+          '
+
+      - name: Build the databases runner image (every engine, and PostgreSQL and MySQL only)
+        run: |
+          set -euo pipefail
+          docker build --target db -t sensitive-data-scanner-db:ci .
+          docker build --target db --build-arg DB_EXTRAS="postgresql mysql" -t sensitive-data-scanner-db:slim .
+          docker image ls sensitive-data-scanner-db --format 'db image {{.Tag}}: {{.Size}}'
+
+      - name: Smoke test the databases runner image (no network)
+        run: |
+          set -euo pipefail
+          # A wrong setting is reported by its code, and nothing else is printed.
+          out=$(docker run --rm --network none -e SCANNER_SITE=ci \
+            -e DATABASE_URL_X='redis://u:made-up@h/0' -e FINDINGS_FILE=/tmp/f.json \
+            sensitive-data-scanner-db:ci scan || true)
+          echo "${out}"
+          echo "${out}" | grep -q '"error":"unknown_scheme"'
+          if echo "${out}" | grep -q made-up; then echo "the connection string was printed"; exit 1; fi
+          # Every engine's driver imports in the full image; the slim one reports the rest as missing.
+          docker run --rm --network none --entrypoint python sensitive-data-scanner-db:ci -c '
+          from sensitive_data_db.engines import DRIVERS, load_driver
+          missing = [e for e in DRIVERS if load_driver(e) is None]
+          assert not missing, missing
+          import boto3
+          print("ok")
+          '
+          docker run --rm --network none --entrypoint python sensitive-data-scanner-db:slim -c '
+          from sensitive_data_db.engines import DRIVERS, load_driver
+          got = sorted(e for e in DRIVERS if load_driver(e) is not None)
+          assert got == ["mysql", "postgresql"], got
+          print("ok")
+          '
+          # A database that cannot be reached: the run completes and names the error.
+          docker run --rm --network none -v "${RUNNER_TEMP}:/out" -u "$(id -u)" -e SCANNER_SITE=ci \
+            -e DATABASE_URL_PG='postgresql://ro:made-up@db.invalid:5432/app' \
+            -e DB_CONNECT_TIMEOUT_SECONDS=2 -e FINDINGS_FILE=/out/findings.json \
+            sensitive-data-scanner-db:ci
+          python3 -c '
+          import json, os
+          doc = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "findings.json")))
+          s = doc["discovery"]["stores"][0]
+          assert (doc["platform"], s["status"], s["reason"]) == ("database", "error", "error"), s
+          assert "made-up" not in json.dumps(doc)
           print("ok")
           '

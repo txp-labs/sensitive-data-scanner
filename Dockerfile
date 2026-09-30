@@ -37,7 +37,55 @@ RUN cd scanner \
  && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
  && cp -r /src/third_party /opt/app/licenses/
 
-FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+# ---------------------------------------------------------------------------
+# The databases-anywhere runner (docs/DATABASES.md): a separate target, never
+# the default. It carries the core and the drivers of the engines named in
+# DB_EXTRAS (every engine by default; name fewer for a smaller image).
+#
+#   docker build --target db -t sensitive-data-scanner-db .
+#   docker build --target db --build-arg DB_EXTRAS="postgresql mysql" -t sds-db-slim .
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS db-build
+ARG DB_EXTRAS="postgresql mysql sqlserver oracle mongodb snowflake databricks aws"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends binutils \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_NO_CACHE=1 UV_PYTHON_DOWNLOADS=never
+WORKDIR /src
+COPY LICENSE NOTICE ./
+COPY spec/ spec/
+COPY schema/ schema/
+COPY third_party/ third_party/
+COPY scanner/ scanner/
+COPY scripts/slim-site-packages.sh scripts/
+RUN cd scanner \
+ && extras="" && for e in ${DB_EXTRAS}; do extras="${extras} --extra ${e}"; done \
+ && uv export --frozen --package sensitive-data-scanner-db --no-default-groups ${extras} --no-emit-workspace -o /tmp/requirements.txt \
+ && uv pip install --python /usr/local/bin/python --target /opt/app --require-hashes -r /tmp/requirements.txt \
+ && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
+ && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
+ && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
+ && /src/scripts/slim-site-packages.sh /opt/app \
+ && mkdir -p /opt/app/licenses \
+ && cp /src/LICENSE /src/NOTICE /opt/app/licenses/ \
+ && cp -r /src/third_party /opt/app/licenses/
+
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS db
+LABEL org.opencontainers.image.source="https://github.com/txp-labs/sensitive-data-scanner" \
+      org.opencontainers.image.description="Sensitive data scanner for databases hosted anywhere: read-only, findings only, never values" \
+      org.opencontainers.image.licenses="Apache-2.0"
+COPY --from=db-build /opt/app /opt/app
+ENV PYTHONPATH=/opt/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+WORKDIR /opt/app
+USER 65532:65532
+ENTRYPOINT ["python", "-m", "sensitive_data_db"]
+CMD ["scan"]
+
+# ---------------------------------------------------------------------------
+# The Lambda image: the last stage, so a plain `docker build .` builds it.
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS lambda
 LABEL org.opencontainers.image.source="https://github.com/txp-labs/sensitive-data-scanner" \
       org.opencontainers.image.description="Sensitive data scanner: findings only, never values" \
       org.opencontainers.image.licenses="Apache-2.0"

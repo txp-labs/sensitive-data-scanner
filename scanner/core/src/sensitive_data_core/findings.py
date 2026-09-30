@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.3,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.4,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -16,6 +16,7 @@ the shape any cloud's store can use.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -24,7 +25,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.3"
+FINDINGS_SCHEMA_VERSION = "1.4"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -162,7 +163,12 @@ def finding_json(
     *,
     first_seen_at: str | None = None,
     connect: dict[str, str] | None = None,
+    facts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """One finding. `facts` are what an adapter knows about the store from its own
+    configuration, the same for every finding in it (#35: `atRestEncryption`); each is
+    added to the finding and never replaces a field the contract already has. A fact
+    joins the findings schema (a minor bump) in the change that first fills it."""
     offsets = [o.as_json() for o in cf.offsets[:MAX_OFFSETS_PER_FINDING]]
     out: dict[str, Any] = {
         "id": finding_id(resource, cf.cls),
@@ -183,6 +189,10 @@ def finding_json(
     }
     if connect:
         out["connect"] = {k: redact_digits(v) for k, v in connect.items() if v}
+    for k, v in (facts or {}).items():
+        if k in out:
+            raise ValueError("a store fact may not replace a finding field")
+        out[k] = redact_digits(v) if isinstance(v, str) else v
     return out
 
 
@@ -240,15 +250,20 @@ class Coverage:
 def findings_document(
     *,
     run_id: str,
-    account: str,
-    region: str,
+    account: str | None,
+    region: str | None,
     started_at: str,
     finished_at: str,
     classes: list[str],
     coverage: list[Coverage],
     findings: list[dict[str, Any]],
     discovery: dict[str, Any] | None = None,
+    platform: str | None = None,
+    site: str | None = None,
+    scanner_version: str | None = None,
 ) -> dict[str, Any]:
+    """The findings document. An AWS run names its account and region; a run of another
+    platform (1.4: `platform`, such as `database`) names the `site` it runs in instead."""
     ranked = sorted(findings, key=lambda f: (-_CONF_RANK[f["severity"]], -f["count"], f["id"]))
     kept = ranked[:MAX_FINDINGS_IN_DOCUMENT]
     totals: dict[str, int] = {}
@@ -257,11 +272,19 @@ def findings_document(
     doc: dict[str, Any] = {
         "schema": FINDINGS_SCHEMA,
         "schemaVersion": FINDINGS_SCHEMA_VERSION,
-        "scannerVersion": __version__,
+        "scannerVersion": scanner_version or __version__,
         "specVersion": SPEC_VERSION,
         "runId": run_id,
-        "account": account,
-        "region": region,
+    }
+    if platform is not None:
+        doc["platform"] = platform
+    if site is not None:
+        doc["site"] = site
+    if account is not None:
+        doc["account"] = account
+    if region is not None:
+        doc["region"] = region
+    doc |= {
         "startedAt": started_at,
         "finishedAt": finished_at,
         "classes": classes,

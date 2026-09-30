@@ -128,6 +128,22 @@ FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
 - The results: `findings/latest.json` in the results bucket
   ([docs/FINDINGS.md](docs/FINDINGS.md)).
 
+### Run it next to any database
+
+The databases runner is a container you run in your own network. It checks
+that each database user can only read, samples the tables, and sends findings
+only:
+
+```sh
+docker build --target db -t sensitive-data-scanner-db .
+docker run --rm -e SCANNER_SITE=dc-1 \
+  -e DATABASE_URL_HR='postgresql://scanner_ro:...@10.0.4.12:5432/hr' \
+  -e FINDINGS_FILE=/out/findings.json -v "$PWD/out:/out" sensitive-data-scanner-db
+```
+
+Engines, settings, deployment (docker, Kubernetes, ECS, Azure Container
+Instances) and image sizes: [docs/DATABASES.md](docs/DATABASES.md).
+
 ### Use the detection from Python
 
 ```python
@@ -174,9 +190,10 @@ not on npm yet.
 | `packages/spec-ts/` | The TypeScript package |
 | `scanner/core/` | The cloud-neutral core (`sensitive-data-scanner-core`): the spec engine, Presidio recognizers, findings, budgets and sampling, the coverage summary, the findings push interface, the sampled SQL pass and the adapter interface |
 | `scanner/` | The AWS scanner (`sensitive-data-scanner`): every AWS adapter, discovery, the batch runner and the Lambda handler, built on the core |
+| `scanner/db/` | The databases-anywhere runner (`sensitive-data-scanner-db`): a container that samples PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Snowflake and Databricks SQL with a read-only user ([docs/DATABASES.md](docs/DATABASES.md)) |
 | `schema/` | The findings JSON Schema |
 | `deploy/` | CloudFormation for the estate rollout: `scanner.yaml` (one account and region) and `estate-stackset.yaml` (a service-managed StackSet) |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md), [findings](docs/FINDINGS.md), [releasing](docs/RELEASING.md) |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md), [findings](docs/FINDINGS.md), [databases anywhere](docs/DATABASES.md), [releasing](docs/RELEASING.md) |
 
 ## License
 

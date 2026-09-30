@@ -61,6 +61,13 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 ## What is pending (decided later with Chris)
 
+- **The databases runner.** Its image (`docker build --target db`) and its
+  wheel (`sensitive-data-scanner-db`) are built and tested in CI, but the
+  Release workflow does not publish them yet. Publishing needs a GHCR
+  package name (`ghcr.io/txp-labs/sensitive-data-scanner-db`) and a job
+  beside `image` that builds `--target db`. Its version is checked with the
+  others.
+
 - **Signing.**
   - Choose between AWS Signer (a signing profile; Lambda can enforce code
     signing for zip deployments) and cosign (keyless with GitHub OIDC,
