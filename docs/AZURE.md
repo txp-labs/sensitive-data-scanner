@@ -60,9 +60,13 @@ and its own image (`docker build --target azure`).
   the AWS scanner reads S3 objects, with the core's readers
   (`sensitive_data_core.scan.objects`): Parquet and ORC by column through
   ranged reads (footer first), Avro, gzip and zstd inflated, JSON and JSON
-  lines, CSV, conversation transcripts and text, and Word, Excel and
-  PowerPoint files as their text. Audio, video, images, PDFs, the older binary
-  Office formats and archives are counted, not read. ADLS Gen2 is read through the
+  lines, CSV, conversation transcripts and text, Word, Excel and PowerPoint
+  files and PDFs as their text, and zip, tar, gzip, bzip2 and xz archives
+  entry by entry. What a blob is comes from its first bytes, not its name: a
+  renamed file is read by content and its findings say `disguised`
+  ([FINDINGS.md](FINDINGS.md#archives-pdfs-and-disguised-files-19)). Audio,
+  video, images and the older binary Office formats are counted, not read;
+  7z is `archive_unsupported`. ADLS Gen2 is read through the
   same Blob endpoint; its directories are zero-length blobs and are skipped.
 - **Incremental.** A pass reads only the blobs modified since the previous
   complete pass started (less `skew`), and a pass cut short by the budget
@@ -97,8 +101,8 @@ and its own image (`docker build --target azure`).
   and it reads a file whatever its NTFS ACL says. That is why it is opt-in.
   Storage File Data SMB Share Reader works over SMB only, not REST.
 - The share is listed directory by directory, and files are read the way
-  blobs are: ranged reads, table files by column, compressed text inflated,
-  media and archives counted. A pass reads the files modified since the
+  blobs are: by content, with ranged reads, table files by column, Office
+  files and PDFs as their text, archives by entry, media counted. A pass reads the files modified since the
   previous complete pass started, in path order, and resumes after the last
   file read. A file that is gone takes its findings with it. Nothing is
   written, leased, closed or snapshotted.

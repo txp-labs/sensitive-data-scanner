@@ -31,7 +31,7 @@ from sensitive_data_core.findings import (
 from sensitive_data_core.safety import error_name
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.item import ItemResult, scan_item_text
-from sensitive_data_core.scan.objects import ObjectResult, read_object, skip_kind
+from sensitive_data_core.scan.objects import ObjectResult, read_object, record
 
 from ..clients import Clients
 from ..config import Settings
@@ -188,10 +188,6 @@ class ItemReader:
     ) -> list[dict[str, Any]]:
         """One file or attachment of `size` bytes, read with ranged `fetch`es. What it cannot
         read is counted (`skipped` by kind, `too_large`); a failed fetch is raised."""
-        kind = skip_kind(name)
-        if kind is not None:
-            self.skip(kind)
-            return []
         if size <= 0:
             return []
         s = self.settings
@@ -205,24 +201,16 @@ class ItemReader:
             max_rows=s.columnar_max_rows,
             columnar=self.columnar,
         )
-        self.cov.partial += int(got.partial)
-        if got.skipped is not None:
-            self.skip(got.skipped)
-            return []
-        self.cov.scanned += 1
-        self.cov.bytes_scanned += got.read
-        if got.table is not None:
-            table = got.table
-            self.cov.formats[table.format] = self.cov.formats.get(table.format, 0) + 1
-            out: list[dict[str, Any]] = []
-            for column, item in sorted(table.by_column.items()):
-                for cf in item.findings.values():
-                    cf.offsets = []
-                out.extend(self._item(item, resource_for(column), link))
-            return out
-        if got.item is not None:
-            return self._item(got.item, resource_for(None), link)
-        return []
+        findings = record(
+            got,
+            self.cov,
+            resource_for=resource_for,
+            link=link,
+            seen_at=self.seen_at,
+            facts=self.facts,
+            table_offsets=False,
+        )
+        return findings or []
 
 
 def bytes_fetch(data: bytes) -> Callable[[int, int], bytes]:

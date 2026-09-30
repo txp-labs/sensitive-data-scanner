@@ -428,7 +428,7 @@ def files_tenant() -> M365:
     lib = m.drives["d-lib"]
     lib.add(Item("x1", "roster.xlsx", xlsx([["name", "ssn"], ["A", dashed(SSN_A)]])))
     lib.add(Item("x2", "locked.docx", OLE))
-    lib.add(Item("x3", "photo.png", b"\x89PNG....."))
+    lib.add(Item("x3", "photo.png", b"\x89PNG\r\n\x1a\n made up"))
     lib.add(Item("dir", "folder", folder=True))
     lib.add(Item("x4", f"card-{CARDS['mir']}.txt", f"{CARDS['mir']}".encode(), unique_id="u-4"))
     return m

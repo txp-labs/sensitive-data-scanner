@@ -66,16 +66,19 @@ One run:
      version, and the finding names that `VersionId`.
      - Sampling is stable (a hash of the key) and reported.
      - Large objects are read in part and counted as partial.
+     - **What an object is comes from its first bytes, not its name**
+       ([What an object is: content, archives and PDFs](#what-an-object-is-content-archives-and-pdfs)).
+       A renamed file is read by content and its findings say `disguised`.
      - Parquet, ORC and Avro files are read by column
-       ([Columnar and data-lake formats](#columnar-and-data-lake-formats)),
-       and gzip or zstd text is inflated first.
-     - Word, Excel and PowerPoint's Open XML files (`.docx`, `.xlsx`,
-       `.pptx`) are read as their text by the core's reader
-       (`scan/office.py`) through ranged GETs of one version, within the
-       byte and inflate caps; a rights-managed one is counted as
-       `encrypted`. CodeCommit files and ECR layer files are read the same way.
-     - Audio, video, images, PDFs, the older binary Office formats and
-       archives are counted, not read.
+       ([Columnar and data-lake formats](#columnar-and-data-lake-formats)).
+     - Word, Excel and PowerPoint's Open XML files are read as their text by
+       the core's reader (`scan/office.py`) through ranged GETs of one
+       version, within the byte and inflate caps; a rights-managed one is
+       counted as `encrypted`. PDFs are read as their text layer.
+     - zip, tar, gzip, bzip2 and xz archives are read entry by entry, in
+       memory; 7z is counted as `archive_unsupported`.
+     - Audio, video, images and the older binary Office formats are counted,
+       not read. CodeCommit files and ECR layer files are read the same way.
      - Deleted objects drop out of the findings.
    - **CloudWatch Logs.** The source reads `FilterLogEvents` in windows of at
      most 24 hours from a watermark, up to two minutes ago. If a window
@@ -402,10 +405,10 @@ bucket, a prefix or a Glue table:
 
 | Format | Recognized by | Read with |
 |---|---|---|
-| Parquet | `.parquet` (`x.snappy.parquet`, `x.gz.parquet`), or the `PAR1` magic bytes | pyarrow, one row group at a time, through ranged GETs |
-| ORC | `.orc`, or `ORC` magic bytes | pyarrow, one stripe at a time, through ranged GETs |
-| Avro | `.avro`, or `Obj\x01` magic bytes | the scanner's own reader (`scan/avro.py`); snappy and zstandard codecs through pyarrow |
-| gzip or zstd CSV and JSON lines | `.csv.gz`, `.jsonl.zst` and the like | inflated (`MAX_INFLATED_BYTES`), then read as CSV or JSON lines |
+| Parquet | the `PAR1` magic bytes (`PARE`, modular encryption, is counted as `encrypted`) | pyarrow, one row group at a time, through ranged GETs |
+| ORC | the `ORC` magic bytes | pyarrow, one stripe at a time, through ranged GETs |
+| Avro | the `Obj\x01` magic bytes | the scanner's own reader (`scan/avro.py`); snappy and zstandard codecs through pyarrow |
+| gzip, bzip2, xz or zstd CSV and JSON lines | their magic bytes (`.csv.gz`, `.jsonl.zst` and the like) | inflated (`MAX_INFLATED_BYTES`), then read as what they hold |
 
 - **Ranged reads.** Parquet and ORC keep their footer at the end: the
   scanner seeks there, reads the footer, then the first row groups, up to
@@ -425,6 +428,53 @@ bucket, a prefix or a Glue table:
   Avro with the standard library's codecs (null, deflate, bzip2, xz), and
   counts Parquet, ORC, zstd and snappy or zstandard Avro as skipped
   `columnar`. **Use the image to scan a data lake.**
+
+### What an object is: content, archives and PDFs
+
+Every object store (S3, Azure Blob Storage and Files, Cloud Storage, SaaS
+files and attachments, CodeCommit files, ECR layer files) reads an object
+with the core's reader (`scan/objects.py`,
+[#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)). A name
+is a claim anyone can change, so the reader decides by the bytes:
+
+1. **Sniff.** The first 8 KiB (or the whole object, up to 256 KiB, in the one
+   read) are matched against magic bytes (`scan/sniff.py`): zip, OLE,
+   `%PDF`, gzip, bzip2, xz, zstd, tar (`ustar` at 257), 7z, Parquet, ORC,
+   Avro, a Redis snapshot, images, audio and video; else text when at least
+   85% decodes as printable UTF-8, else binary. A zip is Word, Excel or
+   PowerPoint when it has `[Content_Types].xml` and `word/`, `xl/` or
+   `ppt/` parts, whatever it is named.
+2. **Route by content.** Audio, video, images and binary are counted by kind
+   after the sniff and never fetched further (the budget is charged the sniff
+   for a name that says image, audio or video). Office files are read as
+   their text through ranged reads of the zip; an OLE container is a
+   rights-managed Office file (`encrypted`, by its `EncryptedPackage`
+   stream) or an older binary Office file (`document`). PDFs are read with
+   pypdf (pure Python): each page's text layer and the document
+   information, up to 500 pages; no text layer is `pdf_image_only`, a user
+   password `encrypted`. Tables are read by column; everything else as text.
+3. **Compare with the name.** When the extension claims another kind
+   (`.jpg` over a Word file, `.csv` over a zip), the finding carries
+   `disguised: true`, `declaredType` and `detectedType`, and coverage counts
+   it (`disguised`) whether or not anything was found.
+4. **Archives, entry by entry.** zip (through ranged reads of its
+   directory), tar, and gzip, bzip2, xz and zstd streams are opened in memory
+   and never extracted, so a `../../x` entry (ZipSlip) is only a name. Each
+   entry is sniffed and routed like an object: an archive in an archive is
+   opened up to three levels (a `.tar.gz` is one), an entry that is media or
+   binary is counted without being inflated. The caps: `MAX_INFLATED_BYTES`
+   for all that one object inflates, 1,000 entries per archive, and 200 times
+   an entry's compressed size past 1 MiB (the zip-bomb guard); a capped read
+   is `partial`. A password-protected entry is counted as `encrypted` (the
+   archive, when every entry is). 7z needs `py7zr`, which brings compiled
+   codecs (pyzstd, pybcj, pyppmd, Brotli, PyCryptodome) into the customer's
+   account, so it is counted as `archive_unsupported`. A finding names the
+   entry (`archivePath`, masked like a key; its position, `archiveEntry`,
+   when the mask changed it).
+
+pypdf adds about 4 MB to each image and the Lambda zip; it has no
+dependencies of its own. Its log and warnings are silenced, since a message
+about a malformed object could quote it.
 
 ### Glue Data Catalog and Lake Formation
 
@@ -942,8 +992,9 @@ passing, and each read is a describe or a get.
   with `GetFolder` (at most `CODECOMMIT_MAX_FOLDERS`), and a stable sample of
   its files, ordered by a hash of the path so it spreads across the tree, is
   read with `GetFile` (at most `CODECOMMIT_MAX_FILES`, each to
-  `MAX_OBJECT_BYTES`). Images, archives and other kinds S3 skips, and binary
-  files, are counted, not read. Findings name the repository and the file's
+  `MAX_OBJECT_BYTES`), by the core's reader as S3 reads them: by content, so
+  audio, video, images and binary files are counted, not read, and Office
+  files, PDFs and archives are read as their text and by entry. Findings name the repository and the file's
   path (`readBy: get_file`). A pass resumes across runs, and a head already
   read in full is not read again until the branch moves. An empty repository
   is `unsupported` (`state: empty`). Nothing is pushed or merged.
@@ -1027,7 +1078,10 @@ fetched from the URL ECR signs for it (`GetDownloadUrlForLayer`), at most
 `ECR_MAX_LAYER_BYTES`, and read as a stream (gzip or plain tar; a zstd layer
 is counted as an archive, not read): up to `ECR_MAX_FILES_PER_LAYER` regular
 files outside the operating system's own directories (`usr/`, `lib/`,
-`bin/`, ...), each to `MAX_OBJECT_BYTES`, with the kinds S3 skips counted.
+`bin/`, ...), each to `MAX_OBJECT_BYTES`, by the core's reader as S3 reads
+them: each member's first bytes say what it is, so media and binaries are
+counted (and do not count toward the files cap), and Office files, PDFs and
+archives (a `.jar`, a `.whl`) are read as their text and by entry.
 Nothing is extracted to disk. Findings are `store_field` with the
 repository, the layer's digest as `table`, the path as `field`, and `readBy:
 layer_sample`. An image read in full is not read again until a newer push.

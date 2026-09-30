@@ -36,10 +36,10 @@ from typing import Any
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules, reason_for
 from sensitive_data_core.detect.analyzer import Detector
-from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.findings import Coverage
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
-from sensitive_data_core.scan.objects import read_object, sample_point, skip_kind
+from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
 
 from ..resources import ResourceId, ShareTarget, azure_fields, file_resource, portal_link
 from .base import Context, key_facts
@@ -204,12 +204,7 @@ class FilesSource:
                 cov.sampled_out += 1
                 after = path
                 continue
-            kind = skip_kind(path)
-            if kind is not None:
-                cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
-                after = path
-                continue
-            want = min(size, self.max_object_bytes)
+            want = planned_bytes(path, size, self.max_object_bytes)
             if not budget.has(want):
                 done = False
                 break
@@ -254,40 +249,17 @@ class FilesSource:
             max_rows=self.max_rows,
             columnar=self.columnar,
         )
-        cov.partial += int(got.partial)
-        if got.skipped is not None:
-            cov.skipped[got.skipped] = cov.skipped.get(got.skipped, 0) + 1
-            return
-        cov.scanned += 1
-        cov.bytes_scanned += got.read
         facts = self.facts or self.t.facts
-        link = portal_link(self.t.rid, "fileList")
-        findings: list[dict[str, Any]] = []
-        if got.table is not None:
-            table = got.table
-            cov.formats[table.format] = cov.formats.get(table.format, 0) + 1
-            cov.redaction_markers += table.redaction_markers
-            cov.test_values += table.test_values
-            cov.suppressed += table.suppressed
-            for column, item in sorted(table.by_column.items()):
-                resource = file_resource(self.t, path, column=column)
-                findings.extend(
-                    finding_json(resource, link, table.format, cf, seen_at, facts=facts)
-                    for cf in item.findings.values()
-                    if cf.count or cf.occurrences
-                )
-        elif got.item is not None:
-            item = got.item
-            cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
-            cov.redaction_markers += item.redaction_markers
-            cov.test_values += item.test_values
-            cov.suppressed += item.suppressed
-            resource = file_resource(self.t, path)
-            findings = [
-                finding_json(resource, link, item.format, cf, seen_at, facts=facts)
-                for cf in item.findings.values()
-                if cf.count or cf.occurrences
-            ]
+        findings = record(
+            got,
+            cov,
+            resource_for=lambda column: file_resource(self.t, path, column=column),
+            link=portal_link(self.t.rid, "fileList"),
+            seen_at=seen_at,
+            facts=facts,
+        )
+        if findings is None:
+            return
         store.replace_location(f"{self.id}\n{path}", findings)
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:

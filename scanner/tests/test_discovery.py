@@ -408,7 +408,7 @@ def test_a_kms_key_the_scanner_may_not_use_is_a_named_gap(
 
 
 def test_a_store_of_unsupported_files_only_says_so(env: Env) -> None:
-    env.put("calls/a.wav", b"RIFF-fake")
+    env.put("calls/a.wav", b"RIFF\x24\x00\x00\x00WAVEfmt made up")
     doc = env.run(config(s3_targets=[], discover=frozenset({"s3"})))
     assert doc is not None
     s = stores(doc)[("s3", DATA)]

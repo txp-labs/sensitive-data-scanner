@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.8,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.9,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -25,7 +25,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.8"
+FINDINGS_SCHEMA_VERSION = "1.9"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -286,6 +286,7 @@ class Coverage:
     backlog: bool = False
     error: str | None = None
     kms_denied: int = 0
+    disguised: int = 0  # names that claimed another kind than the bytes are (1.9, #65)
 
     def as_json(self) -> dict[str, Any]:
         d = asdict(self)
@@ -311,6 +312,8 @@ class Coverage:
         }
         if self.kms_denied:
             out["kmsDenied"] = self.kms_denied
+        if self.disguised:
+            out["disguised"] = self.disguised
         return out
 
 

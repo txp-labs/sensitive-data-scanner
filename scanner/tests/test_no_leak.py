@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from archive_fixtures import assert_read_by_content, planted
 from aws_fixtures import DATA, RESULTS, Env, config, epoch_ms
 from conftest import all_conversation_vectors, turns_of
 from ddb_fixtures import FIXTURES, Ddb, load_item, page, target
@@ -1351,6 +1352,98 @@ def test_no_value_leaves_office_files_in_s3_codecommit_or_ecr(
     assert leaks(json.dumps(doc)) == []
 
 
+def test_no_value_leaves_archives_pdfs_or_disguised_files_in_aws(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Archives whose entries are named with values, a PDF whose document information holds
+    them, and a Word file named as an image, in an S3 bucket, a CodeCommit repository and
+    an ECR layer (#65): the values are found, and none of them leaves."""
+    import io
+
+    from botocore.stub import ANY
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from sensitive_data_core.scan.objects import sample_point
+    from test_images_archives import layer
+    from test_streams import stubs
+
+    objects_ = planted()
+    for key, data in objects_.items():
+        env.put(key, data)
+    s = stubs(env, "codecommit", "ecr")
+    cc = s["codecommit"]
+    repo = f"repo-{SSN_B}"
+    cc.add_response(
+        "list_repositories", {"repositories": [{"repositoryName": repo, "repositoryId": "r"}]}
+    )
+    cc.add_response(
+        "get_repository",
+        {"repositoryMetadata": {"repositoryName": repo, "defaultBranch": "main", "Arn": "a"}},
+    )
+    cc.add_response("get_branch", {"branch": {"branchName": "main", "commitId": "c"}})
+    cc.add_response(
+        "get_folder",
+        {
+            "commitId": "c",
+            "folderPath": "/",
+            "files": [{"absolutePath": p, "relativePath": p, "blobId": "b"} for p in objects_],
+        },
+    )
+    for path in sorted(objects_, key=lambda p: (sample_point(p), p)):
+        cc.add_response(
+            "get_file",
+            {
+                "commitId": "c",
+                "blobId": "b",
+                "filePath": path,
+                "fileMode": "NORMAL",
+                "fileSize": len(objects_[path]),
+                "fileContent": objects_[path],
+            },
+        )
+    ecr = s["ecr"]
+    ecr.add_response(
+        "describe_repositories",
+        {
+            "repositories": [
+                {"repositoryName": f"app-{SSN_A}", "repositoryArn": "arn:aws:ecr:x:1:r"}
+            ]
+        },
+    )
+    digest = "sha256:" + "f" * 64
+    ecr.add_response("describe_images", {"imageDetails": [{"imageDigest": digest}]})
+    manifest = {
+        "layers": [{"digest": digest, "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"}]
+    }
+    ecr.add_response(
+        "batch_get_image",
+        {"images": [{"imageManifest": json.dumps(manifest)}]},
+        {"repositoryName": ANY, "imageIds": ANY, "acceptedMediaTypes": ANY},
+    )
+    ecr.add_response("get_download_url_for_layer", {"downloadUrl": "https://l.example/x"})
+    blob = layer({f"app/{k}": v for k, v in objects_.items()})
+    env.clients.services["layer-fetch"] = lambda url, n: io.BytesIO(blob)
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    doc = env.run(
+        config(
+            discover=frozenset({"codecommit", "ecr"}),
+            ecr_read=True,
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    __import__("test_streams").valid(doc)
+    for service in ("s3", "codecommit", "ecr"):
+        found = [f for f in doc["findings"] if f["resource"].get("service", "s3") == service]
+        assert_read_by_content(found)
+    for name_, blob_ in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob_) == [], name_
+    assert leaks(json.dumps(doc)) == []
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.
@@ -1876,6 +1969,7 @@ def test_no_value_leaves_the_azure_scanner(capsys: pytest.CaptureFixture[str]) -
             f"lake/{SSN_A}/part-0.parquet": Blob(buf.getvalue()),
             "notes.txt": Blob(f"call me, my card is {printed(CARDS['visa'])}".encode()),
             "bad.txt": Blob(b"x", fail=AzureError("InternalError", f"failed on {CARDS['visa']}")),
+            **{k: Blob(v) for k, v in planted().items()},
         }
     )
     t.container(account, f"broken-{SSN_B}").list_fail = AzureError(
@@ -1889,6 +1983,8 @@ def test_no_value_leaves_the_azure_scanner(capsys: pytest.CaptureFixture[str]) -
     out = capsys.readouterr().out
     assert doc is not None and failed == 0
     assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert_read_by_content(doc["findings"])
+    __import__("test_streams").valid(doc)
     reasons = {x.get("reason") for x in doc["discovery"]["stores"]}
     assert "network" in reasons
     blobs = {
@@ -2152,6 +2248,7 @@ def test_no_value_leaves_the_gcp_scanner(capsys: pytest.CaptureFixture[str]) -> 
             f"lake/{SSN_A}/part-0.parquet": Obj(buf.getvalue()),
             "notes.txt": Obj(f"call me, my card is {printed(CARDS['visa'])}".encode()),
             "bad.txt": Obj(b"x", fail=error(500, "INTERNAL", message=f"on {CARDS['visa']}")),
+            **{k: Obj(v) for k, v in planted().items()},
         }
     )
     c.bucket(fenced).list_fail = vpc_denied(f"perimeter for {bucket}/{SSN_A}")
@@ -2166,6 +2263,8 @@ def test_no_value_leaves_the_gcp_scanner(capsys: pytest.CaptureFixture[str]) -> 
     out = capsys.readouterr().out
     assert doc is not None and failed == 0
     assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert_read_by_content(doc["findings"])
+    __import__("test_streams").valid(doc)
     reasons = {x.get("reason") for x in doc["discovery"]["stores"]}
     assert {"network", "access_denied"} <= reasons
     written = "\n".join(
@@ -2489,6 +2588,8 @@ def test_no_value_leaves_the_saas_scanner_m365(
     m.drives["d-l"].add(
         Item("x1", "notes.txt", f"call me, my card is {printed(CARDS['visa'])}".encode())
     )
+    for n, (name, data) in enumerate(planted().items()):
+        m.drives["d-l"].add(Item(f"z{n}", name.rsplit("/", 1)[-1], data))
     m.teams[team] = f"Team {dashed(SSN_B)}"
     m.channels[team] = {"19:c1@thread.tacv2": f"chan {CARDS['unionpay']}"}
     box = m.channel_msgs.setdefault(f"{team}/19:c1@thread.tacv2", Versioned())
@@ -2526,6 +2627,8 @@ def test_no_value_leaves_the_saas_scanner_m365(
     assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
     services = {f["resource"]["service"] for f in doc["findings"]}
     assert {"exchange", "onedrive", "sharepoint", "teams_channel", "teams_chat"} <= services
+    assert_read_by_content(doc["findings"])
+    __import__("test_streams").valid(doc)
     blobs = {
         "document": json.dumps(doc),
         "logs": out,

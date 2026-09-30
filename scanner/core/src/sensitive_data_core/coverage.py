@@ -221,6 +221,9 @@ def settle(
     kms = sum(c.kms_denied for c in coverages)
     unreadable = sum(c.unreadable for c in coverages)
     unsupported = sum(sum(c.skipped.values()) for c in coverages)
+    disguised = sum(c.disguised for c in coverages)
+    if disguised:
+        store.gaps["disguised"] = disguised
     if kms:
         store.gaps["kmsDenied"] = kms
     if unreadable:

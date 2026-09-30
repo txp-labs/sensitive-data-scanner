@@ -52,7 +52,7 @@ def test_s3_reads_word_excel_and_powerpoint_as_text(env: Env) -> None:
     env.put("legal/broken.xlsx", b"PK\x03\x04 not really a zip")
     env.put("legal/entity.docx", with_dtd())  # a DTD is never parsed
     env.put("legal/scan.pdf", b"%PDF-1.7 made up")
-    env.put("legal/old.doc", b"\xd0\xcf\x11\xe0 made up")
+    env.put("legal/old.doc", OLE)  # an older binary Office file
     doc = env.run(config())
     assert doc is not None
     valid(doc)
@@ -125,6 +125,7 @@ def test_codecommit_reads_office_files(env: Env) -> None:
         "docs/runbook.docx": docx(["Use the test card", f"{printed(CARDS['discover'])}"]),
         "fixtures/users.xlsx": xlsx([["name", "ssn"], ["A", dashed(SSN_B)]]),
         "docs/locked.docx": OLE,
+        "docs/scan.pdf": b"%PDF-1.7 made up",
     }
     from sensitive_data_core.scan.objects import sample_point
 
@@ -139,8 +140,8 @@ def test_codecommit_reads_office_files(env: Env) -> None:
     assert found[("docs/runbook.docx", "card")]["format"] == "docx"
     assert found[("fixtures/users.xlsx", "us_ssn")]["format"] == "xlsx"
     cov = next(c for c in doc["coverage"] if c["kind"] == "codecommit")
-    assert (cov["listed"], cov["eligible"], cov["scanned"]) == (4, 3, 2)
-    assert cov["skipped"] == {"document": 1, "encrypted": 1}
+    assert (cov["listed"], cov["eligible"], cov["scanned"]) == (4, 4, 2)
+    assert cov["skipped"] == {"document": 1, "encrypted": 1}  # the PDF pypdf cannot parse
     assert cov["formats"] == {"docx": 1, "xlsx": 1}
 
 

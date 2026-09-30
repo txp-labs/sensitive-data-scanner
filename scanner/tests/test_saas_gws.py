@@ -93,7 +93,10 @@ def workspace() -> Workspace:
             owner=ANA,
         ),
     )
-    w.file("my", DFile("f3", "photo.png", mime="image/png", data=b"\x89PNG", owner=ANA))
+    w.file(
+        "my",
+        DFile("f3", "photo.png", mime="image/png", data=b"\x89PNG\r\n\x1a\n made up", owner=ANA),
+    )
     w.file("my", DFile("f4", "form", mime="application/vnd.google-apps.form", owner=ANA))
     w.file("my", DFile("f5", "link", mime="application/vnd.google-apps.shortcut", owner=ANA))
     w.file("my", DFile("b1", "bens.txt", data=f"ssn {dashed(SSN_A)}".encode(), owner=BEN))

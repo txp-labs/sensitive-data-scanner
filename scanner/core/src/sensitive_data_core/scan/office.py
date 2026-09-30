@@ -23,9 +23,11 @@ The limits keep a hostile file from costing more than a large one:
   ever expanded; a part that is not well-formed XML is skipped.
 
 A rights-managed (encrypted) Office file is not a zip but an OLE container
-(`D0 CF 11 E0`): `is_encrypted_office` says so, and the caller counts it as
-unreadable for want of the key. Values exist only in memory while one file is
-read.
+(`D0 CF 11 E0`): the caller (`scan/objects.py`) knows one by its first bytes
+and counts it as `encrypted`. Whether a zip is Word, Excel or PowerPoint is
+decided by its parts, whatever the file is named (`sniff.office_layout`), and
+`office_zip_text` reads the zip the caller opened. Values exist only in memory
+while one file is read.
 """
 
 from __future__ import annotations
@@ -39,8 +41,6 @@ from typing import IO
 from xml.etree import ElementTree as ET
 
 OFFICE_EXT = {"docx": "docx", "docm": "docx", "xlsx": "xlsx", "xlsm": "xlsx", "pptx": "pptx"}
-ZIP_MAGIC = b"PK\x03\x04"
-OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 MAX_PARTS = 400
 MAX_CELLS = 200_000
 
@@ -64,11 +64,6 @@ def office_kind(key: str) -> str | None:
     base = key.rsplit("/", 1)[-1].lower()
     ext = base.rsplit(".", 1)[1] if "." in base else ""
     return OFFICE_EXT.get(ext)
-
-
-def is_encrypted_office(head: bytes) -> bool:
-    """An Office file under rights management or a password: an OLE container, not a zip."""
-    return head[:8] == OLE_MAGIC
 
 
 @dataclass
@@ -216,20 +211,26 @@ def office_text(kind: str, f: IO[bytes], *, max_inflated_bytes: int) -> OfficeTe
         zf = zipfile.ZipFile(f)
     except (zipfile.BadZipFile, OSError, ValueError, EOFError):
         raise OfficeUnreadable("not a zip") from None
-    budget = _Budget(max_inflated_bytes)
     with zf:
-        names = zf.infolist()
-        partial = len(names) > MAX_PARTS
-        names = names[:MAX_PARTS]
-        try:
-            if kind == "docx":
-                text = _docx(zf, names, budget)
-            elif kind == "xlsx":
-                text = _xlsx(zf, names, budget)
-            elif kind == "pptx":
-                text = _pptx(zf, names, budget)
-            else:
-                raise OfficeUnreadable("not an office kind")
-        except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError, RuntimeError):
-            raise OfficeUnreadable("unreadable part") from None
+        return office_zip_text(kind, zf, max_inflated_bytes=max_inflated_bytes)
+
+
+def office_zip_text(kind: str, zf: zipfile.ZipFile, *, max_inflated_bytes: int) -> OfficeText:
+    """The text of an Office Open XML package already opened as a zip (the readers open it
+    once, see it is Word, Excel or PowerPoint by its parts, and read it here)."""
+    budget = _Budget(max_inflated_bytes)
+    names = zf.infolist()
+    partial = len(names) > MAX_PARTS
+    names = names[:MAX_PARTS]
+    try:
+        if kind == "docx":
+            text = _docx(zf, names, budget)
+        elif kind == "xlsx":
+            text = _xlsx(zf, names, budget)
+        elif kind == "pptx":
+            text = _pptx(zf, names, budget)
+        else:
+            raise OfficeUnreadable("not an office kind")
+    except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError, RuntimeError):
+        raise OfficeUnreadable("unreadable part") from None
     return OfficeText(kind, text, partial or budget.cut)

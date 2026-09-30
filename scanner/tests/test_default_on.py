@@ -371,6 +371,7 @@ def test_codecommit_samples_files_at_head_and_skips_binaries(env: Env) -> None:
     tree(cc, "c1")
     files = {
         "README.md": b"Run the tests with the sample data.",
+        "logo.png": b"\x89PNG\r\n\x1a\n made up",
         "fixtures/users.csv": f"name,ssn,card\nA,{dashed(SSN_B)},{CARDS['discover']}\n".encode(),
     }
     # The sample's order is a hash of the path: stubs answer by what is asked.
@@ -387,9 +388,10 @@ def test_codecommit_samples_files_at_head_and_skips_binaries(env: Env) -> None:
     }
     assert found[("payments", "fixtures/users.csv", "card")]["resource"]["readBy"] == "get_file"
     cov = next(c for c in doc["coverage"] if c["kind"] == "codecommit")
+    # Every file is sampled, and the image is known by its bytes: counted, not read.
     assert (cov["listed"], cov["eligible"], cov["scanned"], cov["skipped"]) == (
         3,
-        2,
+        3,
         2,
         {"image": 1},
     )
@@ -447,7 +449,7 @@ def test_directory_buckets_are_read_through_read_only_sessions(env: Env) -> None
             "Body": body(json.dumps({"card": CARDS["jcb"]}).encode()),
             "ServerSideEncryption": "AES256",
         },
-        {"Bucket": EXPRESS, "Key": "b/2.json"},
+        {"Bucket": EXPRESS, "Key": "b/2.json", "Range": "bytes=0-39"},
     )
     stub.activate()
     first = run(env, "s3_directory", max_items_per_run=1)
@@ -467,7 +469,7 @@ def test_directory_buckets_are_read_through_read_only_sessions(env: Env) -> None
     stub.add_response(
         "get_object",
         {"Body": body(f"ssn {dashed(SSN_A)}".encode())},
-        {"Bucket": EXPRESS, "Key": "a/1.txt"},
+        {"Bucket": EXPRESS, "Key": "a/1.txt", "Range": "bytes=0-29"},
     )
     stub.add_response(
         "list_objects_v2",
