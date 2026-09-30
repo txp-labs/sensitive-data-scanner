@@ -122,6 +122,31 @@ bumps the minor version. Spec changes are listed under **Spec**.
     reason) with their archives (`archives`) and size; no retrieval job is
     ever started.
 
+- **The databases runner keeps state, optionally** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
+  `STATE_LOCATION` (a local path, `s3://bucket/key`, or an HTTPS URL written
+  with a signed PUT) keeps which database the next run starts with, so the
+  databases a run's budget does not reach go first next time. It holds only
+  a database's name. Without it, runs sample afresh as before.
+- **Releases publish the databases runner** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)): the
+  `ghcr.io/txp-labs/sensitive-data-scanner-databases:X.Y.Z` image (every
+  engine), its SBOM, and the `sensitive_data_scanner_db` wheel, from a job of
+  their own, with `SHA256SUMS` naming every file as GitHub serves it.
+
+### Changed
+- **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
+  the opt-in `RDS_DATA_API` read now runs the databases runner's own user
+  check (moved to the core as `sensitive_data_core.grants`) before listing a
+  table, and refuses a MySQL or PostgreSQL user that can write as
+  `db_user_can_write` (with `writeGrants`), or one whose privileges cannot be
+  read as `grants_unverifiable`. **This is intended:** a Data API target whose
+  secret belongs to a user with more than reads, which used to be read, is
+  now refused, and nothing is read from it. On PostgreSQL before 15, where
+  PUBLIC may create in `public`, run `REVOKE CREATE ON SCHEMA public FROM
+  PUBLIC;` once. The mode is off by default.
+- The PostgreSQL check (both runners) names PUBLIC's `CREATE` on `public`
+  apart (`public_schema_create`), and stays strict before PostgreSQL 15; the
+  docs show the one-line `REVOKE`.
+
 ### Security
 - Step 4's IAM: listing for ECR, SageMaker, Neptune Analytics, EventBridge
   archives and Glacier; opt-in ECR pulls (`BatchGetImage`,
@@ -176,6 +201,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- The databases runner's user checks move to the core
+  (`sensitive_data_core.grants`), so the AWS scanner's RDS Data API mode
+  shares them; `sensitive_data_db.grants` still imports as before.
 - CI runs the databases runner's PostgreSQL 16 and MySQL 8.4 tests in Docker
   (testcontainers, images pinned by digest; `SDS_REQUIRE_DOCKER=1`, so a
   missing Docker fails rather than skips), builds the `db` image with every

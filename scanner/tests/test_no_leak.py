@@ -33,6 +33,7 @@ from sensitive_data_core.scan.attributes import scan_attributes
 from sensitive_data_core.scan.item import scan_item_text
 from sensitive_data_scanner.sources.dynamodb import DynamoDBSource
 from synthetic import CARDS, SSN_A, SSN_B, all_values, dashed, printed, spaced, spoken_groups
+from test_exports import READ_ONLY_PG
 
 SPEC = load_spec()
 VECTORS = all_conversation_vectors()
@@ -408,6 +409,7 @@ def test_no_value_leaves_the_exports_or_the_data_api(
     def for_data_api(dstub: Any) -> None:
         dstub.add_response("begin_transaction", {"transactionId": "tx"})
         dstub.add_response("execute_statement", {})
+        dstub.add_response("execute_statement", {"formattedRecords": json.dumps([READ_ONLY_PG])})
         listed = [{"table_schema": "public", "table_name": f"t_{CARDS['visa']}"}]
         dstub.add_response("execute_statement", {"formattedRecords": json.dumps(listed)})
         rows = [{f"c_{CARDS['jcb']}": CARDS["amex"], "ssn": dashed(SSN_B)}]

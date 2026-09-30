@@ -21,6 +21,7 @@ from sensitive_data_core.safety import error_name, log_event
 from .config import ConfigError, read_settings
 from .runner import check_database, run
 from .sinks import sinks_for
+from .state import state_for
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
                     ready += 1
                     log_event("source.done", source=store.name, kind=store.kind, scanned=0)
             return 0 if ready == len(settings.databases) else 2
-        _, failed = run(settings, sinks_for(settings))
+        _, failed = run(settings, sinks_for(settings), state=state_for(settings))
     except Exception as err:  # reported by name only
         log_event("run.failed", error=error_name(err))
         return 1

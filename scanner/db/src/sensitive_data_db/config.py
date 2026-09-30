@@ -123,6 +123,8 @@ class Settings:
     hmac_key: Secret | None = field(default=None, repr=False)
     event_bus_arn: str | None = None
     findings_file: str | None = None
+    # Optional (#21): where the next run's starting database is kept (state.py).
+    state_location: Secret | None = field(default=None, repr=False)
 
 
 def engine_of(url: str) -> str:
@@ -203,6 +205,26 @@ def _https(url: str) -> Secret:
     return Secret(url)
 
 
+def _state_location(raw: str | None, key: Secret | None) -> Secret | None:
+    """`STATE_LOCATION`: an absolute path (or `file://` URL), `s3://bucket/key`, or an HTTPS
+    URL (written with a PUT signed under `FINDINGS_HMAC_KEY`)."""
+    t = (raw or "").strip()
+    if not t:
+        return None
+    if t.startswith("s3://"):
+        bucket, _, obj = t.removeprefix("s3://").partition("/")
+        if not bucket or not obj:
+            raise ConfigError("state_location")
+    elif t.startswith("https://"):
+        if not urllib.parse.urlsplit(t).hostname:
+            raise ConfigError("state_location")
+        if key is None or len(key.reveal()) < 32:
+            raise ConfigError("state_hmac_key")
+    elif not (t.startswith("/") or t.startswith("file:///")):
+        raise ConfigError("state_location")
+    return Secret(t)
+
+
 def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     e = os.environ if env is None else env
     site = (e.get("SCANNER_SITE") or "").strip().lower()
@@ -247,4 +269,5 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         hmac_key=key,
         event_bus_arn=bus,
         findings_file=findings_file,
+        state_location=_state_location(e.get("STATE_LOCATION"), key),
     )

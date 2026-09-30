@@ -152,6 +152,8 @@ NOTES = {
     "vpc_only": ("skipped", "vpc_only"),
     "no_read_path": ("skipped", "no_read_path"),
     "user_can_write": ("skipped", "user_can_write"),
+    "db_user_can_write": ("skipped", "db_user_can_write"),
+    "grants_unverifiable": ("skipped", "grants_unverifiable"),
 }
 
 

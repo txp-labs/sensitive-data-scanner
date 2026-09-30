@@ -83,6 +83,7 @@ scanner's own JSON log lines (the drivers' logging is switched off).
 | `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The key it is signed with, at least 32 characters |
 | `FINDINGS_EVENT_BUS_ARN` | | Push to an EventBridge bus, as the AWS scanner does (the container needs AWS credentials) |
 | `FINDINGS_FILE` | | Write the whole document to a file |
+| `STATE_LOCATION` | none | Where the next run's starting database is kept, so the ones a run's budget did not reach go first next time ([State across runs](#state-across-runs)): an absolute path (or `file:///...`) on a mounted volume, `s3://bucket/key` (the `aws` extra), or an HTTPS URL (GET, and a PUT signed with `FINDINGS_HMAC_KEY`) |
 
 At least one destination is required. **Connection strings and the key are
 secrets:** keep them in your secret store and hand them to the container as
@@ -126,7 +127,30 @@ schema 1.5), read after the user check with catalog queries only:
 A `card` finding under `service_managed` or `customer_managed_key`, and every
 `cvv` finding, carries a `pciNote` for your QSA ([FINDINGS.md](FINDINGS.md#at-rest-encryption-and-pci-dss-notes-15)).
 
-A run keeps no state: each one samples afresh.
+### State across runs
+
+Without `STATE_LOCATION`, each run samples afresh in the configured order, so
+a database the run's budget never reaches is `deferred` every time. With it,
+the run reads a small JSON document first and writes it last:
+
+```json
+{"version": 1, "site": "dc-1", "rotation": "orders"}
+```
+
+`rotation` is the first database the budget left `deferred`, and the next
+run starts with it, so every database is read over a few runs. The document
+holds the name you gave a database and nothing else: no value, no connection
+string, no finding.
+
+| `STATE_LOCATION` | Reads and writes with |
+|---|---|
+| `/state/sds-state.json` or `file:///state/sds-state.json` | The file, replaced atomically (mount a small volume: a Kubernetes `PersistentVolumeClaim`, an EFS access point for ECS) |
+| `s3://bucket/key` | `s3:GetObject` and `s3:PutObject` on that key, with the credentials the container has (the `aws` extra) |
+| `https://...` | `GET`, and a `PUT` with `X-SDS-Signature` over the body under `FINDINGS_HMAC_KEY`, verified [as a push is](#verifying-a-push) |
+
+A state that is missing, unreadable, not JSON, or another site's counts as
+none: the run starts from the top. One that cannot be written is logged by
+its error name, and the findings still go out.
 
 ## Where findings go
 
@@ -159,8 +183,21 @@ timestamp.
 
 ## A read-only user, per engine
 
+**PostgreSQL before 15** gives every role `CREATE` on the `public` schema
+through `PUBLIC`, so the user check refuses every user there
+(`writeGrants`: `public_schema_create`, `schema_create`), on purpose: a user
+that can create a table can write. Run this once, as the database owner or
+a superuser, and the check passes:
+
 ```sql
--- PostgreSQL (before 15, also: REVOKE CREATE ON SCHEMA public FROM PUBLIC;)
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+PostgreSQL 15 and later revoke it by default. The same check refuses such a
+user in the AWS scanner's opt-in RDS Data API mode.
+
+```sql
+-- PostgreSQL (before 15, first: REVOKE CREATE ON SCHEMA public FROM PUBLIC;)
 CREATE ROLE scanner_ro LOGIN PASSWORD '...';
 GRANT CONNECT ON DATABASE app TO scanner_ro;
 GRANT USAGE ON SCHEMA public TO scanner_ro;

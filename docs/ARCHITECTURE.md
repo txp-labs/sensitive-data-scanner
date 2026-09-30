@@ -529,8 +529,16 @@ default.**
   Identifiers are quoted, and these are the only statements.
 - Everything runs in one Data API transaction that is **always rolled
   back**, and on PostgreSQL begins with `SET TRANSACTION READ ONLY`.
-- The secret should belong to a database user with `SELECT` only. The
-  scanner cannot check that, so it is the deployer's part.
+- **The user is checked first**, with the databases runner's own check (the
+  core's `grants`): PostgreSQL's superuser, CREATEROLE, CREATEDB, CREATE on
+  the database or any schema (before PostgreSQL 15 that includes `public`
+  through PUBLIC: run `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` once), and
+  INSERT, UPDATE, DELETE or TRUNCATE on any table; MySQL's `SHOW GRANTS`,
+  every granted role included, against an allow list of reads. A user that
+  can write is refused as `db_user_can_write` (with `writeGrants`), and one
+  whose privileges cannot be read as `grants_unverifiable`; nothing is read,
+  and the coverage names it (`DbUserCanWrite`, `GrantsUnverifiable`).
+- The secret should belong to a database user with `SELECT` only.
 - Findings are `rds_column` with `readBy: "data_api"` and format `sql`.
 
 ### Redshift and Redshift Serverless

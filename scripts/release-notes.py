@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Print the GitHub Release notes for a version: its CHANGELOG section, then
 docs/release-notes/v<version>.md if present (what is proven, what is not),
-then the image digest.
+then the images' digests.
 
-    scripts/release-notes.py <version> <image-digest>
+    scripts/release-notes.py <version> <image-digest> [<databases-image-digest>]
 """
 
 from __future__ import annotations
@@ -25,17 +25,27 @@ def section(version: str) -> str:
 
 def main() -> None:
     version, digest = sys.argv[1], sys.argv[2]
+    db_digest = sys.argv[3] if len(sys.argv) > 3 else None
     parts = []
     extra = ROOT / "docs" / "release-notes" / f"v{version}.md"
     if extra.is_file():
         parts.append(extra.read_text().strip())
     parts.append("## Changes\n\n" + section(version))
+    db = (
+        "- Databases runner image: "
+        f"`ghcr.io/txp-labs/sensitive-data-scanner-databases@{db_digest}` "
+        f"(tag `{version}`; docs/DATABASES.md)\n"
+        if db_digest
+        else ""
+    )
     parts.append(
         "## Artifacts\n\n"
         f"- Container image: `ghcr.io/txp-labs/sensitive-data-scanner@{digest}` "
         f"(tag `{version}`)\n"
-        "- Lambda zip (python3.12, x86_64), wheel and sdist attached below\n"
-        "- SPDX SBOMs for the zip and the image, and `SHA256SUMS` for every file\n"
+        f"{db}"
+        "- Lambda zip (python3.12, x86_64) and the wheels (scanner, core, databases runner) "
+        "attached below\n"
+        "- SPDX SBOMs for the zip and the images, and `SHA256SUMS` for every file\n"
         "- Not signed yet: see docs/RELEASING.md"
     )
     sys.stdout.write("\n\n".join(parts) + "\n")
