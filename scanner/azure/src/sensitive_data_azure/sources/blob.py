@@ -423,6 +423,26 @@ class BlobSource:
         """One blob read (a change, or a rescan for `why`); the error's name when it could not
         be."""
         name = str(props.name)
+        fingerprint = blob_fingerprint(props)
+        original = self._op.duplicate(name, fingerprint)
+        if original is not None:
+            # The same bytes as a blob read with what it would be read with now (#67 part 5).
+            version = getattr(props, "version_id", None) or None
+            findings = self._op.copy_findings(
+                original,
+                store,
+                f"{self.id}\n",
+                resource_for=lambda column: blob_resource(self.t, name, version, column=column),
+                link=portal_link(self.t.rid, "containersList"),
+                seen_at=seen_at,
+                facts=self._blob_facts(props),
+            )
+            self._op.rescanned(findings, why)
+            store.replace_location(f"{self.id}\n{name}", findings)
+            self._op.record_duplicate(
+                name, original, marker=blob_marker(props), fingerprint=fingerprint
+            )
+            return None
         if getattr(props, "encryption_key_sha256", None):
             self._op.record(name, marker=blob_marker(props), unreadable=True)
             cov.unreadable += 1

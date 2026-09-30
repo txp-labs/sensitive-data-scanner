@@ -439,6 +439,15 @@ class DriveSource:
                 column=column,
             )
 
+        if export is None:
+            fingerprint = md5_fingerprint(f.get("md5Checksum"))
+            prefix = f"{self.id}\n"
+            copied = r.duplicate(
+                fid, name, fingerprint, file_marker(f), resource_for, link, prefix, why
+            )
+            if copied is not None:
+                r.store.replace_location(f"{self.id}\n{fid}", copied)  # the same bytes
+                return
         scope = {"supportsAllDrives": "true"} if self.drive is not None else {}
         try:
             if export is not None:

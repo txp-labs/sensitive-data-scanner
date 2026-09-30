@@ -9,6 +9,7 @@ client (`list`, `get`), and the Blob service's `ContainerClient` (paged
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -135,6 +136,7 @@ class Blob:
     blob_tier: str = "Hot"
     cpk: bool = False
     fail: Exception | None = None
+    md5: bool = False  # the listing gives Content-MD5 (#67 part 5)
 
 
 class Downloader:
@@ -200,6 +202,11 @@ class Container:
                 encryption_scope=b.encryption_scope,
                 blob_tier=b.blob_tier,
                 encryption_key_sha256="made-up-sha" if b.cpk else None,
+                content_settings=SimpleNamespace(
+                    content_md5=hashlib.md5(b.data, usedforsecurity=False).digest()
+                    if b.md5
+                    else None
+                ),
             )
             for name, b in sorted(self.blobs.items())
             if not name_starts_with or name.startswith(name_starts_with)

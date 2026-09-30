@@ -357,6 +357,33 @@ class GcsSource:
         """One object read (a change, or a rescan for `why`); the error's name when it could
         not be."""
         name = str(obj.get("name") or "")
+        fingerprint = md5_fingerprint(obj.get("md5Hash"))
+        original = self._op.duplicate(name, fingerprint)
+        if original is not None:
+            # The same bytes as an object read with what it would be read with now (#67).
+            generation = str(obj.get("generation") or "") or None
+            where = self.t.where
+            findings = self._op.copy_findings(
+                original,
+                store,
+                f"{self.id}\n",
+                resource_for=lambda column: gcs_object_resource(
+                    where, self.t.bucket, name, generation, column=column
+                ),
+                link=console_link(
+                    f"storage/browser/{urllib.parse.quote(self.t.bucket, safe='')}",
+                    {"project": where.project},
+                    self.t.bucket,
+                ),
+                seen_at=seen_at,
+                facts=kms_facts(str(obj.get("kmsKeyName") or "") or None),
+            )
+            self._op.rescanned(findings, why)
+            store.replace_location(f"{self.id}\n{name}", findings)
+            self._op.record_duplicate(
+                name, original, marker=gcs_marker(obj), fingerprint=fingerprint
+            )
+            return None
         if obj.get("customerEncryption"):
             self._op.record(name, marker=gcs_marker(obj), unreadable=True)
             cov.unreadable += 1

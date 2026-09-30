@@ -632,6 +632,30 @@ backlog is still reported.
   - A head or image already read in full is read again only for the files or
     layers a changed component could read differently.
 
+**Duplicates.** An object whose bytes are those of an object this source
+already read is not read again
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
+
+- **The bytes** are known by their content fingerprint. Before a read, it is
+  the listing's: a single-part S3 object's ETag, a blob's `Content-MD5`, a
+  Cloud Storage object's `md5Hash`, a Drive file's `md5Checksum`, a OneDrive or
+  SharePoint file's SHA-1 or QuickXorHash. It is also the MD5 of an object's
+  bytes when the object was read whole in one fetch (up to 256 KiB), so a
+  later single-part copy of a multipart upload is known by its ETag.
+- **What must match:**
+  - **The name's kind:** its known extensions, `csv` for `csv`, because a name
+    can change how bytes are read. `.csv` is read with its header, and an OLE
+    container named `.docx` is rights-managed. An unknown extension is `?`,
+    never the extension itself.
+  - **The original is current:** it was read with the components this build
+    would read it with, so a stale original is no original.
+- **The copy's findings** are the original's as the copy's own: its resource,
+  id and link, and its own storage encryption (for S3, from one `HeadObject`,
+  no bytes). Each names the original's finding in `duplicateOf`.
+- **Coverage** counts copies in `duplicates`, and their rows are flagged.
+- **Scope:** duplicates are found within one source (a bucket, a container, a
+  drive). Across stores they are not (an open question on #67).
+
 **Tables.** A database table is skipped when the engine's change marker is
 the one recorded at its last read. PostgreSQL's `pg_stat_user_tables`,
 MySQL's `UPDATE_TIME`, SQL Server's index usage stats, Oracle's

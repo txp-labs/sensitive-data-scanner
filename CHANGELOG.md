@@ -588,6 +588,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - The role gains `s3:GetInventoryConfiguration`, a read.
   - Azure Blob Inventory and Cloud Storage inventory reports are designed in
     `docs/ARCHITECTURE.md` and not built.
+- **Duplicates are not read again** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 5):
+  - An object whose content fingerprint matches an object the same source
+    already read is not fetched, provided the name is of the same kind (its
+    known extensions) and the original was read with components that are
+    still current. The fingerprint is a single-part S3 ETag, Azure
+    `Content-MD5`, Cloud Storage `md5Hash`, Drive `md5Checksum`, or OneDrive
+    and SharePoint SHA-1 or QuickXorHash. It is also the MD5 of bytes read
+    whole.
+  - Its findings are the original's as its own (resource, id, link, and its
+    own storage encryption, from one `HeadObject` on S3), each with
+    `duplicateOf`. Coverage counts `duplicates`.
+  - Applies to S3, Azure Blob Storage, Cloud Storage, and OneDrive,
+    SharePoint and Drive files.
 
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
@@ -715,7 +728,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
   a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage; the
-  store fields `exportType`, `listedBy` and `recommendation`.
+  store fields `exportType`, `listedBy` and `recommendation`; `duplicateOf`
+  on a finding and `duplicates` in coverage.
 - Version **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
   `declaredType` and `detectedType` on a finding; `archivePath`,
   `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,
@@ -774,6 +788,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/ARCHITECTURE.md` (Duplicates, in How rescans are chosen) and `docs/FINDINGS.md`
+  (`duplicateOf`, `duplicates`) ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 5).
 - `docs/ARCHITECTURE.md` (Large buckets: S3 Inventory, with the Azure and
   Cloud Storage designs), `docs/FINDINGS.md`, `docs/AZURE.md` and `docs/GCP.md`
   ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 4).

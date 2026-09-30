@@ -326,7 +326,7 @@ def test_the_budget_defers_stores_and_the_next_run_starts_with_them(env: Env) ->
 def test_objects_per_prefix_and_per_store_sampling(env: Env) -> None:
     for d in ("dt=2026-09-27", "dt=2026-09-28"):
         for i in range(4):
-            env.put(f"lake/{d}/part-{i}.json", json.dumps({"n": i}))
+            env.put(f"lake/{d}/part-{i}.json", json.dumps({"n": i, "d": d}))
     cfg = config(
         s3_targets=[],
         discover=frozenset({"s3"}),
@@ -343,7 +343,7 @@ def test_objects_per_prefix_and_per_store_sampling(env: Env) -> None:
 
 def test_objects_per_prefix_carries_over_a_run_cut_by_the_budget(env: Env) -> None:
     for i in range(4):
-        env.put(f"lake/dt=1/part-{i}.txt", "x")
+        env.put(f"lake/dt=1/part-{i}.txt", f"x{i}")
     cfg = config(s3_max_objects_per_prefix=3, max_items_per_run=2)
     first = env.run(cfg)
     second = env.run(cfg)

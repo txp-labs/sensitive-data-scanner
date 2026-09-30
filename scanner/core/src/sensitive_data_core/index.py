@@ -59,8 +59,10 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .findings import finding_id, link_for, pci_note
 from .push import SIGNATURE_HEADER, Revealable, sign
 from .safety import error_name, log_event
+from .scan.sniff import name_kind
 
 if TYPE_CHECKING:
     from .adapter import Budget
@@ -170,6 +172,7 @@ class Profile:
     standalone_v: str | None = None
     classes: tuple[tuple[str, str], ...] = ()
     conversation_v: str | None = None
+    name_kind: str | None = None  # the name's known extensions (a duplicate must share them)
 
     def body(self) -> str:
         out: dict[str, Any] = {"a": self.adapter, "av": self.adapter_v}
@@ -181,6 +184,8 @@ class Profile:
             out["u"] = list(self.unread)
         if self.skip is not None:
             out["s"] = self.skip
+        if self.name_kind is not None:
+            out["n"] = self.name_kind
         out |= {
             "sn": self.sniffer_v,
             "ss": self.standalone_v,
@@ -203,6 +208,7 @@ class Profile:
             standalone_v=d.get("ss"),
             classes=tuple(sorted((str(k), str(v)) for k, v in (d.get("sc") or {}).items())),
             conversation_v=d.get("cv"),
+            name_kind=d.get("n"),
         )
 
     def reader_names(self) -> frozenset[str]:
@@ -218,6 +224,7 @@ def profile_for(
     detected: str | None = None,
     skip: str | None = None,
     unread: tuple[str, ...] = (),
+    name_kind: str | None = None,
 ) -> Profile:
     """The profile of one read: an object's (`got`), or a table's, an item's or a group of
     objects' (`readers`, `unread`)."""
@@ -239,6 +246,7 @@ def profile_for(
         standalone_v=manifest.version("spec-standalone"),
         classes=tuple(sorted(manifest.classes.items())),
         conversation_v=manifest.version("spec-conversation"),
+        name_kind=name_kind,
     )
 
 
@@ -911,6 +919,10 @@ RESCAN_REASONS = (
     SPEC_CONVERSATION,
     UNINDEXED,
 )
+# A duplicate's findings are its own: these of the original's are not carried over.
+_NOT_COPIED = frozenset(
+    {"rescanReason", "rescanClasses", "atRestEncryption", "atRestKeyHash", "pciNote", "linked"}
+)
 # What the sniffer could not name: a new sniffer may name it.
 UNDETERMINED = frozenset({"binary"})
 # Kinds only a build with pyarrow reads (the container images; not the Lambda zip).
@@ -1109,6 +1121,8 @@ class ObjectPass:
         self.index = indexes.open(source_id) if indexes is not None else None
         percent = indexes.rescan_percent if indexes is not None else 0
         self.rescans = Rescans(budget, percent if self.index is not None else 0)
+        self.duplicates = 0
+        self._locations: dict[bytes, str] | None = None
 
     @property
     def bootstrap(self) -> bool:
@@ -1163,6 +1177,93 @@ class ObjectPass:
         if decision.why is not None:
             self.rescans.offer(candidate, decision.why)
 
+    # --- duplicates (#67 part 5)
+
+    def duplicate(self, key: str, fingerprint: str | None, name: str | None = None) -> Row | None:
+        """Another object of this source already read whose bytes are this one's (the same
+        content fingerprint) under a name of the same kind (`.csv` for `.csv`), read with
+        components that are still current: this one need not be read. None when there is
+        none, or it is stale (both are then read)."""
+        if self.index is None or fingerprint is None:
+            return None
+        row = self.index.by_fingerprint(fingerprint, exclude=key)
+        if row is None or row.profile.name_kind != name_kind(name if name is not None else key):
+            return None
+        if stale(row.profile, row.flags, self.manifest, columnar=self.columnar) is not None:
+            return None
+        return row
+
+    def copy_findings(
+        self,
+        original: Row,
+        store: Any,
+        prefix: str,
+        *,
+        resource_for: Callable[[str | None], dict[str, Any]],
+        link: str | None,
+        seen_at: str,
+        facts: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """The original's findings as this object's own: its resource, id and link, its own
+        storage facts, and `duplicateOf` naming the original's finding (1.10). `prefix` is the
+        source's location prefix (`<source id>\n`); the original is found by its key hash."""
+        location = self._location_of(original.key, store, prefix)
+        if location is None:
+            return []  # the original holds nothing
+        out = []
+        for f in store.items.values():
+            if f.get("_location") != location:
+                continue
+            old = dict(f.get("resource") or {})
+            resource = {**resource_for(old.get("column"))}
+            for k in ("archivePath", "archivePathMasked", "archiveEntry"):
+                if k in old:
+                    resource[k] = old[k]
+            copy = {k: v for k, v in f.items() if not k.startswith("_") and k not in _NOT_COPIED}
+            copy.update(
+                id=finding_id(resource, str(f["class"])),
+                resource=resource,
+                link=link_for(resource, link),
+                firstSeenAt=seen_at,
+                lastSeenAt=seen_at,
+                duplicateOf=f["id"],
+            )
+            for k, v in (facts or {}).items():
+                copy[k] = v
+            note = pci_note(str(f["class"]), copy.get("atRestEncryption"))
+            if note is not None:
+                copy["pciNote"] = note
+            out.append(copy)
+        return out
+
+    def _location_of(self, k: bytes, store: Any, prefix: str) -> str | None:
+        """The finding store's location of the object whose key hash is `k` (a map of the
+        source's locations by hash, rebuilt when an original read this run is not in it)."""
+        if self.index is None:
+            return None
+        if self._locations is None or k not in self._locations:
+            self._locations = {
+                self.index.hasher.key(loc[len(prefix) :]): loc for loc in store.locations(prefix)
+            }
+        return self._locations.get(k)
+
+    def record_duplicate(
+        self, key: str, original: Row, *, marker: str | None, fingerprint: str | None
+    ) -> None:
+        """A duplicate's row: the original's profile (its bytes were read with it)."""
+        if self.index is None:
+            return
+        self.index.put(
+            key,
+            profile=original.profile,
+            marker=marker,
+            fingerprint=fingerprint,
+            flags=original.flags | DUPLICATE,
+            duplicate_of=original.key,
+            generation=self.generation,
+        )
+        self.duplicates += 1
+
     def rescanned(self, findings: list[dict[str, Any]] | None, why: Stale | None) -> None:
         """An object read for `why` (a rescan): its findings say so (`rescanReason`, 1.10),
         and it is counted. A read for a change at the source is not a rescan."""
@@ -1196,6 +1297,7 @@ class ObjectPass:
         if self.index is None:
             return
         cov.indexed = (cov.indexed or 0) + self.index.rows
+        cov.duplicates += self.duplicates
         for reason, n in self.rescans.done.items():
             cov.rescanned[reason] = cov.rescanned.get(reason, 0) + n
         # Rows still stale, and candidates with no row met and not read.
@@ -1221,9 +1323,11 @@ class ObjectPass:
         text: bool = False,
         unread: tuple[str, ...] = (),
         flags: int = 0,
+        name: str | None = None,
     ) -> None:
         """One read: an object's (`got`), or what a group of reads met (`readers`, `unread`,
-        `flags`, such as an image layer's files)."""
+        `flags`, such as an image layer's files). `name`: the object's name when its key is
+        not (a drive item's id), for the name kind a duplicate must share."""
         if self.index is None:
             return
         profile = profile_for(
@@ -1233,12 +1337,14 @@ class ObjectPass:
             readers=readers,
             skip="unreadable" if unreadable else skip,
             unread=unread,
+            name_kind=name_kind(name if name is not None else key),
         )
         self.index.put(
             key,
             profile=profile,
             marker=marker,
-            fingerprint=fingerprint,
+            # The listing's fingerprint, else one of the bytes when the whole object was read.
+            fingerprint=fingerprint or (got.fingerprint if got is not None else None),
             flags=flags | flags_for(got, unreadable=unreadable, text=text),
             generation=self.generation,
         )

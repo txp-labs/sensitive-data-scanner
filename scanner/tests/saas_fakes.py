@@ -16,6 +16,7 @@ GET to Graph (or the token POST) fails the test.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import urllib.parse
@@ -82,6 +83,7 @@ class Item:
     removed: bool = False
     folder: bool = False
     unique_id: str = "11111111-2222-4333-8444-555555555555"
+    sha1: bool = False  # the listing gives the file's SHA-1 (#67 part 5)
 
 
 @dataclass
@@ -355,6 +357,9 @@ class M365:
                     "sharepointIds": {"listItemUniqueId": i.unique_id},
                 }
                 out["folder" if i.folder else "file"] = {}
+                if i.sha1 and not i.folder:
+                    digest = hashlib.sha1(i.data, usedforsecurity=False).hexdigest()
+                    out["file"] = {"hashes": {"sha1Hash": digest.upper()}}
                 return out
 
             return self._delta(self.drives[m[1]], path, query, item_shape)

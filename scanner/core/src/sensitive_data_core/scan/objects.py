@@ -50,6 +50,7 @@ memory while one object is read.
 from __future__ import annotations
 
 import bz2
+import hashlib
 import io
 import lzma
 import tarfile
@@ -299,6 +300,9 @@ class ObjectResult:
     readers: frozenset[str] = frozenset()
     unread: frozenset[str] = frozenset()
     conversation: bool = False
+    # (#67 part 5) `md5:<hex>` of the object's bytes, when the whole object came in its one
+    # read: a later copy is known by it (a listing's MD5, a single-part ETag).
+    fingerprint: str | None = None
 
     def __repr__(self) -> str:
         return (
@@ -387,6 +391,8 @@ def read_object(
     head = fetch(0, first - 1) if first > 0 else b""
     # A first read shorter than asked: the object is shorter than it was listed.
     src = _Src(len(head) if len(head) < first else max(size, 0), fetch, head, max_object_bytes)
+    whole = size > 0 and len(head) >= size
+    fingerprint = f"md5:{hashlib.md5(head, usedforsecurity=False).hexdigest()}" if whole else None
     out = _read(key, src, ctx, depth=0, path="", index="", outer=None)
     src.settle()
     return ObjectResult(
@@ -404,6 +410,7 @@ def read_object(
         readers=frozenset(ctx.readers),
         unread=frozenset(ctx.unread),
         conversation=ctx.conversation,
+        fingerprint=fingerprint,
     )
 
 

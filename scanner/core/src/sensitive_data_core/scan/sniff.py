@@ -119,6 +119,15 @@ def extension(name: str) -> str:
     return base.rsplit(".", 1)[1] if "." in base.strip(".") else ""
 
 
+def name_kind(name: str) -> str:
+    """How a reader may treat a name, as extensions this module knows (`csv.gz`, `docx`),
+    each unknown one `?`: two objects with the same bytes and the same name kind read alike
+    (a `.csv` is read with its header, a `.docx` over an OLE container is rights-managed).
+    Never a name: only extensions from a closed list."""
+    parts = name.rsplit("/", 1)[-1].lower().split(".")[1:][-2:]
+    return ".".join(p if p in _EXT else "?" for p in parts)
+
+
 def declared(name: str) -> str | None:
     """What the name's extension claims: one of `KINDS`, `unknown` for an extension this
     module does not know, or None for a name with no extension (it claims nothing)."""
