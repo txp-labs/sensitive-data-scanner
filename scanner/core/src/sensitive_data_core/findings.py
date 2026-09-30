@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.10,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.11,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -25,7 +25,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.10"
+FINDINGS_SCHEMA_VERSION = "1.11"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -297,6 +297,9 @@ class Coverage:
     # (1.10) Objects listed and not read because the store's rules do not allow them, by
     # reason: `key_filter` (the bucket's keyInclude / keyExclude).
     not_allowed: dict[str, int] = field(default_factory=dict)
+    # (1.11, #67) How the store is listed changed: this run listed it again from the start,
+    # reading only what changed.
+    relisted: bool = False
 
     def as_json(self) -> dict[str, Any]:
         d = asdict(self)
@@ -331,6 +334,8 @@ class Coverage:
             out["rescanned"] = dict(sorted(self.rescanned.items()))
             out["rescanBacklog"] = self.rescan_backlog
             out["duplicates"] = self.duplicates
+        if self.relisted:
+            out["relisted"] = True
         return out
 
 

@@ -35,7 +35,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
-from sensitive_data_core.index import Indexes, S3Backend, index_salt
+from sensitive_data_core.index import Indexes, S3Backend, index_salt, listed_with, relist
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
 
@@ -550,7 +550,9 @@ def run_scan(
             if kind_budget is not None:
                 share.max_items = min(share.max_items, kind_budget.share(ways).max_items)
             log_event("source.start", source=source.target, kind=source.kind)
-            result = source.run(cursors.get(source.id) or {}, share, detector, store, started)
+            cursor = relist(source, cursors.get(source.id) or {}, indexes)
+            result = source.run(cursor, share, detector, store, started)
+            listed_with(source, result, indexes, cursor)
             if isinstance(source, S3Source) and result.coverage.error is None:
                 source.prune(store, share)
             budget.absorb(share)

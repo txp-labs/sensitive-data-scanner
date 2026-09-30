@@ -31,16 +31,17 @@ from typing import Any
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, reason_for
 from sensitive_data_core.detect.analyzer import Detector
-from sensitive_data_core.findings import Coverage, store_field_resource
-from sensitive_data_core.index import Indexes, ObjectPass, Stale
+from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
-from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
+from sensitive_data_core.scan.objects import sample_point
 
 from ..discovery import decide, needs_tags
 from ..resources import console_link
+from . import code_read as _read_path
 from .base import Context
 from .encryption import classifier
-from .exports import drop_other_passes, merge
+from .exports import drop_other_passes
 from .s3 import S3Source
 
 # The services this module calls (test_template.py checks every call against them).
@@ -112,6 +113,9 @@ class CodeCommitSource:
 
     kind = "codecommit"
     facts: dict[str, Any] | None = None
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("commit", "done", "passId", "after", "rescan")
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -254,60 +258,8 @@ class CodeCommitSource:
             out["indexed"] = True
         return SourceRun(cov, out, None, {})
 
-    def _read(
-        self,
-        path: str,
-        commit: str,
-        *,
-        cov: Coverage,
-        budget: Budget,
-        detector: Detector,
-        store: FindingStore,
-        seen_at: str,
-        link: str,
-        pass_id: str,
-        op: ObjectPass | None = None,
-        blob: str | None = None,
-        why: Stale | None = None,
-    ) -> None:
-        try:
-            r = self.client.get_file(
-                repositoryName=self.repository, commitSpecifier=commit, filePath=path
-            )
-        except Exception as err:  # one file must not stop the pass
-            if op is not None:
-                op.record(path, marker=blob, unreadable=True)
-            cov.unreadable += 1
-            log_event("item.unreadable", source=self.target, error=error_name(err))
-            return
-        data = bytes(r.get("fileContent") or b"")
-        budget.take(planned_bytes(path, len(data), self.max_bytes))
-        got = read_object(
-            path,
-            len(data),
-            lambda start, end: data[start : end + 1],
-            detector,
-            max_object_bytes=self.max_bytes,
-            max_inflated_bytes=self.max_inflated_bytes,
-            max_rows=0,
-            columnar=False,
-        )
-        findings = record(
-            got,
-            cov,
-            resource_for=lambda _column: store_field_resource(
-                service="codecommit", store=self.repository, field=path, read_by="get_file"
-            ),
-            link=link,
-            seen_at=seen_at,
-            facts=self.facts,
-            offsets=False,
-        )
-        if op is not None:
-            op.record(path, marker=blob, fingerprint=f"git:{blob}" if blob else None, got=got)
-            op.rescanned(findings, why)
-        for f in findings or []:
-            merge(store, f"{self.id}\n{path}", f, pass_id)
+    # The read path (`code_read.py`, the `adapter:<kind>` component, #67).
+    _read = _read_path._read
 
 
 # ------------------------------------------------------------------ S3 directory buckets
