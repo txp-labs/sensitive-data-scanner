@@ -147,7 +147,8 @@ One run:
 | `RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN` | The role RDS assumes to write snapshot exports, and the customer's KMS key to encrypt them. Both are needed to read RDS and Aurora | none: RDS stores are reported `export_not_configured` |
 | `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB) a run may start | 1 |
 | `EXPORT_MIN_INTERVAL_DAYS` | Days before a store is exported again | 7 |
-| `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR) | off |
+| `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR), and a big table with PITR on below that cap too, then only what changed ([below](#dynamodb-export-to-s3-large-tables)) | off |
+| `DYNAMODB_EXPORT_MIN_BYTES`, `DYNAMODB_EXPORT_MIN_ITEMS` | With `DYNAMODB_EXPORT`: a table below `DYNAMODB_MAX_TABLE_BYTES` with PITR on is read by export when it holds at least this many bytes or items (0 turns a measure off); smaller tables are sampled by Scan | 1 GiB, 1,000,000 |
 | `DYNAMODB_EXPORT_KMS_KEY_ARN` | Encrypt DynamoDB exports with this key (`SSE-KMS`) | SSE-S3 |
 | `DYNAMODB_INCREMENTAL` | After a table's full export, read only what changed, with incremental exports ([below](#dynamodb-export-to-s3-large-tables)) | on |
 | `RDS_DATA_API` | Opt-in: Aurora clusters to read with read-only SQL through the Data API, as a JSON list | none (off) |
@@ -238,7 +239,7 @@ region, and a bucket in another region is left to that region's scanner.
 |---|---|---|
 | `s3` | `ListBuckets` with `BucketRegion` set to the run's region | the whole bucket, by the S3 source |
 | `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
-| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT`; a table over `DYNAMODB_MAX_TABLE_BYTES` is read by export with `DYNAMODB_EXPORT`, and is otherwise `too_large` (`pitr_off` when export is on and point-in-time recovery is off) |
+| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT`; a table over `DYNAMODB_MAX_TABLE_BYTES` is read by export with `DYNAMODB_EXPORT`, and is otherwise `too_large` (`pitr_off` when export is on and point-in-time recovery is off); with `DYNAMODB_EXPORT`, a table below it with PITR on and at least `DYNAMODB_EXPORT_MIN_BYTES` or `DYNAMODB_EXPORT_MIN_ITEMS` is read by export too |
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 | `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
@@ -759,8 +760,10 @@ commit-timestamp columns where a schema has them.
 - BigQuery already skipped tables unchanged since their last read
   (`lastModifiedTime`), and now rescans them by the same rules.
 - DynamoDB tables read by export use incremental exports
-  ([above](#dynamodb-export-to-s3-large-tables)), and a stale table gets a full
-  export as its rescan.
+  ([below](#dynamodb-export-to-s3-large-tables)), and a stale table gets a full
+  export as its rescan. With `DYNAMODB_EXPORT`, that includes every table with
+  PITR on past `DYNAMODB_EXPORT_MIN_BYTES` or `DYNAMODB_EXPORT_MIN_ITEMS`, not
+  only those too large to Scan. Smaller tables are sampled each pass.
 
 Logs, X-Ray traces and streams are read forward from their position, so their
 history is not re-read.
@@ -1600,8 +1603,22 @@ source (the same `dynamodb_item` findings), and deleted afterwards.
   - the table's recorded components are stale (the attribute reader, the
     adapter or the spec changed): a rescan within the rescan share;
   - the last export is older than point-in-time recovery keeps (35 days).
-- A table read by `Scan` (below the size cap) is sampled on every pass as
-  before: DynamoDB keeps no cheap marker of change.
+- **Big tables below the cap** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
+  With `DYNAMODB_EXPORT`, a table below `DYNAMODB_MAX_TABLE_BYTES` is read by
+  export as well when point-in-time recovery is on and it holds at least
+  `DYNAMODB_EXPORT_MIN_BYTES` (1 GiB) or `DYNAMODB_EXPORT_MIN_ITEMS`
+  (1,000,000). Its first export is full, and the later ones incremental, so a
+  big table costs a pass only what was written since the last one, where a
+  Scan would sample all of it again.
+  - Discovery asks `DescribeContinuousBackups` only for a table past a
+    threshold. Without PITR, such a table is sampled by `Scan` as before, and
+    never skipped for it.
+  - Its exports count against `MAX_EXPORTS_PER_RUN` like any other, and a
+    newly exported table is not read until its first full export completes
+    (`export_pending`).
+- A **small table** (below both thresholds) is sampled by `Scan` on every
+  pass, as before: DynamoDB keeps no cheap marker of change, and a Scan of a
+  small table costs less than an export. This is accepted.
 
 ### The DynamoDB source
 

@@ -678,6 +678,14 @@ bumps the minor version. Spec changes are listed under **Spec**.
   With `partition`, the read is still a `Query`.
 
 ### Changed
+- **Big DynamoDB tables with PITR are read by export, then only what changed**
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements): with `DYNAMODB_EXPORT`, a table below
+  `DYNAMODB_MAX_TABLE_BYTES` whose point-in-time recovery is on and that holds
+  at least `DYNAMODB_EXPORT_MIN_BYTES` (1 GiB) or `DYNAMODB_EXPORT_MIN_ITEMS`
+  (1,000,000) is read by a full export and then by incremental exports,
+  instead of a sampled `Scan` every pass. Smaller tables, and big ones without
+  PITR, keep the sampled `Scan` (never skipped for it). Exports stay within
+  `MAX_EXPORTS_PER_RUN`.
 - **The run summary names what an inventory would help, and recommends daily
   S3 Inventory** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 4 and 9):
   - A bucket read from a weekly S3 Inventory configuration says
