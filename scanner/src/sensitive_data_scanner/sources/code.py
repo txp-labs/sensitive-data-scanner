@@ -30,13 +30,14 @@ from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_text
+from sensitive_data_core.scan.objects import sample_point
 
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
 from .encryption import classifier
 from .exports import drop_other_passes, merge
-from .s3 import S3Source, sample_point
+from .s3 import S3Source
 
 # The services this module calls (test_template.py checks every call against them).
 AWS_SERVICES = ("codecommit", "s3")

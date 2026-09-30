@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.5,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.6,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -25,7 +25,7 @@ from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.5"
+FINDINGS_SCHEMA_VERSION = "1.6"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 

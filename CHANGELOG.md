@@ -7,6 +7,32 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Feature
+- **Azure, step 1: the package, Blob Storage and ADLS Gen2** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
+  `sensitive-data-scanner-azure` (`scanner/azure`), a Container Apps job's
+  image (`docker build --target azure`) that runs in the customer's tenant
+  with a system-assigned managed identity (`DefaultAzureCredential`, no
+  secret) ([docs/AZURE.md](docs/AZURE.md)):
+  - Discovery across every subscription under a management group
+    (`AZURE_MANAGEMENT_GROUP`, or `AZURE_SUBSCRIPTIONS`) with one Resource
+    Graph query per kind; a storage account's containers and encryption
+    scopes from Resource Manager with Reader, so a container the job cannot
+    reach is still in the run summary.
+  - Blob Storage and ADLS Gen2 (`azure_blob`), read with Storage Blob Data
+    Reader by the core's readers: Parquet, ORC and Avro by column, gzip and
+    zstd, JSON, CSV, transcripts and text; incremental, resumable within a
+    listing page, sampled by name and per directory, within the run's budget.
+    Archive-tier blobs (`archive_tier`) and customer-provided-key blobs
+    (`kmsDenied`) are counted, never rehydrated or read.
+  - `atRestEncryption` per blob from its encryption scope, its container's
+    default, or the account: Microsoft-managed keys are `service_managed`,
+    Key Vault and Managed HSM keys `customer_managed_key` (hash of the
+    versionless key identifier only).
+  - A firewall or private-only account the job cannot reach is the `network`
+    gap; a missing data role is `access_denied`.
+  - Findings go to the job's own state container (`findings/latest.json`),
+    the core's signed HTTPS sink, Event Grid as the managed identity
+    (optional), or a file. `python -m sensitive_data_azure check` lists
+    without reading or sending.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -183,7 +209,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.5**, additive: `atRestEncryption`,
+- `schemaVersion` is now **1.6**, additive: the Azure scanner's
+  `platform: azure`, the `blob_object` resource, `subscription`,
+  `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
+  resource ID) on Azure findings and stores, the `azure_blob` kind, the
+  `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
+  `archive_tier` skip kind and Azure portal links.
+- Version **1.5**, additive: `atRestEncryption`,
   `atRestKeyHash` and `pciNote` on a finding, and `atRestEncryption` and
   `atRestKeyHash` on a store in the run summary.
 - Version **1.4**, additive: `platform` and `site` (a
@@ -194,6 +226,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/AZURE.md`: the Azure scanner, its stores and roles, findings and
+  settings.
 - `docs/DATABASES.md`: the engines and how each is kept read-only, settings,
   a read-only user per engine, verifying a signed push, and deployment with
   docker run, a Kubernetes CronJob, an ECS task and Azure Container
@@ -201,6 +235,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- The core gains the object reader every blob store shares
+  (`sensitive_data_core.scan.objects`: sampling by name, compression, ranged
+  reads of table files, `read_object`), which the AWS S3 source's helpers now
+  come from, and the signed HTTPS sink (`push.HttpsSink`, with `sign` and
+  `verify`) and `safety.Secret`, which the databases runner re-exports. No
+  change in behavior. `safety.error_name` also reads Azure's `error_code`.
 - The databases runner's user checks move to the core
   (`sensitive_data_core.grants`), so the AWS scanner's RDS Data API mode
   shares them; `sensitive_data_db.grants` still imports as before.

@@ -69,6 +69,10 @@ from sensitive_data_core.scan.columnar import (
     zstd_text,
 )
 from sensitive_data_core.scan.item import classify_key, looks_binary, scan_item_text
+from sensitive_data_core.scan.objects import RangeCut, is_rdb, sample_point
+from sensitive_data_core.scan.objects import compression as _compression
+from sensitive_data_core.scan.objects import gunzip as _gunzip
+from sensitive_data_core.scan.objects import inner_name as _inner_name
 from sensitive_data_core.scan.raw import printable_text
 
 from ..resources import s3_link, s3_resource
@@ -76,25 +80,6 @@ from .encryption import KeyClassifier, s3_object_facts
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
-
-
-def is_rdb(key: str, head: bytes) -> bool:
-    """A Redis RDB snapshot: `REDIS` and a version (`REDIS0011`), or an `.rdb` key."""
-    return head[:5] == b"REDIS" or key.lower().endswith(".rdb")
-
-
-def sample_point(key: str) -> int:
-    """FNV-1a over the key's UTF-16 code units: a stable 0-99 bucket for sampling."""
-    h = 0x811C9DC5
-    data = key.encode("utf-16-le")
-    for i in range(0, len(data), 2):
-        h ^= data[i] | (data[i + 1] << 8)
-        h = (h * 0x01000193) & 0xFFFFFFFF
-    return h % 100
-
-
-class RangeCut(Exception):
-    """A columnar read reached its byte cap: what was read so far stands, as partial."""
 
 
 class S3RangeFile(io.RawIOBase):
@@ -175,32 +160,6 @@ class S3RangeFile(io.RawIOBase):
 
 # GetObject's encryption headers (the object's own, 1.5).
 _SSE_HEADERS = ("ServerSideEncryption", "SSEKMSKeyId")
-
-
-def _compression(key: str) -> str | None:
-    lower = key.lower()
-    if lower.endswith(".gz"):
-        return "gzip"
-    if lower.endswith((".zst", ".zstd")):
-        return "zstd"
-    return None
-
-
-def _inner_name(key: str) -> str:
-    """The key without its compression suffix: `x.jsonl.zst` reads as `x.jsonl`."""
-    lower = key.lower()
-    for suffix in (".gz", ".zstd", ".zst"):
-        if lower.endswith(suffix):
-            return key[: -len(suffix)]
-    return key
-
-
-def _gunzip(data: bytes, limit: int) -> bytes:
-    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-    out = d.decompress(data, limit)
-    if d.unconsumed_tail:
-        return out  # cut at the limit: read in part
-    return out
 
 
 class S3Source:

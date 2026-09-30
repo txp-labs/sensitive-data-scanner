@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.5",
-  "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
+  "title": "Sensitive-data scanner findings, version 1.6",
+  "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,24 +12,24 @@
   ],
   "allOf": [
     {
-      "description": "An AWS run names its account and region; a databases run (1.4) names its site instead.",
-      "if": { "required": ["platform"], "properties": { "platform": { "const": "database" } } },
+      "description": "An AWS run names its account and region; a databases run (1.4) and an Azure run (1.6) name their site instead.",
+      "if": { "required": ["platform"], "properties": { "platform": { "enum": ["database", "azure"] } } },
       "then": { "required": ["site"] },
       "else": { "required": ["account", "region"] }
     }
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.5" },
+    "schemaVersion": { "const": "1.6" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
     "platform": {
-      "description": "Where the scanner ran (1.4). Absent: AWS, and the document names its account and region. 'database': the databases-anywhere container, and the document names its site instead.",
-      "enum": ["aws", "database"]
+      "description": "Where the scanner ran (1.4). Absent: AWS, and the document names its account and region. 'database': the databases-anywhere container; 'azure' (1.6): the Azure scanner, whose findings and stores each name their subscription. Both name their site instead of an account and region.",
+      "enum": ["aws", "database", "azure"]
     },
     "site": {
-      "description": "The name the customer gave the place a non-AWS runner runs in (SCANNER_SITE): a data center, a cluster (1.4). Never a host or a connection string.",
+      "description": "The name the customer gave the place a non-AWS runner runs in (SCANNER_SITE): a data center, a cluster (1.4), an Azure management group (1.6). Never a host or a connection string.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
     },
@@ -63,15 +63,26 @@
     },
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "storeKind": {
-      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5).",
+      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5; the Azure kinds, from azure_blob, are new in 1.6).",
       "enum": [
         "s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift", "opensearch",
         "documentdb", "neptune", "ebs", "backup", "efs", "fsx", "kinesis", "firehose", "sqs",
         "ssm", "secretsmanager", "elasticache", "memorydb", "timestream", "keyspaces",
         "postgresql", "mysql", "sqlserver", "oracle", "mongodb", "snowflake", "databricks",
         "stepfunctions", "lambda", "xray", "codecommit", "s3_directory", "msk", "mq",
-        "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier"
+        "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
+        "azure_blob"
       ]
+    },
+    "azureSubscription": {
+      "description": "An Azure subscription id (1.6), masked like a name.",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F#]{8}-(?:[0-9a-fA-F#]{4}-){3}[0-9a-fA-F#]{12}$"
+    },
+    "resourceIdHash": {
+      "description": "The SHA-256 of the store's Azure resource ID, lower-cased, as lower-case hex (1.6). Never the ID itself, which names the resource group and the resource.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "maskedName": {
       "description": "A name from the account (bucket, key, log group or stream, DynamoDB key value or attribute path). Any run that could be a card number or an SSN is masked with '#'.",
@@ -209,6 +220,46 @@
               "type": "string",
               "format": "date-time"
             },
+            "subscription": { "$ref": "#/$defs/azureSubscription" },
+            "resourceGroup": {
+              "description": "The Azure resource group (1.6), masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
+            "keyMasked": { "const": true }
+          }
+        },
+        {
+          "description": "One blob of an Azure Blob Storage or ADLS Gen2 container (1.6) and, for a table file, one column of it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "account", "container", "blob", "versionId", "resourceIdHash"],
+          "properties": {
+            "type": { "const": "blob_object" },
+            "account": {
+              "description": "The storage account, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "container": { "$ref": "#/$defs/maskedName" },
+            "blob": {
+              "description": "The blob's name (an ADLS Gen2 path), masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "versionId": {
+              "description": "The blob version read, or 'null' when versioning is off.",
+              "type": "string",
+              "maxLength": 1024
+            },
+            "column": {
+              "description": "For a table file (Parquet, ORC, Avro): the column the values are in.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "subscription": { "$ref": "#/$defs/azureSubscription" },
+            "resourceGroup": {
+              "description": "The Azure resource group (1.6), masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
             "keyMasked": { "const": true }
           }
         }
@@ -263,9 +314,9 @@
         "offsets": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/offset" } },
         "offsetsTruncated": { "type": "boolean" },
         "link": {
-          "description": "A deep link into the account's own AWS console, or null when the name had to be masked.",
+          "description": "A deep link into the account's own AWS console or (1.6) the resource's page in the Azure portal; null when a name it would carry had to be masked.",
           "type": ["string", "null"],
-          "pattern": "^https://[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/"
+          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/)"
         },
         "connect": {
           "type": "object",
@@ -313,7 +364,10 @@
         "skipped": {
           "type": "object",
           "propertyNames": {
-            "enum": ["audio", "video", "image", "document", "archive", "binary", "columnar"]
+            "enum": [
+              "audio", "video", "image", "document", "archive", "binary", "columnar",
+              "archive_tier"
+            ]
           },
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
@@ -340,7 +394,7 @@
         "needs_task", "backup_copy", "archived", "live_queue", "redrive_would_change",
         "no_s3_destination", "in_memory", "no_read_path",
         "db_user_can_write", "grants_unverifiable", "driver_missing", "user_can_write",
-        "archive_retrieval"
+        "archive_retrieval", "network"
       ]
     },
     "discovery": {
@@ -434,6 +488,20 @@
               },
               "atRestEncryption": { "$ref": "#/$defs/atRestEncryption" },
               "atRestKeyHash": { "$ref": "#/$defs/atRestKeyHash" },
+              "subscription": { "$ref": "#/$defs/azureSubscription" },
+              "resourceGroup": {
+                "description": "Azure (1.6): the store's resource group, masked like a key.",
+                "$ref": "#/$defs/maskedName"
+              },
+              "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
+              "hierarchicalNamespace": {
+                "description": "Azure Storage (1.6): the account has the hierarchical namespace on (ADLS Gen2).",
+                "const": true
+              },
+              "networkRestricted": {
+                "description": "Azure (1.6): the store admits only selected networks or private endpoints; when the job is not among them, the store is the network gap.",
+                "const": true
+              },
               "writeGrants": {
                 "description": "The databases runner (1.4): the write privileges the database user holds, by name, when the store is refused (db_user_can_write). Never a value.",
                 "type": "array",

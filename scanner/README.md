@@ -8,7 +8,9 @@ scanner in `src/` (`sensitive-data-scanner`, import `sensitive_data_scanner`:
 every boto3 adapter, discovery, the runner and the Lambda handler). The
 core imports no cloud SDK, and a test keeps it that way. `db/` is the
 databases-anywhere runner (`sensitive-data-scanner-db`, import
-`sensitive_data_db`), also on the core ([docs/DATABASES.md](../docs/DATABASES.md)).
+`sensitive_data_db`), also on the core ([docs/DATABASES.md](../docs/DATABASES.md)),
+and `azure/` the Azure scanner (`sensitive-data-scanner-azure`, import
+`sensitive_data_azure`, [docs/AZURE.md](../docs/AZURE.md)).
 
 Detection for the scanner: [Microsoft Presidio](https://github.com/microsoft/presidio)
 Analyzer, with **no NLP model**, and recognizers for the classes in the

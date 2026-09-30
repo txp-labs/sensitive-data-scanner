@@ -1,0 +1,41 @@
+[project]
+name = "sensitive-data-scanner-azure"
+version = "0.3.0"
+description = "The Azure scanner of the sensitive data scanner: a Container Apps job with a managed identity that discovers and samples a management group's data stores read-only, and reports findings only, never values."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "txp-labs, LLC" }]
+# Azure's SDKs live here, never in the core. The identity is the job's managed
+# identity through DefaultAzureCredential: no secret is configured.
+dependencies = [
+    "sensitive-data-scanner-core",
+    "azure-core>=1.35",
+    "azure-identity>=1.25",
+    "azure-mgmt-resourcegraph>=8.0",
+    "azure-storage-blob>=12.26",
+]
+
+[project.optional-dependencies]
+# Columnar and data-lake formats (Parquet, ORC, zstd, Avro's snappy and zstandard).
+columnar = ["pyarrow>=21"]
+# Findings to an Event Grid topic (FINDINGS_EVENT_GRID_ENDPOINT).
+eventgrid = ["azure-eventgrid>=4.20"]
+all = ["sensitive-data-scanner-azure[columnar,eventgrid]"]
+
+[project.scripts]
+sensitive-data-scanner-azure = "sensitive_data_azure.__main__:main"
+
+[tool.uv.sources]
+sensitive-data-scanner-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.32.4"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sensitive_data_azure"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../LICENSE" = "sensitive_data_azure/LICENSE"
+"../../NOTICE" = "sensitive_data_azure/NOTICE"
