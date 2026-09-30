@@ -1778,6 +1778,20 @@ Stugum's call-test runs for one test:
 | `planted` | Paths that hold test inputs planted on purpose, such as a test script's steps |
 | `orderBy` | The list-element attribute that orders a list (`stepIndex`), for pairing an entry with its prompt. Elements without it, or without `orderBy`, go by position |
 
+**Reserved words.** Any attribute name may be one of DynamoDB's reserved words
+(`status`, `name`, `data`, `plan`, `trigger`, and about 570 more). A key name
+may be one too. The request names every attribute through an
+`ExpressionAttributeNames` placeholder, never bare:
+- the projection's top-level attributes are `#p0`, `#p1`, ...;
+- the partition key is `#pk`, and the sort key in `begins_with` is `#sk`.
+
+A stubbed client accepts a bare reserved word, and DynamoDB refuses it
+(`ValidationException`). So `tests/test_dynamodb_reserved_words.py` reads a
+table whose keys and attributes are reserved words through moto, which parses
+expressions as DynamoDB does, in every shape of read. It also checks the
+source: every literal part of an expression names attributes only as
+placeholders (#94, from Stugum's find).
+
 **Paths.**
 - A `.` goes between map keys: `result.status`.
 - `[]` stands for every element of a list (or set): `stepResults[].observedDtmf`.

@@ -1164,6 +1164,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- **DynamoDB reserved words, audited**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), from Stugum's find: DynamoDB refuses a bare
+  reserved word in an expression, and a stubbed client does not). Every
+  Projection, KeyCondition and Filter expression the scanner builds from
+  configured attribute names or paths, or from a table's key names, already
+  names each attribute through `ExpressionAttributeNames`; no code changed.
+  `tests/test_dynamodb_reserved_words.py` holds it:
+  - moto reads a table keyed on `name` and `data` with `plan`, `status`,
+    `trigger` and `steps[].observedDtmf` configured, as a Query with a
+    sort-key prefix, a filtered Scan, a sampled Scan and a projection;
+  - a negative control shows the harness refuses a bare reserved word;
+  - a scan of the source fails on any bare name in a written expression.
+  Planting a bare name in each kind of expression failed five of the tests.
 - **Reader fuzzing** ([#77](https://github.com/txp-labs/sensitive-data-scanner/issues/77)): `tests/test_fuzz_readers.py` holds Hypothesis
   property tests (`hypothesis` joins the dev dependencies).
   - What is fuzzed: `sniff`, `csv_cells`, `scan_item_text` over any text and
