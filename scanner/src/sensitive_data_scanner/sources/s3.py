@@ -14,7 +14,9 @@ of its key falls in the sample (the same objects every pass), and the
 coverage says how many were left out. With `max_per_prefix`, at most that
 many objects are read per "directory" (the key up to its last `/`) in a
 pass, and the rest are counted as sampled out: a data lake's thousand
-partition files are represented by the first few of each. An object larger than
+partition files are represented by the first few of each. A bucket's key filter
+(`key_filter`: `keyInclude` / `keyExclude` in DISCOVER_SAMPLING) leaves out the keys
+it does not allow: counted as `notAllowed` (`key_filter`), never read. An object larger than
 `max_object_bytes` is read up to that size and counted as partial.
 
 Every object is read by the core's reader
@@ -67,6 +69,7 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, finding_json
 from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale
+from sensitive_data_core.rules import KeyFilter
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
 from sensitive_data_core.scan.columnar import (
     TableResult,
@@ -243,6 +246,7 @@ class S3Source:
         columnar: bool | None = None,
         keys: KeyClassifier | None = None,
         express: bool = False,
+        key_filter: KeyFilter | None = None,
     ) -> None:
         self.client = client
         self.express = express
@@ -260,6 +264,8 @@ class S3Source:
         self.max_per_prefix = max_per_prefix
         self.max_rows = max_rows
         self.exclude_prefixes = exclude_prefixes
+        # The bucket's keyInclude / keyExclude: other keys are counted `notAllowed`, not read.
+        self.key_filter = key_filter or KeyFilter()
         self.catalog = catalog
         self.columns = list(columns)
         self.serde = serde
@@ -503,6 +509,9 @@ class S3Source:
             return True
         if self.exclude_prefixes and key.startswith(self.exclude_prefixes):
             return True  # a catalog table's own source reads it
+        if self.key_filter and not self.key_filter.allows(key):
+            cov.not_allowed["key_filter"] = cov.not_allowed.get("key_filter", 0) + 1
+            return True  # the bucket's rules do not allow this key: counted, never read
         modified = obj.get("LastModified")
         changed = w.since is None or modified is None or modified > w.since
         decision = op.decide(key, changed=changed, marker=object_marker(obj))

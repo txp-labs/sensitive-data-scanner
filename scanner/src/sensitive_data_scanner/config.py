@@ -17,7 +17,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sensitive_data_core.modes import SCANNER, read_mode
-from sensitive_data_core.rules import SamplingRule, StoreRule, sampling_for
+from sensitive_data_core.rules import (
+    KeyFilter,
+    SamplingRule,
+    StoreRule,
+    key_filter_for,
+    sampling_for,
+)
 from sensitive_data_core.rules import parse_rule as _parse_rule
 from sensitive_data_core.rules import sampling_rules as _sampling_rules
 from sensitive_data_core.rules import store_rules as _store_rules
@@ -531,6 +537,10 @@ class Config:
     ) -> tuple[int | None, int | None]:
         """(samplePercent, maxObjectsPerPrefix) from the first matching sampling rule."""
         return sampling_for(self.sampling, kind, name, tags)
+
+    def key_filter_for(self, kind: str, name: str, tags: dict[str, str] | None) -> KeyFilter:
+        """A bucket's key filter (`keyInclude` / `keyExclude`) from its sampling rules."""
+        return key_filter_for(self.sampling, kind, name, tags)
 
 
 def read_config(env: Mapping[str, str] | None = None) -> Config:

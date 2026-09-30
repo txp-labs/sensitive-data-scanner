@@ -134,7 +134,7 @@ One run:
 | `MACIE_LOOKBACK_DAYS` | How far back the first Macie import goes | 90 |
 | `DISCOVER` | Kinds of store to discover: `all`, or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)) | off |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | Allow and deny rules for discovered stores, comma-separated | none |
-| `DISCOVER_SAMPLING` | Per-store sampling rules, as a JSON list | none |
+| `DISCOVER_SAMPLING` | Per-store sampling rules and a bucket's key filter (`keyInclude`, `keyExclude`), as a JSON list | none |
 | `S3_MAX_OBJECTS_PER_PREFIX` | Objects read per "directory" per pass (0: no cap) | 0 |
 | `DYNAMODB_SAMPLE_PERCENT` | Percent of a scanned table to read (one parallel-scan segment) | 100 |
 | `DYNAMODB_MAX_TABLE_BYTES` | A discovered table larger than this, after sampling, is skipped as `too_large` (0: no cap) | 10 GiB |
@@ -330,8 +330,18 @@ comma-separated rules:
 | `tag:pii` | Stores with that tag, any value |
 | `s3:tag:team=data*` | A tag rule for one kind |
 
-- A deny rule wins over an allow rule. With an allow list, only the stores it
-  matches are read.
+- A deny rule wins over an allow rule.
+- **An allow list restricts per kind.** The allow rules that apply to a store
+  are those of its own kind (`s3:calls-*`) and those of no kind
+  (`tag:pii-scan=yes`, `*-archive`). When any apply, only the stores they
+  match are read, and the rest of that kind are `not_allowed`. A kind that no
+  allow rule applies to is not restricted: `DISCOVER_ALLOW=s3:calls-*` narrows
+  S3 to the `calls-*` buckets and leaves DynamoDB tables, log groups and every
+  other kind as they were. A rule of no kind still applies to every kind, so
+  `tag:pii-scan=yes` alone allows only tagged stores of every kind. (Before
+  this, one allow rule of any kind made every other kind `not_allowed`.) To
+  narrow several kinds, give each its own rule (`s3:calls-*,dynamodb:orders`);
+  to leave a kind out entirely, use `DISCOVER` or a deny rule.
 - Tags are read only when a rule needs them (`s3:GetBucketTagging`,
   `logs:ListTagsForResource`, `dynamodb:ListTagsOfResource`). If a store's
   tags cannot be read and a deny-by-tag rule exists, the store is skipped as
@@ -359,6 +369,31 @@ whose `match` (a rule as above) fits a store sets its sampling:
   A table whose size times its sample is over `DYNAMODB_MAX_TABLE_BYTES` is
   skipped as `too_large`.
 
+**A bucket's key filter.** An entry of `DISCOVER_SAMPLING` can also name which
+object keys of a bucket are read, with `keyInclude` and `keyExclude` (each a
+glob or a list of globs):
+
+```json
+[
+  { "match": "s3:example-call-recordings", "keyInclude": "*transcript.json" },
+  { "match": "s3:media-*", "keyExclude": ["*.wav", "*.mp4"] }
+]
+```
+
+- A key is read when it matches a `keyInclude` glob (every key, when there is
+  none) and no `keyExclude` glob. A glob matches the whole key, and `*` also
+  matches `/`, so `*transcript.json` is "ends with `transcript.json`" anywhere
+  in the bucket.
+- A key the filter does not allow is listed, never read, and never a finding:
+  it is counted in the source's coverage as `notAllowed` by reason
+  (`{"key_filter": n}`), and in the store's `gaps` as `notAllowed`, so the
+  objects left out are visible, never silent.
+- The key filter comes from the first entry whose `match` fits the bucket and
+  that has `keyInclude` or `keyExclude`, independently of sampling (which comes
+  from the first entry that fits, as above). It applies to S3 buckets, named
+  (`SCAN_BUCKETS`, `SCAN_PREFIXES`, within the prefix) or discovered, and to
+  S3 directory buckets; a Glue table reads its own location's files, and the
+  other scanners (Azure, Google Cloud) do not apply it yet.
 **Budget and resume.** The run's budget is `MAX_ITEMS_PER_RUN` and
 `MAX_BYTES_PER_RUN`, with optional per-kind caps (`MAX_OBJECTS_PER_RUN`,
 `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN`) and a wall-time cap

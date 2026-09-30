@@ -602,6 +602,24 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - Applies to S3, Azure Blob Storage, Cloud Storage, and OneDrive,
     SharePoint and Drive files.
 
+- **A bucket's key filter** (`keyInclude`, `keyExclude` in `DISCOVER_SAMPLING`):
+  one bucket can be read for the keys ending `transcript.json` only
+  (`{"match": "s3:<bucket>", "keyInclude": "*transcript.json"}`) while its
+  other objects (`.wav`) are listed and never read. They are counted in
+  coverage as `notAllowed` (`key_filter`) and in the store's gaps, never listed
+  as findings. Globs match the whole key (`*` also matches `/`). S3 buckets,
+  named or discovered, and S3 directory buckets
+  ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
+
+### Fixed
+- **`DISCOVER_ALLOW` restricts per kind.** An allow rule for one kind
+  (`s3:calls-*`) made every other kind `not_allowed`, so allowing one bucket
+  silently turned off DynamoDB, CloudWatch Logs and every other kind. Now a
+  kind's allow rules restrict only that kind; a rule of no kind (`tag:…`,
+  `*-archive`) still applies to every kind, and a kind no allow rule applies to
+  is not restricted. The same for the Azure, Google Cloud, databases and SaaS
+  scanners, which share the rule.
+
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
   the opt-in `RDS_DATA_API` read now runs the databases runner's own user
@@ -729,7 +747,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
   a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage; the
   store fields `exportType`, `listedBy` and `recommendation`; `duplicateOf`
-  on a finding and `duplicates` in coverage.
+  on a finding and `duplicates` in coverage; `notAllowed` in coverage (by
+  reason, `key_filter`) and the `notAllowed` gap on a store.
 - Version **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
   `declaredType` and `detectedType` on a finding; `archivePath`,
   `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,
