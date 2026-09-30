@@ -16,6 +16,11 @@ dependencies = [
     "azure-identity>=1.25",
     "azure-mgmt-resourcegraph>=8.0",
     "azure-storage-blob>=12.26",
+    # Table and Queue Storage, peeked and sampled with their data-reader roles.
+    "azure-data-tables>=12.7",
+    "azure-storage-queue>=12.13",
+    # Cosmos DB for NoSQL, with the Cosmos DB Built-in Data Reader role.
+    "azure-cosmos>=4.9",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +34,9 @@ sql = ["mssql-python>=1.15"]
 # Azure Database for PostgreSQL and MySQL flexible servers, with an Entra token.
 postgresql = ["psycopg[binary]>=3.2"]
 mysql = ["pymysql>=1.1"]
-all = ["sensitive-data-scanner-azure[columnar,eventgrid,sql,postgresql,mysql]"]
+# Azure Cosmos DB for MongoDB (vCore), with an Entra token (MONGODB-OIDC).
+mongodb = ["pymongo>=4.10"]
+all = ["sensitive-data-scanner-azure[columnar,eventgrid,sql,postgresql,mysql,mongodb]"]
 
 [project.scripts]
 sensitive-data-scanner-azure = "sensitive_data_azure.__main__:main"

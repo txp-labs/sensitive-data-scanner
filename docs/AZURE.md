@@ -37,6 +37,11 @@ and its own image (`docker build --target azure`).
 | `azure_postgresql` (`postgresql`) | A PostgreSQL flexible server's database, `server/database` | Reader (discovery, `dataEncryption`); an Entra role for the identity with SELECT (below) | discovered; read with `AZURE_DB_READ` |
 | `azure_mysql` (`mysql`) | A MySQL flexible server's database, `server/database` | Reader; an Entra user for the identity with SELECT (below) | discovered; read with `AZURE_DB_READ` |
 | `synapse_sql` (`synapse`) | A Synapse dedicated SQL pool, `workspace/pool` | Reader; a user for the identity with `db_datareader` (below) | discovered; read with `AZURE_DB_READ` |
+| `cosmosdb` (`cosmos`) | A Cosmos DB for NoSQL container, `account/database/container` | Reader (the account's databases and containers) and the **Cosmos DB Built-in Data Reader** data-plane role on the account | read |
+| `cosmosdb` (`account/*`, `api`) | An RU account on the MongoDB, Cassandra, Gremlin or Table API | Reader | gap: `no_read_path` (only the account's keys read it, and they can write) |
+| `cosmosdb_mongo` (`mongo`) | A Cosmos DB for MongoDB vCore cluster, `cluster/*` | Reader; a Microsoft Entra ID user for the identity with a read-only role | discovered; read with `AZURE_DB_READ` |
+| `azure_table` (`table`) | A Table Storage table, `account/table` | Reader (the account's tables) and Storage Table Data Reader | read |
+| `azure_queue` (`queue`) | A Queue Storage queue, `account/queue` | Reader (the account's queues) and Storage Queue Data Reader, **peek only** | read |
 
 ### Blob Storage and ADLS Gen2
 
@@ -161,6 +166,55 @@ permission but `CONNECT`, `SELECT`, `SHOWPLAN`, `REFERENCES` and `VIEW ...`,
 and any privilege but reads on PostgreSQL and MySQL are refused. A role you
 cannot narrow is refused rather than read.
 
+### Cosmos DB
+
+- **NoSQL** accounts are read by default. Resource Manager (Reader) lists
+  their databases and containers. Each container is read with one query as
+  the job's identity, `SELECT TOP @n * FROM c` (`COSMOS_MAX_ITEMS`, 1000),
+  across partitions. Items are read by top-level property; the system
+  properties (`_rid`, `_self`, `_etag`, `_attachments`, `_ts`) are not. A
+  finding is a `store_field` with `readBy: query`.
+- The identity needs the **Cosmos DB Built-in Data Reader** role on each
+  account. It is a Cosmos DB role assignment, not an Azure RBAC one, so it
+  cannot be given at the management group. For each account:
+
+  ```sh
+  az cosmosdb sql role assignment create --account-name <account> --resource-group <group> \
+    --role-definition-id 00000000-0000-0000-0000-000000000001 \
+    --principal-id <the job's principal id> --scope /
+  ```
+
+  Without it, a container is `access_denied`. A container behind the account's
+  firewall is `network`.
+- **The other APIs on an RU account** (MongoDB, Cassandra, Gremlin, Table)
+  have no Entra data-plane read. Reading them would take the account's keys,
+  and `listKeys` returns keys that can write. Each such account is one store
+  (`account/*`), reported `no_read_path` with its `api`.
+- **MongoDB vCore** clusters support Microsoft Entra ID. With `AZURE_DB_READ`
+  naming `cosmosdb_mongo`, a cluster is read as the identity (MONGODB-OIDC),
+  as the databases runner reads MongoDB: the user is checked first against
+  the core's allow list of MongoDB reads, then `$sample` runs per collection.
+  Add the identity as the cluster's Microsoft Entra ID user with a read-only
+  role (`readAnyDatabase`). A cluster without Entra authentication is
+  `no_read_path`.
+- **Encryption.** An account's or cluster's key in Key Vault is
+  `customer_managed_key` (hashed). Otherwise Cosmos DB's own keys apply,
+  which is `service_managed`.
+
+### Table Storage and Queue Storage
+
+- **Tables** are read with Storage Table Data Reader: the first
+  `TABLE_MAX_ENTITIES` (1000) entities of each table, by property. A
+  finding names the property as its `field`.
+- **Queues** are read with Storage Queue Data Reader by **Peek Messages
+  only**: up to 32 messages at the front, which stay visible to their
+  consumers with their dequeue count unchanged. The scanner never gets,
+  dequeues, updates or deletes a message. A base64-encoded message is decoded
+  when that gives text. A finding is `field: messages`, `readBy: peek`.
+- **Encryption.** A table or queue is under the account's key when the
+  account's encryption covers that service with it (`keyType: Account`), and
+  otherwise under a key Microsoft manages.
+
 ## Findings
 
 An Azure document says `"platform": "azure"` and names its `site`
@@ -199,10 +253,11 @@ to be masked.
 | `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters |
 | `FINDINGS_EVENT_GRID_ENDPOINT` | | Also push each part as a CloudEvent (`source` `sensitive-data-scanner`, `type` `Findings v1`) to an Event Grid topic, as the job's identity; the topic's owner grants it `EventGrid Data Sender` on that topic |
 | `FINDINGS_FILE` | | Also write the document to a file |
-| `AZURE_DB_READ` | off | The database kinds read: `all`, or `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql` (or `sql`, `sqlmi`, `postgresql`, `mysql`, `synapse`) |
+| `AZURE_DB_READ` | off | The database kinds read: `all`, or `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`, `cosmosdb_mongo` (or `sql`, `sqlmi`, `postgresql`, `mysql`, `synapse`, `mongo`) |
 | `AZURE_DB_PRINCIPAL` | | The identity's name as a PostgreSQL or MySQL user; required to read them |
 | `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's |
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
+| `TABLE_MAX_ENTITIES`, `COSMOS_MAX_ITEMS` | 1000, 1000 | Entities sampled per table; items per Cosmos DB container |
 
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
 `FINDINGS_EVENT_GRID_ENDPOINT` and `FINDINGS_FILE` is required.

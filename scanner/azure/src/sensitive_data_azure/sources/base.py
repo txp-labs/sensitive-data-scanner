@@ -6,7 +6,7 @@ The adapter interface, the budget and the finding store are the core's
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sensitive_data_core.findings import (
@@ -26,16 +26,20 @@ class Context:
 
     settings: Settings
     clients: Clients
+    # A query's rows, once per run: storage accounts serve blobs, tables and queues.
+    _rows: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def graph(self, query: str) -> list[dict[str, Any]]:
         from ..clients import graph_query  # noqa: PLC0415 - Azure's models only when listing
 
-        return graph_query(
-            self.clients,
-            query,
-            management_group=self.settings.management_group,
-            subscriptions=self.settings.subscriptions,
-        )
+        if query not in self._rows:
+            self._rows[query] = graph_query(
+                self.clients,
+                query,
+                management_group=self.settings.management_group,
+                subscriptions=self.settings.subscriptions,
+            )
+        return self._rows[query]
 
 
 def versionless_key(uri: str | None) -> str | None:

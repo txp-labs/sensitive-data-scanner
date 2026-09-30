@@ -281,7 +281,7 @@ def test_settings_for_reading_databases() -> None:
     s = read_settings({**base, "AZURE_DB_READ": "sql,synapse"})
     assert s.db_read == ("azure_sql", "synapse_sql")
     s = read_settings({**base, "AZURE_DB_READ": "all", "AZURE_DB_PRINCIPAL": "sds-job"})
-    assert len(s.db_read) == 5 and s.db_principal == "sds-job"
+    assert len(s.db_read) == 6 and s.db_principal == "sds-job"
 
 
 # ------------------------------------------------------------------ reading

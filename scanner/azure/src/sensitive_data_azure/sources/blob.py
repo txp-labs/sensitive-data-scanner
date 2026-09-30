@@ -59,6 +59,10 @@ STORAGE_ACCOUNTS = """resources
 | where type =~ 'microsoft.storage/storageaccounts'
 | project id, name, subscriptionId, resourceGroup, kind, tags,
     blobEndpoint = tostring(properties.primaryEndpoints.blob),
+    tableEndpoint = tostring(properties.primaryEndpoints.table),
+    queueEndpoint = tostring(properties.primaryEndpoints.queue),
+    tableKeyType = tostring(properties.encryption.services.table.keyType),
+    queueKeyType = tostring(properties.encryption.services.queue.keyType),
     hns = tobool(properties.isHnsEnabled),
     keySource = tostring(properties.encryption.keySource),
     keyVaultUri = tostring(properties.encryption.keyvaultproperties.keyvaulturi),

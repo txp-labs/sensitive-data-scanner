@@ -51,6 +51,21 @@ bumps the minor version. Spec changes are listed under **Spec**.
     off, `driver_missing`.
   - `atRestEncryption` from the TDE protector, a flexible server's
     `dataEncryption`, or a Synapse workspace's key.
+- **Azure, step 3: Cosmos DB, Table Storage and Queue Storage** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
+  - Cosmos DB for NoSQL (`cosmosdb`), read by default: containers listed from
+    Resource Manager, then one `SELECT TOP @n * FROM c` per container as the
+    identity, with the Cosmos DB Built-in Data Reader role (a per-account
+    Cosmos role assignment; docs/AZURE.md has the command). RU accounts on
+    the MongoDB, Cassandra, Gremlin or Table API are `no_read_path` with their
+    `api`: only the account's keys read them, and those can write.
+  - Cosmos DB for MongoDB vCore (`cosmosdb_mongo`), opt-in with
+    `AZURE_DB_READ`: MONGODB-OIDC as the identity, the core's MongoDB user
+    check first, then `$sample` per collection (the databases runner's
+    session).
+  - Table Storage (`azure_table`): the first `TABLE_MAX_ENTITIES` entities
+    per table, by property, with Storage Table Data Reader. Queue Storage
+    (`azure_queue`): **peek only**, up to 32 messages, never dequeued, with
+    Storage Queue Data Reader; base64 messages decoded when they are text.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -231,8 +246,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `platform: azure`, the `blob_object` resource, `subscription`,
   `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
   resource ID) on Azure findings and stores, the `azure_blob`, `azure_sql`,
-  `azure_sql_mi`, `azure_postgresql`, `azure_mysql` and `synapse_sql` kinds,
-  the `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
+  `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`,
+  `cosmosdb`, `cosmosdb_mongo`, `azure_table` and `azure_queue` kinds, the
+  store field `api`, the `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
   `archive_tier` skip kind and Azure portal links.
 - Version **1.5**, additive: `atRestEncryption`,
   `atRestKeyHash` and `pciNote` on a finding, and `atRestEncryption` and

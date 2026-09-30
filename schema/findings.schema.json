@@ -72,7 +72,7 @@
         "stepfunctions", "lambda", "xray", "codecommit", "s3_directory", "msk", "mq",
         "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
-        "synapse_sql"
+        "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo"
       ]
     },
     "azureSubscription": {
@@ -498,6 +498,10 @@
               "hierarchicalNamespace": {
                 "description": "Azure Storage (1.6): the account has the hierarchical namespace on (ADLS Gen2).",
                 "const": true
+              },
+              "api": {
+                "description": "Azure Cosmos DB (1.6): the account's API. Only sql (NoSQL) has an Entra data-plane read; the others are no_read_path, except a MongoDB vCore cluster.",
+                "enum": ["sql", "mongodb", "cassandra", "gremlin", "table"]
               },
               "networkRestricted": {
                 "description": "Azure (1.6): the store admits only selected networks or private endpoints; when the job is not among them, the store is the network gap.",

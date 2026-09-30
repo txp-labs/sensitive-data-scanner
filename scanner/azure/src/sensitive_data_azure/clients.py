@@ -10,6 +10,9 @@ connection string or SAS is configured or made. The clients are:
   and encryption scopes), with the Reader role;
 - `blob`: a storage account's Blob service (Blob Storage and ADLS Gen2), with
   Storage Blob Data Reader;
+- `table`, `queue`: a storage account's Table and Queue services, with Storage
+  Table Data Reader and Storage Queue Data Reader;
+- `cosmos`: a Cosmos DB for NoSQL account, with its Built-in Data Reader role;
 - `driver`: a database driver module, imported only when a database of its
   kind is read.
 
@@ -137,6 +140,18 @@ class Clients:
             from azure.storage.blob import BlobServiceClient  # noqa: PLC0415
 
             return BlobServiceClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
+        if service == "table":
+            from azure.data.tables import TableServiceClient  # noqa: PLC0415
+
+            return TableServiceClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
+        if service == "queue":
+            from azure.storage.queue import QueueServiceClient  # noqa: PLC0415
+
+            return QueueServiceClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
+        if service == "cosmos":
+            from azure.cosmos import CosmosClient  # noqa: PLC0415
+
+            return CosmosClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
         if service == "driver":
             # A database driver module (`mssql_python`, `psycopg`, `pymysql`), or None when
             # the image does not carry it (the store's `driver_missing` gap).
