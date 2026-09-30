@@ -16,36 +16,16 @@ from typing import Any
 
 import botocore.session
 import pytest
-import yaml
 
+from cfn_templates import load_path, statements_with_gates
 from conftest import REPO
 
 DEPLOY = REPO / "deploy"
 PACKAGE = REPO / "scanner" / "src" / "sensitive_data_scanner"
 
 
-class CfnLoader(yaml.SafeLoader):
-    """YAML with CloudFormation's short-form tags, as {"Fn::X": value}."""
-
-
-def _tag(loader: CfnLoader, suffix: str, node: yaml.Node) -> Any:
-    name = "Ref" if suffix == "Ref" else f"Fn::{suffix}"
-    if suffix == "GetAtt" and isinstance(node, yaml.ScalarNode):
-        return {name: loader.construct_scalar(node).split(".", 1)}
-    if isinstance(node, yaml.ScalarNode):
-        return {name: loader.construct_scalar(node)}
-    if isinstance(node, yaml.SequenceNode):
-        return {name: loader.construct_sequence(node, deep=True)}
-    assert isinstance(node, yaml.MappingNode)
-    return {name: loader.construct_mapping(node, deep=True)}
-
-
-CfnLoader.add_multi_constructor("!", _tag)
-
-
 def load(name: str) -> dict[str, Any]:
-    data: dict[str, Any] = yaml.load((DEPLOY / name).read_text(), Loader=CfnLoader)  # noqa: S506 - SafeLoader subclass
-    return data
+    return load_path(DEPLOY / name)
 
 
 SCANNER = load("scanner.yaml")
@@ -54,21 +34,14 @@ RES = SCANNER["Resources"]
 
 
 def statements() -> list[dict[str, Any]]:
-    """Every statement the scanner's role can hold, with the condition it comes under."""
-    out: list[dict[str, Any]] = []
+    """Every statement the scanner's role can hold: its inline policy, and the managed
+    policies attached to it (the Denies and the opt-in Allows, docs/ARCHITECTURE.md)."""
+    return [s for _, s in statements_with_gates(SCANNER, "ScannerRole")]
 
-    def add(stmts: list[Any]) -> None:
-        for raw in stmts:
-            s = raw["Fn::If"][1] if isinstance(raw, dict) and "Fn::If" in raw else raw
-            if isinstance(s, dict) and "Effect" in s:
-                out.append(s)
 
-    for p in RES["ScannerRole"]["Properties"]["Policies"]:
-        add(p["PolicyDocument"]["Statement"])
-    for name in ("RdsExportPolicy", "DynamoDBExportPolicy", "DataApiPolicy", "RedshiftReadPolicy"):
-        assert RES[name]["Properties"]["RoleName"] == {"Ref": "ScannerRole"}
-        add(RES[name]["Properties"]["PolicyDocument"]["Statement"])
-    return out
+def gates() -> dict[str, list[str]]:
+    """Each statement's Sid to the conditions it comes under (a policy's, then its own)."""
+    return {s["Sid"]: g for g, s in statements_with_gates(SCANNER, "ScannerRole") if "Sid" in s}
 
 
 def actions(s: dict[str, Any]) -> list[str]:
@@ -272,9 +245,7 @@ def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
     assert in_account(own["Resource"], "ssm", "parameter/sensitive-data-scanner/")
     assert actions(ssm[2]) == ["ssm:GetParameters"]
     assert in_account(ssm[2]["Resource"], "ssm", "parameter/")
-    stmts = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
-    gated = [s for s in stmts if isinstance(s, dict) and "Fn::If" in s]
-    assert any(s["Fn::If"][0] == "ConfigInSsm" for s in gated)
+    assert gates()["ReadOwnConfigParameter"] == ["ConfigInSsm"]
     env = RES["Function"]["Properties"]["Environment"]["Variables"]
     assert env["CONFIG_LOCATION"] == {"Ref": "ConfigLocation"}
 
@@ -293,7 +264,10 @@ def test_no_named_iam_resources_so_regions_do_not_collide() -> None:
         if r["Type"] in ("AWS::IAM::Role", "AWS::IAM::ManagedPolicy"):
             assert "RoleName" not in r["Properties"], name
             assert "ManagedPolicyName" not in r["Properties"], name
-    assert "${AWS::Region}" in RES["ResultsBucket"]["Properties"]["BucketName"]["Fn::Sub"]
+    # The results bucket's name is generated from the stack: a bucket retained from a
+    # failed first create never blocks the next create (DeletionPolicy: Retain).
+    assert "BucketName" not in RES["ResultsBucket"]["Properties"]
+    assert RES["ResultsBucket"]["DeletionPolicy"] == "Retain"
 
 
 # ------------------------------------------------------------------ in step with the code
@@ -473,7 +447,7 @@ def test_redshift_reads_cannot_create_users_or_run_batches() -> None:
     assert own["Condition"]["StringEquals"] == {
         "redshift-data:statement-owner-iam-userid": "${aws:userid}"
     }
-    assert RES["RedshiftReadPolicy"]["Condition"] == "RedshiftReads"
+    assert gates()["ReadOnlySqlOnRedshift"] == ["RedshiftReads"]
 
 
 def test_opensearch_is_read_with_get_only() -> None:
@@ -482,9 +456,7 @@ def test_opensearch_is_read_with_get_only() -> None:
     assert in_account(domains["Resource"], "es", "domain/")
     denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
     assert {"es:ESHttpPost", "es:ESHttpPut", "es:ESHttpPatch", "es:ESHttpDelete"} <= denied
-    serverless = RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
-    gated = [s for s in serverless if isinstance(s, dict) and "Fn::If" in s]
-    assert any(s["Fn::If"][0] == "OpenSearchServerless" for s in gated)
+    assert gates()["ReadServerlessCollections"] == ["OpenSearchServerless"]
 
 
 def test_snapshots_are_read_in_place_never_copied_or_attached() -> None:
@@ -529,12 +501,7 @@ def test_config_stores_are_read_never_written_and_secrets_are_opt_in() -> None:
     } <= (denied)
     secrets = next(s for s in statements() if s.get("Sid") == "ReadSecretValues")
     assert in_account(secrets["Resource"], "secretsmanager", "secret:")
-    wrapped = [
-        s["Fn::If"]
-        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
-        if isinstance(s, dict) and "Fn::If" in s
-    ]
-    assert [c for c, st, _ in wrapped if st.get("Sid") == "ReadSecretValues"] == ["SecretsValues"]
+    assert gates()["ReadSecretValues"] == ["SecretsValues"]
     assert SCANNER["Parameters"]["SecretsRead"]["Default"] == "false"
 
 
@@ -613,16 +580,11 @@ def test_group_seven_defaults_read_and_never_run_push_or_write() -> None:
 def test_brokers_are_read_with_no_commit_and_no_consume() -> None:
     """#35: MSK is read without a group of its own (a throwaway id it may only describe) and
     can never commit; MQ queues are browsed by a checked user; both are opt-in."""
-    wrapped = [
-        s["Fn::If"]
-        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
-        if isinstance(s, dict) and "Fn::If" in s
-    ]
-    gates = {st.get("Sid"): c for c, st, _ in wrapped}
+    gate = {sid: c[0] if len(c) == 1 else c for sid, c in gates().items()}
     for sid in ("MskBootstrapBrokers", "ConnectToMskClusters", "ReadMskTopics"):
-        assert gates[sid] == "MskReads"
-    assert gates["DescribeOwnThrowawayGroups"] == "MskReads"
-    assert gates["CheckMqUsers"] == gates["ReadMqUserSecrets"] == "MqReads"
+        assert gate[sid] == "MskReads"
+    assert gate["DescribeOwnThrowawayGroups"] == "MskReads"
+    assert gate["CheckMqUsers"] == gate["ReadMqUserSecrets"] == "MqReads"
     groups = next(s for s in statements() if s.get("Sid") == "DescribeOwnThrowawayGroups")
     assert actions(groups) == ["kafka-cluster:DescribeGroup"]
     assert str(groups["Resource"]["Fn::Sub"]).endswith(":group/*/*/sensitive-data-scanner-*")
@@ -647,16 +609,11 @@ def test_brokers_are_read_with_no_commit_and_no_consume() -> None:
 def test_images_graphs_and_archives_write_only_their_own() -> None:
     """#35: ECR layers and SageMaker are opt-in reads; a graph export and an archive replay
     are aimed at the scanner's own bucket, rules and queue; Glacier retrieval is denied."""
-    wrapped = [
-        s["Fn::If"]
-        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
-        if isinstance(s, dict) and "Fn::If" in s
-    ]
-    gates = {st.get("Sid"): c for c, st, _ in wrapped}
-    assert gates["ReadEcrImageLayers"] == "EcrReads"
-    assert gates["StartGraphExports"] == gates["PassTheGraphExportRoleOnly"] == "NeptuneGraphExport"
+    gate = {sid: c[0] if len(c) == 1 else c for sid, c in gates().items()}
+    assert gate["ReadEcrImageLayers"] == "EcrReads"
+    assert gate["StartGraphExports"] == gate["PassTheGraphExportRoleOnly"] == "NeptuneGraphExport"
     for sid in ("OwnReplayRules", "StartOwnReplays", "OwnReplayQueue"):
-        assert gates[sid] == "EventBridgeReplays"
+        assert gate[sid] == "EventBridgeReplays"
     denies = {s["Sid"]: s for s in statements() if s["Effect"] == "Deny"}
     assert denies["NoMessageDeletesButOwnQueue"]["NotResource"] == {
         "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:"
@@ -696,12 +653,7 @@ def test_macie_is_imported_only_in_vendor_or_both_and_never_revealed() -> None:
     Macie can reveal, its reveal settings and every Macie change are denied always."""
     reads = next(s for s in statements() if s.get("Sid") == "ReadMacieFindings")
     assert actions(reads) == ["macie2:GetMacieSession", "macie2:ListFindings", "macie2:GetFindings"]
-    wrapped = [
-        s["Fn::If"]
-        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
-        if isinstance(s, dict) and "Fn::If" in s
-    ]
-    assert [c for c, st, _ in wrapped if st.get("Sid") == "ReadMacieFindings"] == ["MacieImport"]
+    assert gates()["ReadMacieFindings"] == ["MacieImport"]
     assert SCANNER["Parameters"]["ScanMode"]["Default"] == "scanner"
     denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
     assert {

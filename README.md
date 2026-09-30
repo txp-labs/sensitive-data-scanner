@@ -1,223 +1,199 @@
 # sensitive-data-scanner
 
-Find card numbers, US Social Security numbers and other sensitive data in your
-own cloud storage, logs and tables, **without the data ever leaving your
-account**.
+Find **card numbers, US Social Security numbers, ITINs and dates of birth**
+in your own cloud accounts, databases and SaaS tenants. The scanner runs
+**inside your environment** with read-only access, and **only findings
+leave it**: where, what kind, how many and how sure. Never a value.
 
-> **Status: 0.2.0, tested and not yet run against real AWS.**
-> - **Proven by tests:** detection, the AWS adapters (S3 and CloudWatch Logs
->   against moto, DynamoDB against botocore's Stubber), the findings
->   contract and the no-leak guarantee.
-> - **Not yet proven:** a first run in a real account. See the release notes
->   and [docs/RELEASING.md](docs/RELEASING.md).
+- **Open source**, Apache License 2.0.
+- **Detection:** [Microsoft Presidio](https://github.com/microsoft/presidio)
+  with no NLP model, plus our declarative spec ([spec/](spec/README.md)):
+  Luhn and issuer checks, SSN and ITIN structure, published test numbers set
+  apart, and the question-then-answer rules that catch a number read aloud or
+  keyed into a phone menu.
+- **One core, five runners:** AWS, Azure, Google Cloud, databases hosted
+  anywhere, and SaaS (Microsoft 365, Google Workspace, Slack, Jira and
+  Confluence).
 
-## What it does
+> **Status: early.** Released: **v0.2.0** (29 Sep 2026). v0.3.0 is prepared
+> and not yet tagged; everything after it is on `main`, unreleased. Only the
+> AWS S3, CloudWatch Logs and DynamoDB paths have run against a real account.
+> Everything else is tested against stubs and fakes in CI.
+> [Status and maturity](#status-and-maturity) says exactly what is proven.
 
-The scanner runs **inside the cloud account it scans**. It **discovers** the
-stores in the account and region (S3 buckets, CloudWatch log groups,
-DynamoDB tables, Glue Data Catalog tables, and RDS and Aurora databases by
-snapshot export), or reads the ones you name, looks for sensitive data, and
-writes **findings only** to a results store in the same account:
+## What it reads
 
-- the kind of data (card number, US SSN or ITIN, date of birth, and more);
-- where it was found: account, region, object and version (and for Parquet,
-  ORC, Avro, catalog tables and databases, the column, table and database);
-  log group,
-  stream and time; or DynamoDB table, a hash of the item's key and the
-  attribute path; and the Amazon Connect contact;
-- how many, how confident, and where in the item (offsets);
-- how much was scanned, sampled or skipped, and every store it did not read,
-  with the reason (denied, KMS access, too large, unsupported format, or
-  deferred to the next run by the budget).
+**Read** is read by default once the runner is deployed. **Opt-in** is
+discovered and reported until you turn it on, because it costs more, needs
+a key or role you provide, or reads something more sensitive. **Gap** is
+discovered and reported with its reason, never read, because the scanner has
+no read-only way in. Nothing it finds is a silent pass: every store it lists
+is in the run summary, read or not, with the reason.
 
-**It reads what changed, and what an improvement could change.** Each run
-reads the objects that changed since the last. It also reads the tables whose
-engine says they changed, and DynamoDB's changed items through incremental
-exports. It keeps an index of what each object was read with: every adapter,
-reader and spec has a version from its source. So an unchanged object is read
-again only when a component that could change its result changed: a better
-PDF reader, or a new class. The index also skips identical copies. These
-rescans use at most a quarter of a run's budget and are spread over runs
-([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#how-rescans-are-chosen)).
+| Platform | Read by default | Opt-in | Reported as a gap |
+|---|---|---|---|
+| **AWS** ([details](docs/ARCHITECTURE.md#coverage-by-store)) | S3 and S3 directory buckets, CloudWatch Logs, DynamoDB, Glue tables, OpenSearch domains, Kinesis Data Streams, Firehose (its S3 locations), SSM Parameter Store, Timestream for LiveAnalytics, Keyspaces, Step Functions history, Lambda environment variables, X-Ray traces, CodeCommit, ElastiCache and MemoryDB snapshots exported to S3 | RDS and Aurora (snapshot export), small Aurora databases by SQL, Redshift, OpenSearch Serverless, EBS snapshots, SQS dead-letter queues, Secrets Manager, MSK, Amazon MQ for ActiveMQ, ECR images, SageMaker Feature Store, Neptune Analytics (export), EventBridge archives (replay), large DynamoDB tables (export) | ElastiCache and MemoryDB (in memory), DocumentDB, Neptune, EFS, FSx, AWS Backup vaults, Timestream for InfluxDB, Amazon MQ for RabbitMQ, SageMaker notebooks, Glacier vaults |
+| **Azure** ([details](docs/AZURE.md#stores)) | Blob Storage and ADLS Gen2, Cosmos DB for NoSQL, Table Storage, Queue Storage (peek only), Azure Monitor logs | Azure Files, Key Vault secrets (counts only), Azure SQL, SQL Managed Instance, PostgreSQL and MySQL flexible servers, Synapse SQL pools, Cosmos DB for MongoDB vCore | Managed disk snapshots, Cosmos DB accounts on the MongoDB (RU), Cassandra, Gremlin and Table APIs |
+| **Google Cloud** ([details](docs/GCP.md#stores)) | Cloud Storage, BigQuery, Firestore and Datastore, Spanner, Bigtable, Cloud Logging | Data Access audit logs, Secret Manager (counts only), Cloud SQL for PostgreSQL and MySQL, AlloyDB | Pub/Sub, persistent disk snapshots, Cloud SQL for SQL Server |
+| **Databases anywhere** ([details](docs/DATABASES.md#engines)) | PostgreSQL, MySQL and MariaDB, SQL Server, Oracle, MongoDB, Snowflake, Databricks SQL: each one you configure, with a user the runner has checked can only read | | A user that can write, or whose grants cannot be checked, is refused |
+| **SaaS** ([details](docs/SAAS.md)) | Microsoft 365 mail (only once the grant is proved scoped), OneDrive and SharePoint; Gmail, Drive and shared drives; Slack channels the app is a member of; Jira issues and Confluence pages | Teams channels and chats (Microsoft's protected API), Slack direct messages (Enterprise Grid's Discovery API) | Slack channels the app was not invited to |
 
-**It never records the values themselves.** No card number, SSN or other
-detected value is written to its results, events, logs or error messages. A
-test suite scans every test case end to end and enforces this. A reviewer
-follows the finding's console link and opens the item with their own access.
+Every platform runs the same scheduled batch pass. Reading an object seconds
+after it is written, from a storage event, is designed and not built
+([Event-driven mode](docs/ARCHITECTURE.md#event-driven-mode-phase-2-design-only)).
 
-It is built for places where sensitive data turns up by accident, above all
-**contact-center transcripts**:
+## What it detects
 
-- a caller reads a card number aloud ("four two four two, four two four
-  two…") or splits it across two turns;
-- a caller keys digits after an IVR prompt such as "enter your nine digit
-  Social Security number".
+- **Classes:** card numbers (PAN), US SSNs, US ITINs and dates of birth
+  anywhere; security codes, PINs, account numbers and an SSN's last four
+  when a prompt asked for them
+  ([spec/classes.yaml](spec/classes.yaml)).
+- **Confidence:** every finding is `high`, `medium` or `low`, with how it was
+  found (the shape alone, context words, or a prompt). A date is kept only
+  next to a birth-date word; nine bare digits only next to an SSN or ITIN
+  word.
+- **Context and prompts:** a JSON key, a CSV header or a column name is
+  context. In a transcript, a bot or agent turn that asks for a card number
+  classes the next customer turn as one, whatever its shape; spoken digits
+  ("four two, double four") and numbers split across turns are joined.
+  Amazon Connect, Contact Lens and Lex transcripts are read as conversations.
+- **Disguised files:** a file's first bytes, not its name, decide how it is
+  read. A renamed file is still read, and its findings say `disguised`.
+- **Archives:** zip, tar, gzip, bzip2 and xz, entry by entry, in memory
+  (7z is counted, not read).
+- **PDFs:** the text layer. **Office:** Word, Excel and PowerPoint (Open XML)
+  as text. **Columnar:** Parquet, ORC and Avro by column, with the column's
+  name as context.
+- Audio, video, images and the older binary Office formats are counted, not
+  read.
 
-## How detection works
+The findings contract is a versioned JSON Schema
+([docs/FINDINGS.md](docs/FINDINGS.md)). Each finding names the store and
+item, the class, count, confidence and offsets, the storage encryption the
+data sat under, and for card data a PCI DSS note for your assessor.
 
-Detection uses [Microsoft Presidio](https://github.com/microsoft/presidio)
-(MIT), run **with no NLP model**. The scanner adds:
+## The scanner, your vendor's tool, or both
 
-- **The spec's rules on Presidio's own card, SSN and ITIN recognizers:** Luhn
-  and IIN, published test numbers set apart, SSN and ITIN structure, and dates
-  of birth next to a DOB word.
-- **Transcript normalization:** spoken digits, "oh", "double" and "triple",
-  spoken dates, and numbers split across consecutive turns of one speaker
-  (a keypad answer only within one answer window; a menu or question turn
-  ends the value).
-- **A conversational recognizer:** a bot or agent turn that asks for class X
-  ("Please enter your card number") classes the next customer turn as X,
-  whatever its shape. A Luhn-failing entry right after a card prompt is
-  still a card, with low confidence.
-- **Source adapters:** S3 (with Amazon Connect chat and Contact Lens
-  transcripts and Lex logs), CloudWatch Logs (Connect flow logs, Lex V2
-  conversation logs, Lambda logs), and DynamoDB (a paginated Query or Scan,
-  read attribute by attribute, with paths that select list elements by
-  attribute; each keypad entry is read after the nearest prompt before it,
-  and planted test inputs are told apart from leaks).
-  The Azure scanner ([docs/AZURE.md](docs/AZURE.md)) and the Google Cloud
-  scanner ([docs/GCP.md](docs/GCP.md)) discover and read their clouds' stores
-  the same way, and the SaaS scanner ([docs/SAAS.md](docs/SAAS.md)) reads
-  Microsoft 365, Google Workspace, Slack, Jira and Confluence content from a
-  container in the customer's own environment.
-- **The findings contract:** a documented, versioned schema
-  ([docs/FINDINGS.md](docs/FINDINGS.md)), so any tool can consume the
-  results.
+If you already run a vendor's DLP, you can import its findings instead of
+scanning, or alongside it (`SCAN_MODE`: `scanner`, the default; `vendor`;
+`both`). In `both`, a finding of one at the same item and class as the other's
+is linked. An importer keeps detector types, counts and ids (hashed), never a
+title, subject, file name or matched text.
 
-The rules live in a declarative **spec** ([spec/README.md](spec/README.md))
-with a shared corpus of synthetic **test vectors** ([vectors/](vectors)). The
-same spec drives a zero-dependency TypeScript package,
-`@txp-labs/sensitive-data-spec` ([packages/spec-ts](packages/spec-ts)), for
-redacting turns in memory during a live call. The Python runner and the
-TypeScript package are tested against every vector, and against each other.
+| Vendor tool | Imported with | What the scanner adds |
+|---|---|---|
+| **Amazon Macie** | `macie2:ListFindings`, `GetFindings`; the reveal of values is denied ([ARCHITECTURE.md](docs/ARCHITECTURE.md#configuration)) | Every AWS kind but S3: in `vendor` mode they are reported `vendor_not_covered` |
+| **Google Cloud Sensitive Data Protection** | its data profiles of BigQuery and Cloud Storage ([GCP.md](docs/GCP.md#sensitive-data-protections-profiles-55)) | Every other Google Cloud kind |
+| **Microsoft Purview DLP** | Graph security alerts (`SecurityAlert.Read.All`) ([SAAS.md](docs/SAAS.md#vendor-detection-scanner-vendor-or-both-55)) | Item-level findings: an alert names no item and no kind of data |
+| **Google Workspace DLP** | the Alert Center's `DlpRuleViolation` alerts | Findings where no DLP rule matched; Drive findings are linked by document |
+| **Slack DLP** | Audit Logs API events (Enterprise Grid) | The kind of data: an event names none |
 
-## Usage
+Jira and Confluence have no detection of their own to import: scanner only.
 
-### Run it on AWS Lambda
+## How it stays safe
 
-Every release publishes:
+- **Read-only, tested in CI.** Each deployment grants reads only, and a test
+  fails the build if a grant that can write appears: the AWS IAM in
+  `deploy/scanner.yaml` is checked against every call the code makes, and the
+  Azure roles, the Google Cloud roles and the SaaS scopes are held by strict
+  tests. The database runners check a user can only read before reading
+  anything, and refuse one that can write.
+- **No value leaves.** The no-leak suite scans every test case end to end and
+  asserts no value appears in findings, events, logs, error messages or
+  object reprs; made-up values are planted in cells, documents, messages,
+  names and hosts. Store, table and column names that look like a card number
+  or SSN are masked; people are named only by a hash.
+- **No inbound access.** Findings go to your own results store, your own
+  event bus or a signed HTTPS push. The AWS, Azure and Google Cloud runners
+  sign in with a role, a managed identity or a service account, not a key;
+  a SaaS secret is read from a mounted file, never an environment variable.
+- **Reproducible releases.** Dependencies are locked with hashes, base images
+  are pinned by digest, and each release carries SBOMs and SHA-256 checksums.
+  **Releases are not yet signed** ([docs/RELEASING.md](docs/RELEASING.md)).
+- A threat model is being written; it will be linked here.
 
-- a container image: `ghcr.io/txp-labs/sensitive-data-scanner:<version>`,
-  which reads every format, Parquet and ORC included;
-- a Lambda zip for `python3.12` (x86_64), without pyarrow, which reports
-  Parquet, ORC and zstd files as skipped (they do not fit in a zip). Use the
-  image to scan a data lake.
+## Efficiency
 
-The handler is `sensitive_data_scanner.handler.handler`. Schedule it with
-EventBridge Scheduler at least daily, and give it:
+- **Smart rescans.** Each run reads what changed since the last. An
+  unchanged object is read again only when a component that could change its
+  result changed (a better PDF reader, a new class in the spec), using at most
+  a quarter of the run's budget
+  ([How rescans are chosen](docs/ARCHITECTURE.md#how-rescans-are-chosen)).
+- **Change markers.** Database tables whose engine says nothing changed are
+  not sampled again (re-checked at least every 7 days); DynamoDB reads only
+  what changed through incremental exports; BigQuery skips unchanged tables
+  ([DATABASES.md](docs/DATABASES.md#tables-unchanged-since-the-last-read)).
+- **Inventory.** A bucket of a million objects or more is listed from its
+  own S3 Inventory report, when it has one; the scanner never configures one
+  ([Large buckets](docs/ARCHITECTURE.md#large-buckets-s3-inventory)).
+- **Duplicates.** A copy of an object already read is not fetched again; its
+  findings name the original.
+- **Budgets and sampling.** A budget per run by items, bytes and time, stable
+  sampling per store, and runs that resume where the last stopped.
 
-- read-only access to the stores you name, or list and read access for
-  discovery;
-- write access to its own results bucket only.
+## Deploy it
 
-Configure it with environment variables, for example:
+| Where | How | Guide |
+|---|---|---|
+| AWS, one account and region | `deploy/scanner.yaml` (CloudFormation): a Lambda on a schedule | [Batch mode](docs/ARCHITECTURE.md#batch-mode-built), [Permissions](docs/ARCHITECTURE.md#permissions-least-privilege) |
+| AWS, a whole organization | `deploy/estate-stackset.yaml`: a service-managed StackSet, findings to one central event bus | [Estate rollout](docs/ARCHITECTURE.md#estate-rollout) |
+| Azure | `deploy/azure/` (Bicep at a management group): a Container Apps job with a managed identity | [docs/AZURE.md](docs/AZURE.md#deploying) |
+| Google Cloud | `deploy/gcp/` (Terraform at an organization or folders): a Cloud Run job with its own service account | [docs/GCP.md](docs/GCP.md#deploying) |
+| Databases anywhere | a container next to your databases: docker, Kubernetes, ECS or Azure Container Instances | [docs/DATABASES.md](docs/DATABASES.md#deploying-it) |
+| SaaS | a container in your own environment: examples for ECS, Container Apps, Cloud Run and Kubernetes | [docs/SAAS.md](docs/SAAS.md#deploying) |
 
-```sh
-RESULTS_BUCKET=my-scanner-results
-SCAN_BUCKETS=amazon-connect-1a2b3c
-SCAN_PREFIXES=amazon-connect-1a2b3c/connect/my-instance/
-SCAN_LOG_GROUPS=/aws/connect/my-instance,/aws/lex/PaymentBot
-# or discover every bucket, log group and table in the account and region,
-# with overrides by name or tag
-DISCOVER=all
-DISCOVER_DENY=s3:*-cloudtrail,tag:sensitive-data-scan=off
-# optional: DynamoDB tables, as JSON (see docs/ARCHITECTURE.md)
-SCAN_DYNAMODB='[{"table":"stugum","partition":"T#t_0123abcd","sortPrefix":"RUN#","include":["stepResults[kind=sendDtmf].observedDtmf","stepResults[kind=waitForPrompt].observedText","steps","lastHeardText","errorMessage"],"keypad":["stepResults[kind=sendDtmf].observedDtmf","steps[kind=sendDtmf].digits"],"prompts":["stepResults[kind=waitForPrompt].observedText"],"planted":["steps"],"orderBy":"stepIndex"}]'
-# optional: push findings to your own EventBridge bus as they are written
-FINDINGS_EVENT_BUS_ARN=arn:aws:events:us-west-2:111122223333:event-bus/findings
-```
-
-- Every setting, and the permissions it needs:
-  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-- **More than 4 KB of settings** (Lambda's cap on environment variables):
-  put them in a JSON document with the same names. Pass it in the invoke
-  payload as `{"config": {...}}`, or name a file in S3 or SSM with
-  `CONFIG_LOCATION`
-  ([Configuration beyond 4 KB](docs/ARCHITECTURE.md#configuration-beyond-4-kb)).
-- **Every account and region of an organization:** `deploy/estate-stackset.yaml`
-  deploys `deploy/scanner.yaml` through a service-managed StackSet to the
-  organizational units and regions you name, with read-only IAM per source,
-  and findings pushed to one central EventBridge bus
-  ([Estate rollout](docs/ARCHITECTURE.md#estate-rollout)).
-- The results: `findings/latest.json` in the results bucket
-  ([docs/FINDINGS.md](docs/FINDINGS.md)).
-
-### Run it next to any database
-
-The databases runner is a container you run in your own network. It checks
-that each database user can only read, samples the tables, and sends findings
-only:
-
-```sh
-docker build --target db -t sensitive-data-scanner-db .
-docker run --rm -e SCANNER_SITE=dc-1 \
-  -e DATABASE_URL_HR='postgresql://scanner_ro:...@10.0.4.12:5432/hr' \
-  -e FINDINGS_FILE=/out/findings.json -v "$PWD/out:/out" sensitive-data-scanner-db
-```
-
-Engines, settings, deployment (docker, Kubernetes, ECS, Azure Container
-Instances) and image sizes: [docs/DATABASES.md](docs/DATABASES.md).
-
-### Use the detection from Python
+Every release publishes the images (`ghcr.io/txp-labs/sensitive-data-scanner`,
+and `-databases`, `-azure`, `-gcp` and `-saas`) and a Lambda zip
+([docs/RELEASING.md](docs/RELEASING.md)).
+The detection is also a Python library, and the spec a zero-dependency
+TypeScript package for redacting a live call in memory
+([packages/spec-ts](packages/spec-ts/README.md), not on npm yet):
 
 ```python
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.conversation import Turn
 
-detector = Detector()
-detector.analyze_conversation([
+Detector().analyze_conversation([
     Turn("bot", "Please enter or say your nine digit Social Security number."),
     Turn("customer", "123456789#", channel="dtmf"),
 ]).detections
 # [Detection(cls='us_ssn', via='prompt', confidence='high')]
 ```
 
-### Redact a live call in TypeScript
+All the documentation: [docs/README.md](docs/README.md).
 
-```ts
-import { loadSpec, redactTurns, armedClasses } from '@txp-labs/sensitive-data-spec';
-```
+## Status and maturity
 
-See [packages/spec-ts/README.md](packages/spec-ts/README.md). The package is
-not on npm yet.
-
-## Security model
-
-- It runs in your account, with read-only access to the stores you choose
-  and write access to its own results store only.
-- There is no inbound network access. A consumer reads results from your
-  results store, or receives findings events on its own EventBridge bus.
-- Every release can be rebuilt from its tag:
-  - dependencies are locked with hashes, and base images are pinned by
-    digest;
-  - each release carries SPDX SBOMs and SHA-256 checksums.
-- **Releases are not yet signed.** Signing is planned; see
-  [docs/RELEASING.md](docs/RELEASING.md).
-- To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not
-  open a public issue.
-
-## Repository
-
-| Path | What |
+| Path | Proven how |
 |---|---|
-| `spec/`, `vectors/` | The spec (classes, normalization) and the synthetic test vectors |
-| `packages/spec-ts/` | The TypeScript package |
-| `scanner/core/` | The cloud-neutral core (`sensitive-data-scanner-core`): the spec engine, Presidio recognizers, findings, budgets and sampling, the coverage summary, the findings push interface, the sampled SQL pass and the adapter interface |
-| `scanner/` | The AWS scanner (`sensitive-data-scanner`): every AWS adapter, discovery, the batch runner and the Lambda handler, built on the core |
-| `scanner/db/` | The databases-anywhere runner (`sensitive-data-scanner-db`): a container that samples PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Snowflake and Databricks SQL with a read-only user ([docs/DATABASES.md](docs/DATABASES.md)) |
-| `schema/` | The findings JSON Schema |
-| `deploy/` | CloudFormation for the estate rollout: `scanner.yaml` (one account and region) and `estate-stackset.yaml` (a service-managed StackSet) |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md), [findings](docs/FINDINGS.md), [databases anywhere](docs/DATABASES.md), [releasing](docs/RELEASING.md) |
+| AWS: S3, CloudWatch Logs, DynamoDB | **Run in a real AWS account** (a development account, v0.2.0, 29 Sep 2026); the four problems it found are fixed |
+| Databases: PostgreSQL 16, MySQL 8.4 | Real engines in containers in CI: read-only users read, users that can write refused, data unchanged |
+| Every other AWS store, the StackSet rollout | Tested against stubbed AWS APIs (moto, botocore's Stubber); the template linted and checked against the code's calls. Not yet run in a real account |
+| Azure, Google Cloud | Tested against fakes; the Bicep and Terraform linted and tested offline. Not yet run in a real tenant or organization |
+| SaaS | Tested against fakes of each vendor's API. Not yet run against a real tenant |
+| SQL Server, Oracle, MongoDB, Snowflake, Databricks | Tested against stubbed drivers only |
+| Detection | Every vector in `vectors/`, through the spec engine, through Presidio, and through the TypeScript package, which must agree |
 
-## License
-
-Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Not yet measured: throughput and cold start at scale. Not yet built: the
+event-driven mode, and signed releases. Release notes:
+[CHANGELOG.md](CHANGELOG.md) and [docs/release-notes/](docs/release-notes).
 
 ## Contributing
 
-We welcome issues now. **Pull requests from outside contributors open once our
-Contributor License Agreement has completed legal review.** See
+Issues are welcome: bugs, missed detections, false positives, stores you
+need. Please use made-up values only. **Pull requests from outside
+contributors open once our Contributor License Agreement completes legal
+review**; the [CLA](cla/INDIVIDUAL.md) is a draft until then. See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Maintained by [txp-labs](https://github.com/txp-labs). It powers the
-sensitive-data checks in Mermera, and works on its own too.
+## Reporting a security problem
+
+Please do not open a public issue. Use GitHub's private vulnerability
+reporting (the **Security** tab); [SECURITY.md](SECURITY.md) has the details
+and what to expect.
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Maintained
+by [txp-labs](https://github.com/txp-labs). It powers the sensitive-data
+checks in Mermera, and works on its own too.

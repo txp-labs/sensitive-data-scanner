@@ -456,7 +456,7 @@ def test_glacier_vaults_are_reported_as_archive_retrieval(env: Env) -> None:
 
 
 def test_a_gzip_layer_cut_by_its_byte_cap_counts_as_partial() -> None:
-    from sensitive_data_scanner.sources.images import Capped
+    from sensitive_data_scanner.sources.images_read import Capped
 
     data = gzip.compress(b"x" * 1000)
     capped = Capped(io.BytesIO(data), 10)

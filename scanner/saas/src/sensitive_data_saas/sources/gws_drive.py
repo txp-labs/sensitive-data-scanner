@@ -30,41 +30,29 @@ types (Forms, Drawings) are counted by kind; a shortcut is `linked_item`.
 from __future__ import annotations
 
 import datetime as _dt
-import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
-from sensitive_data_core.findings import Coverage, Link
-from sensitive_data_core.index import Indexes, ObjectPass, Stale, md5_fingerprint
+from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
 from ..google import GoogleApi
-from ..resources import saas_item
 from ..scopes import GWS_DRIVE
-from .base import Context, ItemReader, bytes_fetch
-from .gws import VENDOR, GwsPerson, facts_of, fields_of, settings_of, tenant_of
+from . import gws_drive_read as _read_path
+from .base import Context, ItemReader
+from .gws import GwsPerson, facts_of, fields_of, settings_of, tenant_of
+from .gws_drive_read import DRIVE, EXPORTS, MAX_EXPORT_BYTES, file_marker
 from .gws_gmail import gap_of, person_stores
 
-DRIVE = "https://www.googleapis.com/drive/v3"
 FILE_FIELDS = "id,name,mimeType,size,trashed,ownedByMe,md5Checksum,version,modifiedTime"
-EXPORTS = {
-    "application/vnd.google-apps.document": ("text/plain", ".txt"),
-    "application/vnd.google-apps.spreadsheet": ("text/csv", ".csv"),
-    "application/vnd.google-apps.presentation": ("text/plain", ".txt"),
-}
 FOLDER = "application/vnd.google-apps.folder"
 SHORTCUT = "application/vnd.google-apps.shortcut"
 GOOGLE_TYPE = "application/vnd.google-apps."
-MAX_EXPORT_BYTES = 10 * 1024 * 1024  # Drive's own limit on an export
-
-
-def drive_link(file_id: str) -> Link:
-    q = urllib.parse.urlencode({"id": file_id})
-    return Link(f"https://drive.google.com/open?{q}", (file_id,))
 
 
 @dataclass
@@ -167,15 +155,12 @@ class SharedDriveAdapter:
         )
 
 
-def file_marker(f: dict[str, Any]) -> str:
-    """What changes when a Drive file changes: its version (bumped on every change), its
-    modified time and size."""
-    return f"{f.get('version') or ''}|{f.get('modifiedTime') or ''}|{f.get('size') or 0}"
-
-
 class DriveSource:
     """One drive: a person's My Drive, or a shared drive."""
 
+    # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
+    # pass lists the store again from the start and reads only what changed (#67).
+    relist_keys: tuple[str, ...] = ("mode", "page", "skip", "start", "changes", "rescan")
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -343,7 +328,7 @@ class DriveSource:
                 if not self._room(r):
                     st.update(page=token, skip=i)
                     return False
-                self._file(f, r)
+                self._file(f, r, listing=True)
             skip = 0
             token = nxt
             st.update(page=token, skip=0)
@@ -393,7 +378,7 @@ class DriveSource:
             return True
         return True
 
-    def _file(self, f: dict[str, Any], r: ItemReader) -> None:
+    def _file(self, f: dict[str, Any], r: ItemReader, *, listing: bool = False) -> None:
         fid = str(f.get("id") or "")
         mime = str(f.get("mimeType") or "")
         if not fid or mime == FOLDER:
@@ -413,83 +398,24 @@ class DriveSource:
         if sample_point(fid) >= self.sample_percent:
             r.cov.sampled_out += 1
             return
+        if listing and r.index is not None:
+            # A listing of every file (the first pass, or a re-list): one whose row has its
+            # version is not read again (#67).
+            decision = r.index.decide(fid, changed=True, marker=file_marker(f))
+            if not decision.read:
+                if decision.why is None:
+                    return
+                want = MAX_EXPORT_BYTES if export is not None else size
+                if not r.index.rescans.take(
+                    min(want, self.ctx.settings.max_object_bytes), r.budget
+                ):
+                    r.index.rescans.miss(decision.why)
+                    return
+                self.read += 1
+                self._read_file(f, r, why=decision.why, charged=True)
+                return
         self.read += 1
         self._read_file(f, r)
 
-    def _read_file(
-        self, f: dict[str, Any], r: ItemReader, *, why: Stale | None = None, charged: bool = False
-    ) -> None:
-        """One file read (a change, or a rescan for `why`; `charged`: its budget is taken)."""
-        fid = str(f.get("id") or "")
-        name = str(f.get("name") or "file")
-        export = EXPORTS.get(str(f.get("mimeType") or ""))
-        size = int(f.get("size") or 0)
-        link = drive_link(fid)
-
-        def resource_for(column: str | None) -> dict[str, Any]:
-            return saas_item(
-                VENDOR,
-                self.service,
-                self.tenant,
-                fid,
-                "file",
-                owner=self.owner,
-                container=self.drive.name if self.drive is not None else None,
-                name=name,
-                column=column,
-            )
-
-        if export is None:
-            fingerprint = md5_fingerprint(f.get("md5Checksum"))
-            prefix = f"{self.id}\n"
-            copied = r.duplicate(
-                fid, name, fingerprint, file_marker(f), resource_for, link, prefix, why
-            )
-            if copied is not None:
-                r.store.replace_location(f"{self.id}\n{fid}", copied)  # the same bytes
-                return
-        scope = {"supportsAllDrives": "true"} if self.drive is not None else {}
-        try:
-            if export is not None:
-                mime_out, suffix = export
-                resp = self.api.call(f"{DRIVE}/files/{fid}/export", {"mimeType": mime_out, **scope})
-                data: bytes = resp.content[:MAX_EXPORT_BYTES]
-                if not charged:
-                    r.budget.take(len(data))
-                findings = r.file(
-                    name + suffix,
-                    len(data),
-                    bytes_fetch(data),
-                    resource_for=resource_for,
-                    link=link,
-                    key=fid,
-                    marker=file_marker(f),
-                )
-            else:
-                if not charged:
-                    r.budget.take(min(size, self.ctx.settings.max_object_bytes))
-
-                def fetch(start: int, end: int) -> bytes:
-                    return self.api.download(
-                        f"{DRIVE}/files/{fid}", start, end, {"alt": "media", **scope}
-                    )
-
-                findings = r.file(
-                    name,
-                    size,
-                    fetch,
-                    resource_for=resource_for,
-                    link=link,
-                    key=fid,
-                    marker=file_marker(f),
-                    fingerprint=md5_fingerprint(f.get("md5Checksum")),
-                )
-        except Exception as err:  # one file must not stop the pass
-            if r.index is not None:
-                r.index.record(fid, marker=file_marker(f), unreadable=True)
-            r.cov.unreadable += 1
-            log_event("item.unreadable", source=self.target, error=error_name(err))
-            return
-        if r.index is not None:
-            r.index.rescanned(findings, why)
-        r.store.replace_location(f"{self.id}\n{fid}", findings)
+    # The read path (`gws_drive_read.py`, the `adapter:<kind>` component, #67).
+    _read_file = _read_path._read_file

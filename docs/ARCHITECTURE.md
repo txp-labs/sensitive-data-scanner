@@ -132,9 +132,9 @@ One run:
 | `DYNAMODB_MAX_PAGES` | Pages per table per run (the page cap) | 200 |
 | `SCAN_MODE` | Who finds the data (#55): `scanner` (this scanner reads), `vendor` (Amazon Macie's own findings are imported, S3 only; nothing is read), or `both` (findings at the same object and class are linked) ([FINDINGS.md](FINDINGS.md#sources-and-modes-18)) | `scanner` |
 | `MACIE_LOOKBACK_DAYS` | How far back the first Macie import goes | 90 |
-| `DISCOVER` | Kinds of store to discover: `all`, or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)) | off |
+| `DISCOVER` | Kinds of store to discover: `all` (or `true`), or any of `s3`, `logs`, `dynamodb` ([Discovery](#discovery)); `none` or `false` is off | off |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | Allow and deny rules for discovered stores, comma-separated | none |
-| `DISCOVER_SAMPLING` | Per-store sampling rules, as a JSON list | none |
+| `DISCOVER_SAMPLING` | Per-store sampling rules and a bucket's key filter (`keyInclude`, `keyExclude`), as a JSON list | none |
 | `S3_MAX_OBJECTS_PER_PREFIX` | Objects read per "directory" per pass (0: no cap) | 0 |
 | `DYNAMODB_SAMPLE_PERCENT` | Percent of a scanned table to read (one parallel-scan segment) | 100 |
 | `DYNAMODB_MAX_TABLE_BYTES` | A discovered table larger than this, after sampling, is skipped as `too_large` (0: no cap) | 10 GiB |
@@ -238,7 +238,7 @@ region, and a bucket in another region is left to that region's scanner.
 |---|---|---|
 | `s3` | `ListBuckets` with `BucketRegion` set to the run's region | the whole bucket, by the S3 source |
 | `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
-| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT` |
+| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT`; a table over `DYNAMODB_MAX_TABLE_BYTES` is read by export with `DYNAMODB_EXPORT`, and is otherwise `too_large` (`pitr_off` when export is on and point-in-time recovery is off) |
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 | `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
@@ -264,8 +264,8 @@ region, and a bucket in another region is left to that region's scanner.
 | `mq` | `ListBrokers`, `DescribeBroker` | an ActiveMQ broker's named queues browsed (never consumed) by a checked read-only user, opt-in; RabbitMQ reported |
 | `ecr` | `DescribeRepositories` | files sampled from the latest image's top layers, opt-in ([below](#ecr-sagemaker-and-neptune-analytics)) |
 | `sagemaker` | `ListFeatureGroups`, `DescribeFeatureGroup`, `ListNotebookInstances` | each feature group's offline store, by the S3 source, opt-in; the rest reported |
-| `neptune-analytics` | `ListGraphs` | each graph by an export to CSV in the results bucket, read by column and deleted |
-| `eventbridge` | `ListArchives`, `DescribeArchive` | reported with size and retention; opt-in, a replay to the scanner's own rule and queue ([below](#eventbridge-archives-and-glacier-vaults)) |
+| `neptune-analytics` | `ListGraphs` | each graph by an export to CSV in the results bucket, read by column and deleted, with the export role and key (`NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN`, `NEPTUNE_ANALYTICS_EXPORT_KMS_KEY_ARN`); without them, `export_not_configured` |
+| `eventbridge` | `ListArchives`, `DescribeArchive` | reported with size and retention; opt-in (`EVENTBRIDGE_REPLAY` and `EVENTBRIDGE_REPLAY_QUEUE_URL`, which the template sets), a replay to the scanner's own rule and queue ([below](#eventbridge-archives-and-glacier-vaults)) |
 | `glacier` | `ListVaults` | reported (`archive_retrieval`) |
 
 #### Coverage by store
@@ -277,10 +277,10 @@ reason.
 | Store | Read | How | Otherwise reported as |
 |---|---|---|---|
 | S3, CloudWatch Logs, DynamoDB, Glue tables | **Scanned** | objects, events, items, columns | `denied`, `kms_access`, `too_large`, ... |
-| RDS and Aurora | **Scanned** with the export role and key | snapshot export to Parquet | `export_not_configured`, `no_snapshot` |
+| RDS and Aurora | **Scanned** with the export role and key | snapshot export to Parquet | `export_not_configured`, `no_snapshot`, `export_pending`, `export_failed`; Oracle, SQL Server and Db2 `unsupported` (no snapshot export) |
 | Aurora (small databases) | **Opt-in** (`RDS_DATA_API`) | sampled read-only SQL | |
 | Redshift, Redshift Serverless | **Opt-in** (`REDSHIFT_READ`) | sampled read-only SQL (Data API) | `read_not_configured`, `paused`, `no_grant` |
-| OpenSearch domains | **Scanned** | sampled `_search` per index, GETs only | `vpc_only`, `access_denied` |
+| OpenSearch domains | **Scanned** | sampled `_search` per index, GETs only | `vpc_only`, `access_denied`; `unsupported` while being created or deleted |
 | OpenSearch Serverless | **Opt-in** (`OPENSEARCH_SERVERLESS_READ`) | the same | `read_not_configured` |
 | EBS volumes and snapshots | **Opt-in** (`EBS_DIRECT_READ`) | sampled blocks' text, EBS direct APIs | `read_not_configured`, `no_snapshot`, `archived` |
 | Kinesis Data Streams | **Scanned** | sampled from `TRIM_HORIZON`, never checkpointed | `unsupported` |
@@ -302,13 +302,13 @@ reason.
 | CodeCommit | **Scanned** | a sample of the default branch's files at its head | `unsupported` (`state: empty`) |
 | S3 directory buckets | **Scanned** | the S3 source, read-only S3 Express sessions | `self` |
 | MSK, provisioned and Serverless | **Opt-in** (`MSK_READ`) | sampled from the earliest offset, IAM authentication, a throwaway group id, never committed | `read_not_configured`, `vpc_only`, `no_read_path` (no IAM authentication), `unsupported` |
-| Amazon MQ for ActiveMQ | **Opt-in** (`MQ_READ`, `MQ_BROKERS`) | named queues browsed over STOMP (`browser:true`) by a checked read-only user | `read_not_configured`, `user_can_write`, `vpc_only` |
+| Amazon MQ for ActiveMQ | **Opt-in** (`MQ_READ`, `MQ_BROKERS`) | named queues browsed over STOMP (`browser:true`) by a checked read-only user | `read_not_configured` (also a broker with no entry in `MQ_BROKERS`), `user_can_write`, `vpc_only` |
 | Amazon MQ for RabbitMQ | Coverage only | | `no_read_path` |
 | ECR images | **Opt-in** (`ECR_READ`) | files sampled from the latest image's top layers | `read_not_configured` |
 | SageMaker Feature Store (offline) | **Opt-in** (`SAGEMAKER_READ`) | its S3 objects, by the S3 source | `read_not_configured`; an online-only group `no_read_path` |
 | SageMaker notebook instances | Coverage only | | `no_read_path` |
 | Neptune Analytics | **Scanned** with the export role and key | export to CSV, read by column, deleted | `export_not_configured`, `export_pending` |
-| EventBridge archives | Coverage only; **opt-in** replay (`EVENTBRIDGE_REPLAY`) | a replay to the scanner's own rule and queue | `read_not_configured` |
+| EventBridge archives | Coverage only; **opt-in** replay (`EVENTBRIDGE_REPLAY`, with `EVENTBRIDGE_REPLAY_QUEUE_URL`) | a replay to the scanner's own rule and queue | `read_not_configured` |
 | S3 Glacier vaults | Coverage only | | `archive_retrieval` |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
@@ -330,8 +330,18 @@ comma-separated rules:
 | `tag:pii` | Stores with that tag, any value |
 | `s3:tag:team=data*` | A tag rule for one kind |
 
-- A deny rule wins over an allow rule. With an allow list, only the stores it
-  matches are read.
+- A deny rule wins over an allow rule.
+- **An allow list restricts per kind.** The allow rules that apply to a store
+  are those of its own kind (`s3:calls-*`) and those of no kind
+  (`tag:pii-scan=yes`, `*-archive`). When any apply, only the stores they
+  match are read, and the rest of that kind are `not_allowed`. A kind that no
+  allow rule applies to is not restricted: `DISCOVER_ALLOW=s3:calls-*` narrows
+  S3 to the `calls-*` buckets and leaves DynamoDB tables, log groups and every
+  other kind as they were. A rule of no kind still applies to every kind, so
+  `tag:pii-scan=yes` alone allows only tagged stores of every kind. (Before
+  this, one allow rule of any kind made every other kind `not_allowed`.) To
+  narrow several kinds, give each its own rule (`s3:calls-*,dynamodb:orders`);
+  to leave a kind out entirely, use `DISCOVER` or a deny rule.
 - Tags are read only when a rule needs them (`s3:GetBucketTagging`,
   `logs:ListTagsForResource`, `dynamodb:ListTagsOfResource`). If a store's
   tags cannot be read and a deny-by-tag rule exists, the store is skipped as
@@ -359,6 +369,31 @@ whose `match` (a rule as above) fits a store sets its sampling:
   A table whose size times its sample is over `DYNAMODB_MAX_TABLE_BYTES` is
   skipped as `too_large`.
 
+**A bucket's key filter.** An entry of `DISCOVER_SAMPLING` can also name which
+object keys of a bucket are read, with `keyInclude` and `keyExclude` (each a
+glob or a list of globs):
+
+```json
+[
+  { "match": "s3:example-call-recordings", "keyInclude": "*transcript.json" },
+  { "match": "s3:media-*", "keyExclude": ["*.wav", "*.mp4"] }
+]
+```
+
+- A key is read when it matches a `keyInclude` glob (every key, when there is
+  none) and no `keyExclude` glob. A glob matches the whole key, and `*` also
+  matches `/`, so `*transcript.json` is "ends with `transcript.json`" anywhere
+  in the bucket.
+- A key the filter does not allow is listed, never read, and never a finding:
+  it is counted in the source's coverage as `notAllowed` by reason
+  (`{"key_filter": n}`), and in the store's `gaps` as `notAllowed`, so the
+  objects left out are visible, never silent.
+- The key filter comes from the first entry whose `match` fits the bucket and
+  that has `keyInclude` or `keyExclude`, independently of sampling (which comes
+  from the first entry that fits, as above). It applies to S3 buckets, named
+  (`SCAN_BUCKETS`, `SCAN_PREFIXES`, within the prefix) or discovered, and to
+  S3 directory buckets; a Glue table reads its own location's files, and the
+  other scanners (Azure, Google Cloud) do not apply it yet.
 **Budget and resume.** The run's budget is `MAX_ITEMS_PER_RUN` and
 `MAX_BYTES_PER_RUN`, with optional per-kind caps (`MAX_OBJECTS_PER_RUN`,
 `MAX_LOG_EVENTS_PER_RUN`, `MAX_TABLE_ITEMS_PER_RUN`) and a wall-time cap
@@ -379,14 +414,14 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `denied`, `not_allowed` | The deny list, or not on the allow list |
 | `skipped` | `self` | The scanner's own bucket or log group |
 | `skipped` | `too_large` | Over the size cap, after sampling |
-| `skipped` | `unsupported` | A log group of the `DELIVERY` class, or a table not `ACTIVE` |
+| `skipped` | `unsupported` | A store in a state or form the scanner cannot read: a log group of the `DELIVERY` class, a table not `ACTIVE`, a Glue view or resource link, an RDS engine with no snapshot export, an Express state machine, an empty repository, or a stream, cluster, broker or domain that is not active |
 | `skipped` | `kms_access` | A table whose KMS key is out of reach |
 | `skipped` | `tags_unreadable` | Tags could not be read while a deny-by-tag rule exists |
 | `error` | `kms_access`, `access_denied`, `error` | The store could not be read; `error` names the AWS error |
-| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift) |
+| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift, OpenSearch Serverless, EBS, SQS, Secrets Manager, MSK, MQ, ECR, SageMaker, EventBridge) |
 | `skipped` | `paused` | A paused Redshift cluster: a query would not resume it |
 | `skipped` | `no_grant` | Signed in, but the database user can see no table: grant it `SELECT` |
-| `skipped` | `vpc_only` | An OpenSearch domain reachable only inside its VPC, which the scanner's Lambda is not in |
+| `skipped` | `vpc_only` | An OpenSearch domain, MSK cluster or MQ broker reachable only inside its VPC, which the scanner's Lambda is not in |
 | `skipped` | `no_snapshot_export` | DocumentDB or Neptune: no snapshot export to S3 exists, and the scanner holds no database credentials |
 | `skipped` | `needs_task` | EFS or FSx: read only by mounting it inside its VPC (the opt-in file-system task) |
 | `skipped` | `archived` | An EBS snapshot in the archive tier, which the EBS direct APIs cannot read |
@@ -396,7 +431,15 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `redrive_would_change` | A dead-letter queue with its own redrive policy: a receive raises the receive count, which could move messages on |
 | `skipped` | `no_s3_destination` | A Firehose stream with no S3 location (its destination's own kind reads it, or it is outside AWS) |
 | `skipped` | `in_memory` | ElastiCache or MemoryDB: data in memory, inside the VPC, behind the cache's own credentials; exported snapshots in S3 are read there |
-| `skipped` | `no_read_path` | Timestream for InfluxDB: reached inside a VPC with an InfluxDB token |
+| `skipped` | `no_read_path` | No read-only path the scanner can take: Timestream for InfluxDB (a VPC and an InfluxDB token), MSK without IAM authentication, Amazon MQ for RabbitMQ, an online-only SageMaker feature group, a SageMaker notebook instance |
+| `skipped` | `pitr_off` | A DynamoDB table too large to Scan, whose export needs point-in-time recovery, which is off |
+| `skipped` | `lake_formation` | A Glue table Lake Formation governs, with no grant to the scanner's role |
+| `skipped` | `export_not_configured` | RDS, Aurora or Neptune Analytics without the export role and key |
+| `deferred` | `export_pending` | An export started and not finished; the next run reads it |
+| `error` | `export_failed` | An export that failed |
+| `skipped` | `archive_retrieval` | An S3 Glacier vault: reading needs a retrieval job |
+| `skipped` | `user_can_write` | An Amazon MQ user that can do more than read: nothing is read |
+| `skipped` | `vendor_mode`, `vendor_not_covered` | `SCAN_MODE=vendor`: S3 is left to Amazon Macie's imported findings, and every other kind is not covered by it |
 
 Each store's `gaps` counts what was listed but not read: `kmsDenied`
 (objects under a KMS key the scanner may not use), `unreadable` and
@@ -497,7 +540,8 @@ core package:
 
 | Component | Made of |
 |---|---|
-| `adapter:<kind>` | The source module that reads a kind of store (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). The kinds are found from the `kind = "..."` names in every platform's `sources/` modules, plus the kinds a module sets at run time. A vendor's importer is its own (`adapter:macie`) |
+| `adapter:<kind>` | A kind of store's **read path**: the code that fetches its data and interprets it (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). An adapter whose objects the index records keeps its read path in its own module, `sources/<name>_read.py`, which names the kinds it reads (`READS`). The kinds are found from those, from the `kind = "..."` names in every platform's `sources/` modules, and from the kinds a module sets at run time. An adapter that records nothing in the index (it reads forward, or every pass) is its whole module. A vendor's importer is its own (`adapter:macie`) |
+| `listing:<kind>` | The rest of a split adapter: discovery, listing, inventory reports, configuration and logging (`sources/<name>.py`, and helpers such as `inventory.py` and `exports.py`). A change here re-lists the store and reads nothing again ([below](#how-rescans-are-chosen)) |
 | `reader:<name>` | One of the core's readers: `text`, `transcript`, `docx`, `xlsx`, `pptx`, `pdf`, `archive-zip`, `archive-tar`, `archive-stream` (gzip, bzip2, xz, zstd), `columnar` (Parquet, ORC), `avro`, `rdb`, and for tables `sql` and `attributes`. A reader can be made of named functions of a shared file, so a change to `_pptx` in `scan/office.py` moves `reader:pptx` and not `reader:docx`. The manifest also lists the kinds of object each reader reads (`readerKinds`) |
 | `sniffer` | `scan/sniff.py`, and the routing in `scan/objects.py` that sends bytes to a reader |
 | `spec-standalone` | The unprompted engine: shape and context rules, the recognizers, the spec loader |
@@ -508,7 +552,8 @@ CI runs `uv run python ../scripts/components.py --check`, and
 `tests/test_components.py` runs it too. The check fails when a component's
 source changed and the manifest was not regenerated, so a version is never
 forgotten. It also fails when a new `sources/` module names no kind and is not
-a listed helper. To regenerate, run
+a listed helper, when a module that records objects in the index has no read
+module of its own, and when a read module has no adapter module beside it. To regenerate, run
 `uv run python ../scripts/components.py --write` in `scanner/` and commit the
 manifest.
 
@@ -594,7 +639,7 @@ first rule that applies is its `rescanReason`
 
 | What changed | What is read again |
 |---|---|
-| An adapter (`adapter:s3`) | That adapter's objects only |
+| An adapter's read path (`adapter:s3`, `sources/s3_read.py`) | That adapter's objects only. How the store is listed (`listing:s3`) reads nothing again: it re-lists ([below](#how-rescans-are-chosen)) |
 | A reader (`reader:pdf`) | The objects that reader read, on every platform, including archives with an entry it read |
 | A new reader, or pyarrow in the build | The objects that held a kind no reader read (`unread` in the profile), when a reader now reads it: 7z before a 7z reader, Parquet read by the Lambda zip once the image reads it |
 | The sniffer | Objects whose kind was undetermined (`binary`) or disputed (`disguised`) |
@@ -604,6 +649,28 @@ first rule that applies is its `rescanReason`
 
 Nothing else is re-read. An image counted by kind is not read again for a spec
 change, and a PDF is not read again for a Word reader's.
+
+**How a store is listed is not how it is read.** An adapter's version is its
+read path only (`sources/<name>_read.py`). Discovery, listing, inventory
+reports, configuration and logging are `listing:<kind>`, and a change to them
+(a refactor of `sources/s3.py`, a fix to `inventory.py`) reads nothing again.
+It **re-lists** the store instead:
+
+- Each source's cursor records the `listing:<kind>` version its position was
+  reached with. When it differs from this build's, the run drops the position
+  (a resume key, a page token, a report position, a delta link) and lists the
+  store again from the start. The coverage says `relisted: true`.
+- Each object met is decided by its row as always: the same change marker and
+  a current vector is a skip. A delta feed listed from no link (SharePoint,
+  OneDrive, Drive) downloads only the files whose content tag or version
+  moved.
+- Only with an index. The first run after an upgrade records the version and
+  re-lists nothing.
+- Rows recorded before adapters were narrowed (manifest version 1) hashed the
+  whole module. Their adapter version is not compared, and a pass that meets
+  such a row unchanged gives it this build's version, since that release moved
+  code and changed nothing any adapter reads. From then on a change to the
+  read path rescans them like any adapter change.
 
 **Budgeted and spread across runs.** Source changes come first. Rescans come
 after them, in listing order, and may use at most `RESCAN_PERCENT` (25%) of
@@ -684,7 +751,7 @@ The numbers assume the defaults: 20,000 items a run, a quarter of each
 source's share for rescans, and one run a day.
 
 **The SharePoint reader changed.** Say a release changes how SharePoint
-libraries are read: `sources/m365_files.py`, the module behind
+libraries are read: `sources/m365_files_read.py`, the read path behind
 `adapter:m365_sharepoint` and `adapter:m365_onedrive`. The manifest's two
 versions move, and nothing else does:
 
@@ -702,6 +769,11 @@ versions move, and nothing else does:
   and `rescanBacklog: 38750`. It is done in about 32 runs. Its changed files
   are read first, every run, as before.
 - The findings of a rescanned file say `rescanReason: adapter`.
+
+Had the release changed only how libraries are found or listed
+(`sources/m365_files.py`), `listing:m365_sharepoint` would move instead. Each
+library would be listed again from no delta link, and no file whose content tag
+is the recorded one would be downloaded.
 
 Had the Word reader changed instead (`_docx` in `scan/office.py`),
 `reader:docx` would move. Only the Word files, and archives holding one, would
@@ -1530,7 +1602,7 @@ Stugum's call-test runs for one test:
 |---|---|
 | `table` | The table name (required) |
 | `partition` | A partition key value: the read is a `Query` of that partition. Without it, the read is a `Scan` of the table |
-| `sortPrefix` | With `partition`: only items whose sort key begins with this (`begins_with`) |
+| `sortPrefix` | Only items whose sort key begins with this (`begins_with`). With `partition`, it is part of the `Query`'s key condition. Without it, the read is a whole-table `Scan` with `begins_with` as its filter: DynamoDB still reads (and bills for) every item, but returns only the matches, so the others are counted as listed and never scanned. The table needs a string sort key, or the read ends with an error |
 | `include` | Attribute paths to read. The request projects their top-level attributes and the key; the paths then pick the leaves. Empty: every attribute |
 | `exclude` | Attribute paths never read |
 | `keypad` | Paths that hold keypad (DTMF) entries |
@@ -1714,7 +1786,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
 | `redshift` (reads, opt-in) | `redshift-data:ExecuteStatement`, `redshift-data:ListDatabases` on this account's clusters and workgroups; `redshift-data:DescribeStatement`, `redshift-data:GetStatementResult` on its own statements; `redshift-serverless:GetCredentials`; `redshift:GetClusterCredentialsWithIAM` (`iam`) or `redshift:GetClusterCredentials` on the one database user (`db_user`) | the ARNs named |
 | Lake Formation | **none**: no `lakeformation:GetDataAccess` and no grants. Where Lake Formation governs a table, grant the scanner's role `SELECT` (and `DESCRIBE`) in Lake Formation to include it; otherwise it is reported as `lake_formation` | |
-| KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3.<region>.amazonaws.com` and `dynamodb.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
+| KMS | `kms:Decrypt`, conditioned on `kms:ViaService` `s3`, `dynamodb`, `kinesis`, `states`, `lambda`, `xray` or `codecommit` `.<region>.amazonaws.com` | the customer managed keys to be read through; without it, those stores are reported as `kms_access` |
 | Encryption facts (1.5) | `kms:ListAliases`, once per run: which key ids are AWS managed (`alias/aws/*`), so each store's key is told apart ([At-rest encryption](#at-rest-encryption-on-every-finding)). No key is described or used | `*` |
 
 A deny list in configuration is not an IAM boundary. To keep the scanner
@@ -1803,6 +1875,26 @@ management or delegated-admin account
    StackSet. If it holds data, deploy `scanner.yaml` there as an ordinary
    stack.
 
+**The template goes through S3.** `scanner.yaml` is larger than the 51,200
+bytes CloudFormation accepts inline (`--template-body`), so every deploy
+names it in S3: the StackSet by `ScannerTemplateUrl` (`--template-url`), and
+an ordinary stack by uploading it first. `aws cloudformation deploy` does
+the upload when given a bucket:
+
+```sh
+aws cloudformation deploy --stack-name sensitive-data-scanner \
+  --template-file deploy/scanner.yaml \
+  --s3-bucket example-templates-bucket \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides ImageUri=111122223333.dkr.ecr.us-east-1.amazonaws.com/sensitive-data-scanner@sha256:…
+```
+
+Or copy it with `aws s3 cp deploy/scanner.yaml s3://example-templates-bucket/`
+and pass `--template-url https://example-templates-bucket.s3.<region>.amazonaws.com/scanner.yaml`
+to `create-stack`. A test (`scanner/tests/test_iam_limits.py`) keeps the
+template under the 1 MB an S3 template may be, and this step documented while
+it is over 51,200 bytes.
+
 **Per account and region.**
 
 - `ImageUri` must name the region's own registry (`<account>.dkr.ecr.<region>.amazonaws.com/…`).
@@ -1813,8 +1905,14 @@ management or delegated-admin account
   usually set per account. Without it, RDS and Aurora are discovered and
   reported as `export_not_configured`.
 - IAM resources have no fixed names, so one account holds a stack in many
-  regions without collisions. The results bucket is
-  `sds-results-<account>-<region>`, and its policy refuses anything but TLS.
+  regions without collisions. The results bucket has no fixed name either:
+  CloudFormation names it from the stack (the `ResultsBucket` output gives
+  it), and its policy refuses anything but TLS. It is kept when the stack is
+  deleted (`DeletionPolicy: Retain`, the findings history). Because its name
+  is generated, a bucket kept from a failed first create never blocks the
+  next create; delete such a leftover bucket by hand when it is not wanted.
+  (Up to fb9097a the name was fixed, `sds-results-<account>-<region>`, and
+  a failed first create left a bucket that made every later create fail.)
 - There is no reserved concurrency: the results bucket's lock allows one run
   at a time, and reserving concurrency would fail in accounts still at the
   default Lambda quota.
@@ -1822,7 +1920,8 @@ management or delegated-admin account
 ### IAM per source
 
 The scanner's role (`ScannerRole` in `scanner.yaml`) holds exactly this,
-statement by statement. A test (`scanner/tests/test_template.py`) checks
+statement by statement, across its inline policy and the managed policies
+attached to it ([Policy sizes](#policy-sizes)). A test (`scanner/tests/test_template.py`) checks
 several things:
 - every allowed action is a read, or a write aimed at the scanner's own
   bucket, log group, bus or exports;
@@ -1896,7 +1995,7 @@ several things:
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And eight explicit denies, as defense in depth against any other policy the
-role might gain:
+role might gain (managed policies attached to the role, [Policy sizes](#policy-sizes)):
 
 | Deny | What |
 |---|---|
@@ -1924,6 +2023,59 @@ else. The schedule's role can invoke the function, nothing else.
 boundary. To keep the scanner out of a store for certain, add an explicit
 `Deny` for the scanner's role in that bucket's, table's or key's own
 policy; the store is then reported as `access_denied`.
+
+### Policy sizes
+
+IAM allows a role **10,240 characters of inline policy in all** (white space
+not counted), each **managed policy 6,144**, and **10 managed policies** per
+role by default. The role's statements come to about 22,900 characters with
+every opt-in on, and the explicit denies alone to about 7,800
+(`NoDataStoreWrites` about 6,100), so up to fb9097a IAM refused the role
+(`ServiceLimitExceeded`, "Maximum policy size of 10240 bytes exceeded") and
+the template could not deploy. Since then:
+
+| Policy | Kind | Holds |
+|---|---|---|
+| `scanner` | inline | the Allows every deployment has: its own bucket and logs, and discovery and reads of every store |
+| `DataStoreWriteDenyPolicy` | managed | `NoDataStoreWrites`, alone (it is most of a managed policy's 6,144) |
+| `GuardDenyPolicy` | managed | the other seven denies |
+| `StoreReadPolicy` | managed | the opt-in store reads and their keys, the config parameter, the bus and the Macie import, with the Parameter Store listing and `kms:ListAliases`, so it is never empty |
+| `BrokerImageGraphReadPolicy` | managed | brokers, images, graphs and archives: discovery and the opt-in reads |
+| `RdsExportPermissions`, `DynamoDBExportPermissions`, `DataApiPermissions`, `RedshiftReadPermissions` | managed, each only with its parameter | the export and SQL permissions |
+
+The denies are managed policies because they are the bulk; they and the
+opt-in Allows are attached by the role itself (`ManagedPolicyArns`), so the
+role never exists without its denies, and the function also `DependsOn`
+every policy the role always holds. Moving them changed no permission: every
+statement keeps its `Effect`, `Action`, `NotAction`, `Resource`, `Condition`
+and `Sid`, under the same parameter.
+
+`scanner/tests/test_iam_limits.py` holds this:
+- every statement the role can hold, with the conditions it comes under, is
+  exactly the reviewed snapshot (`scanner/tests/fixtures/scanner_role_statements.json`,
+  taken from fb9097a); a change to the role's permissions changes the
+  snapshot in the same pull request;
+- every role in every CloudFormation template (`scanner.yaml`,
+  `estate-stackset.yaml`, which holds none, and `saas/ecs.yaml`) fits the
+  limits with every opt-in on: the longest partition and region, generated
+  names at their longest, and three ARNs of realistic maximum length in each
+  list parameter (`DataApiClusterArns`, `DataApiSecretArns`, `MqSecretArns`).
+  With every opt-in on, the inline policy is about 4,600 characters, the
+  largest managed policy about 6,100, and 8 managed policies are attached;
+- each attached policy keeps a statement whatever the opt-ins are (IAM
+  refuses an empty policy).
+
+Longer lists than three ARNs could pass 6,144 in `DataApiPermissions` or
+`BrokerImageGraphReadPolicy`; the deploy then fails with the same
+`ServiceLimitExceeded`, and the fix is a wildcard ARN in place of the list.
+
+Azure and Google Cloud have no such problem, and tests say so. The Azure
+deployment makes no custom role definition, only built-in role assignments
+(`test_azure_template.py`), so a custom role's limits (5,000 actions, 2 MB)
+do not apply. Google Cloud's custom roles hold up to 3,000 permissions and 64
+KB of title, description and permission names each, and an organization up to
+300 of them; with every opt-in on, the deployment makes 5 roles, the largest
+far under both (`test_gcp_template.py`).
 
 ## Event-driven mode (phase 2, design only)
 

@@ -35,7 +35,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
-from sensitive_data_core.index import Indexes, S3Backend, index_salt
+from sensitive_data_core.index import Indexes, S3Backend, index_salt, listed_with, relist
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
 
@@ -208,6 +208,8 @@ def _s3_source(
         delimiter=t.delimiter if t else ",",
         skip_header=t.skip_header if t else 0,
         keys=classifier(clients),
+        # A bucket's key filter; a catalog table reads its own location's files.
+        key_filter=None if t else store.key_filter,
     )
     source.use_inventory = config.s3_inventory
     source.inventory_min_objects = config.s3_inventory_min_objects
@@ -276,6 +278,8 @@ def plan(
             pct, per = config.sampling_for(kind, name, None)
             store.sample_percent = pct
             store.max_per_prefix = per
+            if kind == "s3":
+                store.key_filter = config.key_filter_for(kind, name, None)
             by_key[(kind, name)] = store
             stores.append(store)
         return store
@@ -546,7 +550,9 @@ def run_scan(
             if kind_budget is not None:
                 share.max_items = min(share.max_items, kind_budget.share(ways).max_items)
             log_event("source.start", source=source.target, kind=source.kind)
-            result = source.run(cursors.get(source.id) or {}, share, detector, store, started)
+            cursor = relist(source, cursors.get(source.id) or {}, indexes)
+            result = source.run(cursor, share, detector, store, started)
+            listed_with(source, result, indexes, cursor)
             if isinstance(source, S3Source) and result.coverage.error is None:
                 source.prune(store, share)
             budget.absorb(share)

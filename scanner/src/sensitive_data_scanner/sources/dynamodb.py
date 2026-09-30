@@ -143,19 +143,32 @@ class DynamoDBSource:
             values[":pk"] = {pk_type: self.t.partition}
             cond = "#pk = :pk"
             if self.t.sort_prefix is not None:
-                if "RANGE" not in key_schema:
-                    raise ValueError("table has no sort key")
-                names["#sk"] = key_schema["RANGE"][0]
-                values[":sk"] = {"S": self.t.sort_prefix}
+                names["#sk"], values[":sk"] = self._sort_key(key_schema)
                 cond += " AND begins_with(#sk, :sk)"
             args["KeyConditionExpression"] = cond
             args["ExpressionAttributeValues"] = values
-        elif self.segments > 1:
-            args["Segment"] = 0
-            args["TotalSegments"] = self.segments
+        else:
+            if self.t.sort_prefix is not None:
+                # No partition: a whole-table Scan, filtered on the sort key. DynamoDB still
+                # reads every item (ScannedCount), but returns only those that match.
+                names["#sk"], values[":sk"] = self._sort_key(key_schema)
+                args["FilterExpression"] = "begins_with(#sk, :sk)"
+                args["ExpressionAttributeValues"] = values
+            if self.segments > 1:
+                args["Segment"] = 0
+                args["TotalSegments"] = self.segments
         if names:
             args["ExpressionAttributeNames"] = names
         return op, args
+
+    def _sort_key(self, key_schema: dict[str, tuple[str, str]]) -> tuple[str, dict[str, str]]:
+        """The sort key's name and the prefix as its value, for `begins_with`."""
+        if "RANGE" not in key_schema:
+            raise ValueError("table has no sort key")
+        name, kind = key_schema["RANGE"]
+        if kind != "S":
+            raise ValueError("sortPrefix needs a string sort key")
+        return name, {"S": str(self.t.sort_prefix)}
 
     def _key_hash(self, salt: str, key: dict[str, Any]) -> str:
         canonical = json.dumps(

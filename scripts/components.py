@@ -11,9 +11,17 @@ reader's source and its version changes; forget to regenerate and CI fails.
 
 The components (docs/ARCHITECTURE.md, "How rescans are chosen"):
 
-- `adapter:<kind>`: the source module(s) that read a kind of store, found by
-  the `kind = "..."` literals in every platform's `sources/` modules, plus the
-  kinds named below that a module sets at run time;
+- `adapter:<kind>`: the **read path** of a kind of store: the functions that fetch
+  and interpret its data. An adapter whose objects are recorded in the object
+  index keeps them in its own module, `sources/<name>_read.py`, which names the
+  kinds it reads (`READS = ("s3", ...)`); the rest of the adapter (discovery,
+  listing, inventory, configuration, logging) stays in `sources/<name>.py` and is
+  `listing:<kind>`. A change to `listing:<kind>` re-lists the store and never
+  re-reads an object (#67). Adapters that record nothing in the index (they read
+  forward, or every pass) are not split: the module is the adapter, found by the
+  `kind = "..."` literals in every platform's `sources/` modules, plus the kinds
+  named below that a module sets at run time;
+- `listing:<kind>`: the split adapters' other modules;
 - `reader:<name>`: the core's readers, and the kinds of object each reads;
 - `sniffer`: what an object is (`scan/sniff.py`) and the routing that sends it
   to a reader;
@@ -43,7 +51,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = "scanner/core/src/sensitive_data_core/components.json"
-MANIFEST_VERSION = 1
+# 2: adapters narrowed to their read path (`adapter:<kind>`), with `listing:<kind>` beside
+# them (#67). Rows recorded under 1 hashed whole modules: their adapter versions are not
+# compared (sensitive_data_core.index).
+MANIFEST_VERSION = 2
 
 CORE = "scanner/core/src/sensitive_data_core"
 OBJECTS = f"{CORE}/scan/objects.py"
@@ -129,21 +140,12 @@ SOURCE_DIRS = (
     "scanner/saas/src/sensitive_data_saas/sources",
 )
 # Kinds a module sets at run time (no `kind = "..."` literal), and the databases runner's
-# engines. Each is read by the files named.
+# engines. Each is read by the files named. (A split adapter's read module names its kinds in
+# `READS`, so the Azure and Google Cloud databases and DynamoDB exports need no entry here.)
 EXTRA_ADAPTERS: dict[str, list[str]] = {
-    **dict.fromkeys(
-        ["azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql", "synapse_sql"],
-        ["scanner/azure/src/sensitive_data_azure/sources/databases.py"],
-    ),
-    **dict.fromkeys(
-        ["cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver", "alloydb"],
-        ["scanner/gcp/src/sensitive_data_gcp/sources/databases.py"],
-    ),
     **dict.fromkeys(
         ["firestore", "datastore"], ["scanner/gcp/src/sensitive_data_gcp/sources/documents.py"]
     ),
-    "dynamodb": ["scanner/src/sensitive_data_scanner/sources/dynamodb_export.py"],
-    "rds": ["scanner/src/sensitive_data_scanner/sources/exports.py"],
     "gws_alerts": ["scanner/saas/src/sensitive_data_saas/sources/gws_alerts.py"],
     "purview": ["scanner/saas/src/sensitive_data_saas/sources/purview.py"],
     "slack_audit": ["scanner/saas/src/sensitive_data_saas/sources/slack_audit.py"],
@@ -161,6 +163,22 @@ EXTRA_ADAPTERS: dict[str, list[str]] = {
         )
     },
 }
+# Helpers that find a split adapter's objects without reading them: part of its listing.
+EXTRA_LISTINGS: dict[str, list[str]] = {
+    **dict.fromkeys(
+        ["s3", "glue_table"], ["scanner/src/sensitive_data_scanner/sources/inventory.py"]
+    ),
+    **dict.fromkeys(["rds", "dynamodb"], ["scanner/src/sensitive_data_scanner/sources/exports.py"]),
+    **dict.fromkeys(
+        ["azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql", "synapse_sql"],
+        ["scanner/azure/src/sensitive_data_azure/sources/databases.py"],
+    ),
+    **dict.fromkeys(
+        ["cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver", "alloydb"],
+        ["scanner/gcp/src/sensitive_data_gcp/sources/databases.py"],
+    ),
+}
+READ_SUFFIX = "_read.py"
 # A vendor's importer (#55) names the kind whose findings it imports, but reads no object:
 # it is its own component, and never part of that kind's adapter.
 IMPORTERS = {"scanner/src/sensitive_data_scanner/sources/macie.py": "macie"}
@@ -180,7 +198,8 @@ HELPERS = frozenset(
         "exports.py",
         "m365.py",
         "gws.py",
-        # How a large bucket's objects are found (S3 Inventory reports), not how they are read.
+        # How a large bucket's objects are found (S3 Inventory reports), not how they are
+        # read: `listing:s3` (EXTRA_LISTINGS).
         "inventory.py",
     }
 )
@@ -231,32 +250,90 @@ def digest(root: Path, entries: Iterable[str], extra: Any = None) -> str:
     return h.hexdigest()[:12]
 
 
-def adapters(root: Path) -> dict[str, list[str]]:
-    """Each store kind and the files that read it: every `sources/` module's kinds."""
-    out: dict[str, list[str]] = {k: list(v) for k, v in EXTRA_ADAPTERS.items()}
-    for d in SOURCE_DIRS:
-        for f in sorted((root / d).glob("*.py")):
+def _reads(path: Path) -> tuple[str, ...]:
+    """A read module's `READS = ("kind", ...)`: the kinds whose read path it is."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "READS"
+        ):
+            value = ast.literal_eval(node.value)
+            if isinstance(value, tuple) and all(isinstance(k, str) for k in value):
+                return value
+    raise SystemExit(f"components: {path} has no READS tuple")
+
+
+def _modules(root: Path) -> list[Path]:
+    return [f for d in SOURCE_DIRS for f in sorted((root / d).glob("*.py"))]
+
+
+def _split(f: Path) -> bool:
+    """A module whose read path is its own `<name>_read.py`."""
+    return f.with_name(f.stem + READ_SUFFIX).exists()
+
+
+def components_of(root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Each store kind's read path (`adapter:<kind>`) and, for a split adapter, the rest of
+    it (`listing:<kind>`), as the files that make each."""
+    read: dict[str, list[str]] = {k: list(v) for k, v in EXTRA_ADAPTERS.items()}
+    listing: dict[str, list[str]] = {}
+    split_kinds: set[str] = set()
+    for f in _modules(root):
+        if f.name.endswith(READ_SUFFIX):
             rel = f.relative_to(root).as_posix()
-            if rel in IMPORTERS:
-                out.setdefault(IMPORTERS[rel], []).append(rel)
-                continue
-            kinds = sorted(set(_KIND.findall(f.read_text(encoding="utf-8"))))
-            for kind in kinds:
-                files = out.setdefault(kind, [])
-                if rel not in files:
-                    files.append(rel)
-    return dict(sorted(out.items()))
+            for kind in _reads(f):
+                read.setdefault(kind, []).append(rel)
+                split_kinds.add(kind)
+    for f in _modules(root):
+        rel = f.relative_to(root).as_posix()
+        if f.name.endswith(READ_SUFFIX):
+            continue
+        if rel in IMPORTERS:
+            read.setdefault(IMPORTERS[rel], []).append(rel)
+            continue
+        for kind in sorted(set(_KIND.findall(f.read_text(encoding="utf-8")))):
+            # A kind with a read module: its other modules are its listing, whether or not
+            # they are split themselves (DynamoDB's Scan reads every pass and records no row).
+            target = listing if kind in split_kinds else read
+            files = target.setdefault(kind, [])
+            if rel not in files:
+                files.append(rel)
+    for kind, files in EXTRA_LISTINGS.items():
+        for rel in files:
+            if kind in split_kinds and rel not in listing.setdefault(kind, []):
+                listing[kind].append(rel)
+    return dict(sorted(read.items())), dict(sorted(listing.items()))
+
+
+def adapters(root: Path) -> dict[str, list[str]]:
+    """Each store kind and the files of its read path."""
+    return components_of(root)[0]
 
 
 def uncovered(root: Path) -> list[str]:
-    """`sources/` modules that name no kind, are not an extra adapter's, and are no helper."""
-    named = {e.partition("::")[0] for files in adapters(root).values() for e in files}
+    """`sources/` modules that belong to no component: a module that names no kind, is not an
+    extra adapter's or listing's, and is no helper; a read module with no module beside it;
+    and a module that records objects in the index (`ObjectPass(`) without a read module of
+    its own, so its listing would move its objects' versions."""
+    read, listing = components_of(root)
+    named = {
+        e.partition("::")[0] for group in (read, listing) for files in group.values() for e in files
+    }
     out = []
-    for d in SOURCE_DIRS:
-        for f in sorted((root / d).glob("*.py")):
-            rel = f.relative_to(root).as_posix()
-            if f.name not in HELPERS and rel not in named:
-                out.append(rel)
+    for f in _modules(root):
+        rel = f.relative_to(root).as_posix()
+        if f.name.endswith(READ_SUFFIX):
+            base = f.with_name(f.name[: -len(READ_SUFFIX)] + ".py")
+            if not base.exists():
+                out.append(f"{rel} (a read module with no adapter module beside it)")
+            continue
+        if f.name not in HELPERS and rel not in named:
+            out.append(rel)
+        elif "ObjectPass(" in f.read_text(encoding="utf-8") and not _split(f):
+            out.append(f"{rel} (records objects in the index: its read path needs a {READ_SUFFIX})")
     return out
 
 
@@ -280,8 +357,11 @@ def _spec(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 def compute(root: Path = ROOT) -> dict[str, Any]:
     """The manifest for the source tree at `root`."""
     components: dict[str, str] = {}
-    for kind, files in adapters(root).items():
+    read, listing = components_of(root)
+    for kind, files in read.items():
         components[f"adapter:{kind}"] = digest(root, files)
+    for kind, files in listing.items():
+        components[f"listing:{kind}"] = digest(root, files)
     for name, reader in READERS.items():
         components[f"reader:{name}"] = digest(root, reader["sources"])
     components["sniffer"] = digest(root, SNIFFER)
@@ -330,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     loose = uncovered(ROOT)
     if loose:
-        print("components: a sources module names no kind: " + ", ".join(loose), file=sys.stderr)
+        print("components: a sources module has no component: " + ", ".join(loose), file=sys.stderr)
         return 1
     changed = stale(ROOT)
     if changed:

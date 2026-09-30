@@ -9,7 +9,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 35
+          "tp": 33
         },
         "low": {
           "f1": 1.0,
@@ -17,7 +17,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 35
+          "tp": 33
         },
         "medium": {
           "f1": 1.0,
@@ -25,33 +25,33 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 35
+          "tp": 33
         }
       },
       "card": {
         "high": {
-          "f1": 0.7559,
-          "fn": 31,
+          "f1": 0.7742,
+          "fn": 28,
           "fp": 0,
           "precision": 1.0,
-          "recall": 0.6076,
+          "recall": 0.6316,
           "tp": 48
         },
         "low": {
-          "f1": 0.9123,
-          "fn": 1,
-          "fp": 14,
-          "precision": 0.8478,
-          "recall": 0.9873,
-          "tp": 78
+          "f1": 0.8706,
+          "fn": 2,
+          "fp": 20,
+          "precision": 0.7872,
+          "recall": 0.9737,
+          "tp": 74
         },
         "medium": {
-          "f1": 0.9936,
-          "fn": 1,
+          "f1": 0.9867,
+          "fn": 2,
           "fp": 0,
           "precision": 1.0,
-          "recall": 0.9873,
-          "tp": 78
+          "recall": 0.9737,
+          "tp": 74
         }
       },
       "cvv": {
@@ -61,7 +61,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 51
+          "tp": 50
         },
         "low": {
           "f1": 1.0,
@@ -69,7 +69,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 51
+          "tp": 50
         },
         "medium": {
           "f1": 1.0,
@@ -77,7 +77,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 51
+          "tp": 50
         }
       },
       "dob": {
@@ -87,15 +87,15 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 60
+          "tp": 53
         },
         "low": {
-          "f1": 0.8759,
+          "f1": 0.8689,
           "fn": 0,
-          "fp": 17,
-          "precision": 0.7792,
+          "fp": 16,
+          "precision": 0.7681,
           "recall": 1.0,
-          "tp": 60
+          "tp": 53
         },
         "medium": {
           "f1": 1.0,
@@ -103,7 +103,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 60
+          "tp": 53
         }
       },
       "pin": {
@@ -113,7 +113,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 20
+          "tp": 23
         },
         "low": {
           "f1": 1.0,
@@ -121,7 +121,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 20
+          "tp": 23
         },
         "medium": {
           "f1": 1.0,
@@ -129,7 +129,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 20
+          "tp": 23
         }
       },
       "us_itin": {
@@ -139,7 +139,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 18
+          "tp": 15
         },
         "low": {
           "f1": 1.0,
@@ -147,7 +147,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 18
+          "tp": 15
         },
         "medium": {
           "f1": 1.0,
@@ -155,7 +155,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 18
+          "tp": 15
         }
       },
       "us_ssn": {
@@ -165,7 +165,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 38
+          "tp": 40
         },
         "low": {
           "f1": 1.0,
@@ -173,7 +173,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 38
+          "tp": 40
         },
         "medium": {
           "f1": 1.0,
@@ -181,7 +181,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 38
+          "tp": 40
         }
       },
       "us_ssn_last4": {
@@ -191,7 +191,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 21
+          "tp": 19
         },
         "low": {
           "f1": 1.0,
@@ -199,7 +199,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 21
+          "tp": 19
         },
         "medium": {
           "f1": 1.0,
@@ -207,7 +207,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 21
+          "tp": 19
         }
       }
     },
@@ -219,7 +219,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 35
+          "tp": 33
         },
         "low": {
           "f1": 1.0,
@@ -227,7 +227,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 35
+          "tp": 33
         },
         "medium": {
           "f1": 1.0,
@@ -235,33 +235,33 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 35
+          "tp": 33
         }
       },
       "card": {
         "high": {
-          "f1": 0.8892,
-          "fn": 180,
-          "fp": 7,
-          "precision": 0.9908,
-          "recall": 0.8065,
-          "tp": 750
+          "f1": 0.8856,
+          "fn": 187,
+          "fp": 6,
+          "precision": 0.992,
+          "recall": 0.7998,
+          "tp": 747
         },
         "low": {
-          "f1": 0.9221,
-          "fn": 1,
-          "fp": 156,
-          "precision": 0.8562,
-          "recall": 0.9989,
-          "tp": 929
+          "f1": 0.9132,
+          "fn": 14,
+          "fp": 161,
+          "precision": 0.8511,
+          "recall": 0.985,
+          "tp": 920
         },
         "medium": {
-          "f1": 0.9285,
-          "fn": 1,
-          "fp": 142,
-          "precision": 0.8674,
-          "recall": 0.9989,
-          "tp": 929
+          "f1": 0.9223,
+          "fn": 14,
+          "fp": 141,
+          "precision": 0.8671,
+          "recall": 0.985,
+          "tp": 920
         }
       },
       "cvv": {
@@ -271,7 +271,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 51
+          "tp": 50
         },
         "low": {
           "f1": 1.0,
@@ -279,7 +279,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 51
+          "tp": 50
         },
         "medium": {
           "f1": 1.0,
@@ -287,33 +287,33 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 51
+          "tp": 50
         }
       },
       "dob": {
         "high": {
-          "f1": 0.7564,
+          "f1": 0.7602,
           "fn": 0,
-          "fp": 469,
-          "precision": 0.6082,
+          "fp": 451,
+          "precision": 0.6132,
           "recall": 1.0,
-          "tp": 728
+          "tp": 715
         },
         "low": {
-          "f1": 0.7497,
+          "f1": 0.7538,
           "fn": 0,
-          "fp": 486,
-          "precision": 0.5997,
+          "fp": 467,
+          "precision": 0.6049,
           "recall": 1.0,
-          "tp": 728
+          "tp": 715
         },
         "medium": {
-          "f1": 0.7564,
+          "f1": 0.7602,
           "fn": 0,
-          "fp": 469,
-          "precision": 0.6082,
+          "fp": 451,
+          "precision": 0.6132,
           "recall": 1.0,
-          "tp": 728
+          "tp": 715
         }
       },
       "pin": {
@@ -323,7 +323,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 20
+          "tp": 23
         },
         "low": {
           "f1": 1.0,
@@ -331,7 +331,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 20
+          "tp": 23
         },
         "medium": {
           "f1": 1.0,
@@ -339,59 +339,59 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 20
+          "tp": 23
         }
       },
       "us_itin": {
         "high": {
-          "f1": 0.9281,
+          "f1": 0.9379,
           "fn": 0,
-          "fp": 11,
-          "precision": 0.8659,
+          "fp": 9,
+          "precision": 0.8831,
           "recall": 1.0,
-          "tp": 71
+          "tp": 68
         },
         "low": {
-          "f1": 0.9281,
+          "f1": 0.9379,
           "fn": 0,
-          "fp": 11,
-          "precision": 0.8659,
+          "fp": 9,
+          "precision": 0.8831,
           "recall": 1.0,
-          "tp": 71
+          "tp": 68
         },
         "medium": {
-          "f1": 0.9281,
+          "f1": 0.9379,
           "fn": 0,
-          "fp": 11,
-          "precision": 0.8659,
+          "fp": 9,
+          "precision": 0.8831,
           "recall": 1.0,
-          "tp": 71
+          "tp": 68
         }
       },
       "us_ssn": {
         "high": {
-          "f1": 0.6388,
-          "fn": 98,
-          "fp": 447,
-          "precision": 0.5188,
-          "recall": 0.831,
-          "tp": 482
+          "f1": 0.6435,
+          "fn": 96,
+          "fp": 448,
+          "precision": 0.5229,
+          "recall": 0.8365,
+          "tp": 491
         },
         "low": {
-          "f1": 0.7218,
+          "f1": 0.7238,
           "fn": 0,
-          "fp": 447,
-          "precision": 0.5648,
+          "fp": 448,
+          "precision": 0.5671,
           "recall": 1.0,
-          "tp": 580
+          "tp": 587
         },
         "medium": {
-          "f1": 0.7218,
+          "f1": 0.7238,
           "fn": 0,
-          "fp": 447,
-          "precision": 0.5648,
+          "fp": 448,
+          "precision": 0.5671,
           "recall": 1.0,
-          "tp": 580
+          "tp": 587
         }
       },
       "us_ssn_last4": {
@@ -401,7 +401,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 21
+          "tp": 19
         },
         "low": {
           "f1": 1.0,
@@ -409,7 +409,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 21
+          "tp": 19
         },
         "medium": {
           "f1": 1.0,
@@ -417,7 +417,7 @@
           "fp": 0,
           "precision": 1.0,
           "recall": 1.0,
-          "tp": 21
+          "tp": 19
         }
       }
     }

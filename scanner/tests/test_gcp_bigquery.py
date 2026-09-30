@@ -25,7 +25,8 @@ from gcp_fakes import (
 from sensitive_data_core.findings import key_hash
 from sensitive_data_gcp.resources import resource_name_hash
 from sensitive_data_gcp.runner import run_scan
-from sensitive_data_gcp.sources.bigquery import cell, full_name
+from sensitive_data_gcp.sources.bigquery import full_name
+from sensitive_data_gcp.sources.bigquery_read import cell
 from synthetic import CARDS, SSN_A, dashed
 from test_gcp_gcs import valid
 
