@@ -717,6 +717,14 @@
               "description": "(1.10, #67) DynamoDB read by export: 'incremental' when this run's export holds only the items written since the last one (a full export is the default and is not named).",
               "const": "incremental"
             },
+            "listedBy": {
+              "description": "(1.10, #67) An S3 bucket whose objects were found from its own S3 Inventory report instead of a listing.",
+              "const": "inventory"
+            },
+            "recommendation": {
+              "description": "(1.10, #67) A bucket large enough that an S3 Inventory configuration would spare it a listing each pass. The scanner never creates one (a write).",
+              "const": "s3_inventory"
+            },
               "pitr": { "const": false },
               "deployment": {
                 "description": "Redshift: a provisioned cluster or a Serverless workgroup; OpenSearch: a managed domain or a Serverless collection (1.3).",

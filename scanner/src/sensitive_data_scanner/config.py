@@ -517,6 +517,10 @@ class Config:
     rescan_percent: int = 25
     # #67 part 3: after a table's full export, incremental exports of what changed.
     dynamodb_incremental: bool = True
+    # #67 part 4: a bucket of at least this many objects is read from its S3 Inventory
+    # report when it has one (and named as a recommendation when it has none).
+    s3_inventory: bool = True
+    s3_inventory_min_objects: int = 1_000_000
 
     @property
     def exports_prefix(self) -> str:
@@ -629,6 +633,10 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         index_max_objects=_int(e.get("INDEX_MAX_OBJECTS"), 10_000_000, 1000, 1_000_000_000),
         rescan_percent=_int(e.get("RESCAN_PERCENT"), 25, 0, 100),
         dynamodb_incremental=_bool(e.get("DYNAMODB_INCREMENTAL", "true")),
+        s3_inventory=_bool(e.get("S3_INVENTORY", "true")),
+        s3_inventory_min_objects=_int(
+            e.get("S3_INVENTORY_MIN_OBJECTS"), 1_000_000, 0, 10_000_000_000
+        ),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn

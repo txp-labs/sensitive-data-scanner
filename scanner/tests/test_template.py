@@ -306,6 +306,8 @@ S3_ACTIONS = {
     "ListDirectoryBuckets": "s3express:ListAllMyDirectoryBuckets",
     "CreateSession": "s3express:CreateSession",
     "GetBucketEncryption": "s3:GetEncryptionConfiguration",
+    "ListBucketInventoryConfigurations": "s3:GetInventoryConfiguration",
+    "GetBucketInventoryConfiguration": "s3:GetInventoryConfiguration",
 }
 SERVICES = {
     "s3": "s3",

@@ -571,6 +571,23 @@ bumps the minor version. Spec changes are listed under **Spec**.
     drop the findings of deleted items. A full export comes again only as a
     rescan, or after the point-in-time recovery window. The run summary
     names an incremental export (`exportType`).
+- **S3 Inventory for large buckets** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 4):
+  - A bucket whose last complete pass saw at least `S3_INVENTORY_MIN_OBJECTS`
+    (1,000,000) objects is read from its own S3 Inventory report instead of
+    a `ListObjectsV2` of every key (`S3_INVENTORY`, on). The scanner looks
+    for an enabled configuration of current versions covering the prefix,
+    with `Size` and `LastModifiedDate`.
+  - It reads the latest report no more than eight days old: CSV streamed,
+    Parquet and ORC with pyarrow. Each row is decided like a listed object
+    (watermark, index, sampling, rescans).
+  - A pass resumes at a file and row, and its watermark is the report's time.
+    Until the next report arrives, nothing is listed.
+  - A large bucket with no configuration is named `recommendation:
+    s3_inventory` in the run summary and listed as before. The scanner never
+    creates one.
+  - The role gains `s3:GetInventoryConfiguration`, a read.
+  - Azure Blob Inventory and Cloud Storage inventory reports are designed in
+    `docs/ARCHITECTURE.md` and not built.
 
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
@@ -698,7 +715,7 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
   a finding; `indexed`, `rescanned` and `rescanBacklog` in coverage; the
-  store field `exportType`.
+  store fields `exportType`, `listedBy` and `recommendation`.
 - Version **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
   `declaredType` and `detectedType` on a finding; `archivePath`,
   `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,
@@ -757,6 +774,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/ARCHITECTURE.md` (Large buckets: S3 Inventory, with the Azure and
+  Cloud Storage designs), `docs/FINDINGS.md`, `docs/AZURE.md` and `docs/GCP.md`
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 4).
 - `docs/DATABASES.md` (Tables unchanged since the last read), `docs/ARCHITECTURE.md`
   (DynamoDB incremental exports, tables in How rescans are chosen), `docs/AZURE.md`
   and `docs/GCP.md` ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 3).
