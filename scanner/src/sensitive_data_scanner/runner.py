@@ -208,6 +208,8 @@ def _s3_source(
         delimiter=t.delimiter if t else ",",
         skip_header=t.skip_header if t else 0,
         keys=classifier(clients),
+        # A bucket's key filter; a catalog table reads its own location's files.
+        key_filter=None if t else store.key_filter,
     )
     source.use_inventory = config.s3_inventory
     source.inventory_min_objects = config.s3_inventory_min_objects
@@ -276,6 +278,8 @@ def plan(
             pct, per = config.sampling_for(kind, name, None)
             store.sample_percent = pct
             store.max_per_prefix = per
+            if kind == "s3":
+                store.key_filter = config.key_filter_for(kind, name, None)
             by_key[(kind, name)] = store
             stores.append(store)
         return store

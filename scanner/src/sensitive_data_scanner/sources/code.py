@@ -363,4 +363,5 @@ class DirectoryBucketAdapter:
             max_rows=c.columnar_max_rows,
             keys=classifier(ctx.clients),
             express=True,
+            key_filter=store.key_filter,
         )
