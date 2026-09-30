@@ -22,6 +22,7 @@ NOW = dt.datetime(2026, 9, 29, 12, 0, 0, tzinfo=dt.UTC)
 SUB_A = "11111111-2222-3333-4444-555555555555"
 SUB_B = "66666666-7777-8888-9999-aaaaaaaaaaaa"
 STATE_URL = "https://sdsstate.blob.core.windows.net/scanner"
+TOKEN = "made-up-token"  # noqa: S105 - a made-up Entra token
 
 
 class AzureError(Exception):
@@ -93,10 +94,16 @@ class Graph:
 
 
 class Arm:
-    """Resource Manager: lists by path; a path mapped to an exception raises it."""
+    """Resource Manager: lists (`paths`) and objects (`objects`) by path; a path mapped to an
+    exception raises it."""
 
-    def __init__(self, paths: dict[str, list[dict[str, Any]] | Exception] | None = None) -> None:
+    def __init__(
+        self,
+        paths: dict[str, list[dict[str, Any]] | Exception] | None = None,
+        objects: dict[str, dict[str, Any] | Exception] | None = None,
+    ) -> None:
         self.paths = paths or {}
+        self.objects = objects or {}
         self.calls: list[str] = []
 
     def list(self, path: str, api_version: str) -> Iterator[dict[str, Any]]:
@@ -108,10 +115,10 @@ class Arm:
 
     def get(self, path: str, api_version: str) -> dict[str, Any]:
         self.calls.append(path)
-        got = self.paths.get(path, [])
+        got = self.objects.get(path, {})
         if isinstance(got, Exception):
             raise got
-        return {"value": got}
+        return got
 
 
 @dataclass
@@ -245,6 +252,17 @@ class Service:
         return self.containers.setdefault(name, Container())
 
 
+class Credential:
+    """A managed identity's credential: made-up tokens, and the audiences asked for."""
+
+    def __init__(self) -> None:
+        self.scopes: list[str] = []
+
+    def get_token(self, *scopes: str, **kwargs: Any) -> Any:
+        self.scopes.extend(scopes)
+        return SimpleNamespace(token=TOKEN, expires_on=0)
+
+
 @dataclass
 class Tenant:
     """The fakes behind one test's `Clients`."""
@@ -252,6 +270,8 @@ class Tenant:
     graph: Graph
     arm: Arm = field(default_factory=Arm)
     services: dict[str, Service] = field(default_factory=dict)
+    drivers: dict[str, Any] = field(default_factory=dict)
+    credential: Credential = field(default_factory=Credential)
 
     def clients(self) -> Clients:
         _ = self.state  # the job's own container always exists
@@ -261,7 +281,9 @@ class Tenant:
         }
         for account, svc in self.services.items():
             made[("blob", f"https://{account}.blob.core.windows.net/")] = svc
-        return Clients(credential=object(), made=made)
+        for module, driver in self.drivers.items():
+            made[("driver", module)] = driver
+        return Clients(credential=self.credential, made=made)
 
     def container(self, account: str, name: str) -> Container:
         return self.services.setdefault(account, Service({})).get_container_client(name)

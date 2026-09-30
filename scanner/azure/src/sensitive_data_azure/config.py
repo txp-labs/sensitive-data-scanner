@@ -10,8 +10,15 @@ reported by a fixed code, never by its value.
   management group, say).
 - `AZURE_MANAGEMENT_GROUP`: discover every subscription under this management
   group; or `AZURE_SUBSCRIPTIONS`: these subscriptions (comma-separated ids).
-- `DISCOVER`: the kinds to discover (`azure_blob`, ...; `all`); by default,
-  every kind that is read by default.
+- `DISCOVER`: the kinds to discover (`azure_blob`, `azure_sql`, ...; `all`);
+  by default, every kind.
+- `AZURE_DB_READ`: the database kinds that are read (`azure_sql`,
+  `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`, or `all`);
+  off by default, since each database needs a contained user for the identity.
+- `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
+- `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
+  `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
+  runner's.
 - `DISCOVER_ALLOW`, `DISCOVER_DENY`, `DISCOVER_SAMPLING`: the core's rules, by
   kind and name (`azure_blob:prodlake/*`, `tag:scan=false`).
 - `SAMPLE_PERCENT`, `BLOB_MAX_OBJECTS_PER_PREFIX`: blob sampling, a stable share
@@ -47,14 +54,28 @@ from sensitive_data_core.rules import (
 )
 from sensitive_data_core.safety import Secret
 
-# Every kind this package reads, and the ones read by default (the rest are opt-in).
-KINDS: tuple[str, ...] = ("azure_blob",)
-DEFAULT_KINDS: tuple[str, ...] = ("azure_blob",)
+# Azure's databases: discovered by default, read only when named in AZURE_DB_READ.
+DATABASE_KINDS: tuple[str, ...] = (
+    "azure_sql",
+    "azure_sql_mi",
+    "azure_postgresql",
+    "azure_mysql",
+    "synapse_sql",
+)
+# Every kind this package discovers, and the ones discovered by default.
+KINDS: tuple[str, ...] = ("azure_blob", *DATABASE_KINDS)
+DEFAULT_KINDS: tuple[str, ...] = KINDS
 # Rule and DISCOVER prefixes: each kind, and shorter names for it.
 KIND_ALIASES = {
     **{k: k for k in KINDS},
     "blob": "azure_blob",
     "adls": "azure_blob",
+    "sql": "azure_sql",
+    "sqlmi": "azure_sql_mi",
+    "postgresql": "azure_postgresql",
+    "postgres": "azure_postgresql",
+    "mysql": "azure_mysql",
+    "synapse": "synapse_sql",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -62,6 +83,8 @@ _GUID = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 _MANAGEMENT_GROUP = re.compile(r"^[A-Za-z0-9._()-]{1,90}$")
 _STORAGE_HOST = re.compile(r"^[a-z0-9]{3,24}\.blob\.[a-z0-9.-]+$")
 _CONTAINER = re.compile(r"^(?:\$root|[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){2,62})$")
+# The managed identity's name as a database user (PostgreSQL and MySQL name it).
+_PRINCIPAL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$")
 MAX_SECRET_BYTES = 64 * 1024
 
 
@@ -109,6 +132,14 @@ class Settings:
     hmac_key: Secret | None = field(default=None, repr=False)
     event_grid_endpoint: str | None = None
     findings_file: str | None = None
+    # Azure's databases (opt-in): which kinds are read, as whom, and how much.
+    db_read: tuple[str, ...] = ()
+    db_principal: str | None = None
+    db_schemas: tuple[str, ...] = ()
+    db_max_rows: int = 1000
+    db_max_tables: int = 500
+    db_statement_seconds: int = 60
+    db_connect_seconds: int = 15
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -164,16 +195,20 @@ def _state(raw: str | None) -> StateContainer | None:
     return StateContainer(f"https://{host}/", host.split(".", 1)[0], container)
 
 
-def _kinds(raw: str | None) -> tuple[str, ...]:
+def _kinds(
+    raw: str | None, default: tuple[str, ...] = DEFAULT_KINDS, every: tuple[str, ...] = KINDS
+) -> tuple[str, ...]:
     names = _list(raw)
     if not names:
-        return DEFAULT_KINDS
+        return default
     if names == ("all",):
-        return KINDS
+        return every
+    if names == ("off",):
+        return ()
     out: list[str] = []
     for n in names:
         kind = KIND_ALIASES.get(n.lower())
-        if kind is None:
+        if kind is None or kind not in every:
             raise ConfigError("discover_kind")
         if kind not in out:
             out.append(kind)
@@ -215,6 +250,15 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     if state is None and https_url is None and grid is None and findings_file is None:
         raise ConfigError("no_findings_destination")
     try:
+        db_read = _kinds(e.get("AZURE_DB_READ"), (), DATABASE_KINDS)
+    except ConfigError:
+        raise ConfigError("azure_db_read") from None
+    principal = (e.get("AZURE_DB_PRINCIPAL") or "").strip() or None
+    if principal is not None and not _PRINCIPAL.match(principal):
+        raise ConfigError("azure_db_principal")
+    if principal is None and {"azure_postgresql", "azure_mysql"} & set(db_read):
+        raise ConfigError("azure_db_principal")
+    try:
         allow = store_rules(e.get("DISCOVER_ALLOW"), KIND_ALIASES)
         deny = store_rules(e.get("DISCOVER_DENY"), KIND_ALIASES)
         sampling = sampling_rules(e.get("DISCOVER_SAMPLING"), KIND_ALIASES)
@@ -242,4 +286,11 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         hmac_key=key,
         event_grid_endpoint=grid,
         findings_file=findings_file,
+        db_read=db_read,
+        db_principal=principal,
+        db_schemas=_list(e.get("DB_SCHEMAS")),
+        db_max_rows=_int(e.get("DB_MAX_ROWS_PER_TABLE"), 1000, 1, 100_000),
+        db_max_tables=_int(e.get("DB_MAX_TABLES"), 500, 1, 10_000),
+        db_statement_seconds=_int(e.get("DB_STATEMENT_TIMEOUT_SECONDS"), 60, 5, 3600),
+        db_connect_seconds=_int(e.get("DB_CONNECT_TIMEOUT_SECONDS"), 15, 1, 300),
     )

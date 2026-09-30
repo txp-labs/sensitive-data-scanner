@@ -213,7 +213,8 @@ def test_discovery_lists_every_container_under_the_management_group() -> None:
     doc = run(t)
     request = t.graph.requests[0]
     assert request.management_groups == ["mg-contoso"] and request.subscriptions is None
-    assert len(t.graph.requests) == 3  # five accounts, two to a page
+    storage = [r for r in t.graph.requests if "storageaccounts" in r.query]
+    assert len(storage) == 3  # five accounts, two to a page
     s = stores(doc)
     assert "contosofiles/*" not in s and not any(n.startswith("contosofiles") for n in s)
     lake = s["contosolake/raw"]
@@ -249,7 +250,7 @@ def test_a_resource_graph_failure_is_a_listing_error() -> None:
     t = tenant()
     t.graph.fail = AzureError("AuthorizationFailed", "denied on mg-contoso")
     doc = run(t)
-    assert doc["discovery"]["listErrors"] == {"azure_blob": "AuthorizationFailed"}
+    assert doc["discovery"]["listErrors"]["azure_blob"] == "AuthorizationFailed"
 
 
 def test_allow_deny_and_sampling_rules_decide_containers() -> None:

@@ -261,6 +261,11 @@ jobs:
           echo "${out}" | grep -q '"event":"discovery.failed"'
           docker run --rm --network none --entrypoint python sensitive-data-scanner-azure:ci -c '
           import azure.identity, azure.storage.blob, azure.mgmt.resourcegraph, azure.eventgrid
+          # Every database driver loads, mssql-python with its bundled ODBC driver.
+          import mssql_python, psycopg, pymysql
+          from sensitive_data_azure.sources.databases import DRIVERS
+          from sensitive_data_azure.clients import Clients
+          assert all(Clients().client("driver", m) is not None for m in set(DRIVERS.values()))
           from sensitive_data_core.scan.columnar import pyarrow_available
           assert pyarrow_available()
           import sensitive_data_azure.runner

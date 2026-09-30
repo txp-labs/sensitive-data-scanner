@@ -9,7 +9,9 @@ connection string or SAS is configured or made. The clients are:
 - `arm`: a few GETs on Azure Resource Manager (a storage account's containers
   and encryption scopes), with the Reader role;
 - `blob`: a storage account's Blob service (Blob Storage and ADLS Gen2), with
-  Storage Blob Data Reader.
+  Storage Blob Data Reader;
+- `driver`: a database driver module, imported only when a database of its
+  kind is read.
 
 Tests put stubbed clients in `made` (or give a `factory`); nothing else here
 needs Azure.
@@ -17,6 +19,7 @@ needs Azure.
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -119,10 +122,9 @@ class Clients:
 
     def client(self, service: str, endpoint: str = "") -> Any:
         key = (service, endpoint)
-        got = self.made.get(key)
-        if got is None:
-            got = self.made[key] = (self._factory or self._make)(service, endpoint)
-        return got
+        if key not in self.made:
+            self.made[key] = (self._factory or self._make)(service, endpoint)
+        return self.made[key]
 
     def _make(self, service: str, endpoint: str) -> Any:
         if service == "resourcegraph":
@@ -135,6 +137,13 @@ class Clients:
             from azure.storage.blob import BlobServiceClient  # noqa: PLC0415
 
             return BlobServiceClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
+        if service == "driver":
+            # A database driver module (`mssql_python`, `psycopg`, `pymysql`), or None when
+            # the image does not carry it (the store's `driver_missing` gap).
+            try:
+                return importlib.import_module(endpoint)
+            except ImportError:
+                return None
         raise ValueError("no client for a service an adapter uses")
 
 

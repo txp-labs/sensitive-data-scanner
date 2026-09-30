@@ -10,6 +10,8 @@ authors = [{ name = "txp-labs, LLC" }]
 # identity through DefaultAzureCredential: no secret is configured.
 dependencies = [
     "sensitive-data-scanner-core",
+    # The databases runner's SQL sessions and user checks, for Azure's databases.
+    "sensitive-data-scanner-db",
     "azure-core>=1.35",
     "azure-identity>=1.25",
     "azure-mgmt-resourcegraph>=8.0",
@@ -21,13 +23,20 @@ dependencies = [
 columnar = ["pyarrow>=21"]
 # Findings to an Event Grid topic (FINDINGS_EVENT_GRID_ENDPOINT).
 eventgrid = ["azure-eventgrid>=4.20"]
-all = ["sensitive-data-scanner-azure[columnar,eventgrid]"]
+# Azure SQL, SQL Managed Instance and Synapse SQL pools, with an Entra token
+# (mssql-python brings its own ODBC driver; pymssql cannot take a token).
+sql = ["mssql-python>=1.15"]
+# Azure Database for PostgreSQL and MySQL flexible servers, with an Entra token.
+postgresql = ["psycopg[binary]>=3.2"]
+mysql = ["pymysql>=1.1"]
+all = ["sensitive-data-scanner-azure[columnar,eventgrid,sql,postgresql,mysql]"]
 
 [project.scripts]
 sensitive-data-scanner-azure = "sensitive_data_azure.__main__:main"
 
 [tool.uv.sources]
 sensitive-data-scanner-core = { workspace = true }
+sensitive-data-scanner-db = { workspace = true }
 
 [build-system]
 requires = ["hatchling>=1.32.4"]
