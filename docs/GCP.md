@@ -74,7 +74,14 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
   retrieval fee falls within the run's bytes budget).
 - **Incremental.** A pass reads only the objects updated since the previous
   complete pass started (less `skew`), and a pass cut short by the budget
-  resumes at the listing page it stopped in.
+  resumes at the listing page it stopped in. With the object index
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)), an
+  object whose generation is the one recorded is not read twice. An unchanged
+  object is read again only when a component that could change what it gives
+  changed ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)). Every
+  bucket is still listed each pass: reading a Storage Insights inventory
+  report in place of a listing is designed, not built
+  ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)).
 - **Never a write.** Nothing is rewritten, copied, composed or restored. An
   object under a **customer-supplied key** (CSEK) cannot be read without that
   key, which the scanner never has: it is counted in `kmsDenied`.

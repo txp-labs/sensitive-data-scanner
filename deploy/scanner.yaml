@@ -402,10 +402,15 @@ Resources:
                 Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub ${LogGroup.Arn}
-              # --- S3: discover the buckets (and their default encryption), read the objects
+              # --- S3: discover the buckets (and their default encryption), read the objects;
+              # a large bucket's own inventory configuration is read, never written (#67)
               - Sid: DiscoverS3
                 Effect: Allow
-                Action: [s3:ListAllMyBuckets, s3:GetBucketTagging, s3:GetEncryptionConfiguration]
+                Action:
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketTagging
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetInventoryConfiguration
                 Resource: "*"
               - Sid: ReadS3
                 Effect: Allow

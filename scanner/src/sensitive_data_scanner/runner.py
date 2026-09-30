@@ -186,7 +186,7 @@ def _s3_source(
     exclude: tuple[str, ...] = (),
 ) -> S3Source:
     t = store.table
-    return S3Source(
+    source = S3Source(
         clients.s3,
         bucket=t.bucket if t else store.name,
         prefix=t.prefix if t else prefix,
@@ -209,6 +209,9 @@ def _s3_source(
         skip_header=t.skip_header if t else 0,
         keys=classifier(clients),
     )
+    source.use_inventory = config.s3_inventory
+    source.inventory_min_objects = config.s3_inventory_min_objects
+    return source
 
 
 def _dynamodb_source(

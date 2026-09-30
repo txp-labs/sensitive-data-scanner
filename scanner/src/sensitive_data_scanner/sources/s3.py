@@ -60,6 +60,7 @@ import gzip
 import io
 import zlib
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
@@ -88,6 +89,7 @@ from sensitive_data_core.scan.objects import gunzip as _gunzip
 from sensitive_data_core.scan.objects import inner_name as _inner_name
 
 from ..resources import s3_link, s3_resource
+from . import inventory
 from .encryption import KeyClassifier, s3_object_facts
 
 if TYPE_CHECKING:
@@ -191,8 +193,31 @@ def object_fingerprint(obj: Mapping[str, Any]) -> str | None:
     return None
 
 
+@dataclass
+class _Walk:
+    """One run's pass state, shared by a listing and an inventory report's rows."""
+
+    cov: Coverage
+    op: ObjectPass
+    budget: Budget
+    detector: Detector
+    store: FindingStore
+    seen_at: str
+    since: _dt.datetime | None
+    cur_dir: str | None
+    cur_n: int
+    first_error: str | None = None
+    file: int = 0
+    row: int = 0
+
+
 class S3Source:
     kind = "s3"
+    # #67: read a large bucket's objects from its S3 Inventory report (the runner sets these).
+    use_inventory: bool = True
+    inventory_min_objects: int = 1_000_000
+    _recommend: bool = False
+    _idle: bool = False
     # The run's object indexes (#67), set by the runner; None records nothing.
     indexes: Indexes | None = None
 
@@ -329,8 +354,18 @@ class S3Source:
             columnar=self.columnar,
             budget=budget,
         )
+        w = _Walk(cov, op, budget, detector, store, seen_at, since, cur_dir, cur_n)
+        report = self._report(cursor, now)
+        if self._idle:
+            # The latest report was read in full: nothing is listed until the next one.
+            cov.pass_complete = True
+            op.settle(cov)
+            return SourceRun(cov, dict(cursor), extra={"listedBy": "inventory"})
         try:
-            while not done and budget.time_left():
+            if report is not None:
+                # A large bucket's objects from its inventory report (#67), not a listing.
+                done = self._walk_report(report, cursor, w)
+            while report is None and not done and budget.time_left():
                 args: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
                 if self.prefix:
                     args["Prefix"] = self.prefix
@@ -345,54 +380,11 @@ class S3Source:
                 done_before, skip = (skip, 0) if self.express else (0, 0)
                 start_after = None if self.express else start_after
                 for obj in contents[done_before:]:
-                    key = obj["Key"]
-                    cov.listed += 1
-                    op.seen(key)
-                    if key.endswith("/") or obj.get("Size", 0) == 0:
-                        start_after = key
-                        continue
-                    if self.exclude_prefixes and key.startswith(self.exclude_prefixes):
-                        start_after = key  # a catalog table's own source reads it
-                        continue
-                    modified = obj.get("LastModified")
-                    changed = since is None or modified is None or modified > since
-                    decision = op.decide(key, changed=changed, marker=object_marker(obj))
-                    if not (decision.read or decision.rescan):
-                        start_after = key  # unchanged, and read with what it would be now
-                        continue
-                    cov.eligible += int(decision.read)
-                    if sample_point(key) >= self.sample_percent:
-                        cov.sampled_out += int(decision.read)
-                        start_after = key
-                        continue
-                    directory = key.rsplit("/", 1)[0] if "/" in key else ""
-                    # A rescan of an object read before was in its directory's sample; one
-                    # the index never saw takes its place in the sample like a new object.
-                    counted = decision.read or (
-                        decision.why is not None and decision.why.reason == UNINDEXED
-                    )
-                    if self.max_per_prefix and counted:
-                        if directory != cur_dir:
-                            cur_dir, cur_n = directory, 0
-                        if cur_n >= self.max_per_prefix:
-                            cov.sampled_out += int(decision.read)
-                            start_after = key
-                            continue
-                    if decision.rescan:
-                        op.offer(obj, decision)  # read after this run's changes, if it fits
-                        cur_n += int(counted)
-                        start_after = key
-                        continue
-                    size = planned_bytes(key, obj.get("Size", 0), self.max_object_bytes)
-                    if not budget.has(size):
+                    if not self._consider(obj, w):
                         cov.backlog = True
                         stop = True
                         break
-                    budget.take(size)
-                    cur_n += 1
-                    error = self._read_one(obj, cov, detector, store, seen_at, op)
-                    first_read_error = first_read_error or error
-                    start_after = key
+                    start_after = obj["Key"]
                 if stop:
                     if self.express:
                         keys = [o["Key"] for o in contents]
@@ -405,6 +397,8 @@ class S3Source:
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
             log_event("source.failed", source=self.target, error=cov.error)
+        cur_dir, cur_n = w.cur_dir, w.cur_n
+        first_read_error = w.first_error
         if cov.error is None:
             # Then the rescans this run met, within their capped share (#67).
             for obj, why in op.rescans.drain(
@@ -412,13 +406,18 @@ class S3Source:
             ):
                 error = self._read_one(obj, cov, detector, store, seen_at, op, why)
                 first_read_error = first_read_error or error
+        listed = int(cursor.get("passListed") or 0) + cov.listed
+        extra: dict[str, Any] = {}
         if done and cov.error is None:
             cov.pass_complete = True
             op.complete()
             new_cursor: dict[str, Any] = {
-                "watermark": pass_started,
+                # A report's pass starts at the report's own time: later objects are in the
+                # next report.
+                "watermark": report.created.isoformat() if report is not None else pass_started,
                 "passStartedAt": None,
                 "startAfter": None,
+                "objects": listed,
             }
             cur_dir, cur_n = None, 0
         else:
@@ -428,9 +427,19 @@ class S3Source:
                 "watermark": watermark,
                 "passStartedAt": pass_started,
                 "startAfter": None if self.express else start_after,
+                "passListed": listed,
             }
+            if cursor.get("objects"):
+                new_cursor["objects"] = cursor["objects"]
             if self.express:
                 new_cursor.update(token=token, skip=skip)
+            if report is not None:
+                new_cursor["report"] = {**report.cursor(), "file": w.file, "row": w.row}
+        if report is not None:
+            extra["listedBy"] = "inventory"
+        if self._recommend or cursor.get("recommend"):
+            extra["recommendation"] = "s3_inventory"
+            new_cursor["recommend"] = True
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
@@ -438,7 +447,91 @@ class S3Source:
         op.settle(cov)
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_read_error
-        return SourceRun(cov, new_cursor)
+        return SourceRun(cov, new_cursor, extra=extra)
+
+    def _report(self, cursor: dict[str, Any], now: _dt.datetime) -> inventory.Report | None:
+        """The inventory report this pass reads, when the bucket is large enough and has one
+        (#67): the one a pass in progress started with, or the latest for a new pass. When
+        the latest was already read, the run is idle (`_idle`): no listing, no report."""
+        self._recommend = False
+        self._idle = False
+        if isinstance(cursor.get("report"), dict):
+            try:
+                return inventory.Report.of(cursor["report"])
+            except (KeyError, ValueError):
+                return None
+        big = int(cursor.get("objects") or 0) >= self.inventory_min_objects > 0
+        plain = not (self.express or self.catalog or self.max_per_prefix)
+        if cursor.get("passStartedAt") or not (big and plain and self.use_inventory):
+            return None
+        found = inventory.find(self.client, self.bucket, self.prefix, now, columnar=self.columnar)
+        if found.report is None:
+            # A bucket this large with no inventory to read: named, never configured here.
+            self._recommend = found.reason == "none"
+            return None
+        watermark = cursor.get("watermark")
+        if watermark and found.report.created <= _dt.datetime.fromisoformat(watermark):
+            self._idle = True  # already read in full: the next report brings what changed
+            return None
+        return found.report
+
+    def _walk_report(self, report: inventory.Report, cursor: dict[str, Any], w: _Walk) -> bool:
+        """One pass over a report's rows from where the last run stopped; True when done."""
+        at: dict[str, Any] = cursor["report"] if isinstance(cursor.get("report"), dict) else {}
+        w.file, w.row = int(at.get("file") or 0), int(at.get("row") or 0)
+        for i, n, obj in inventory.rows(self.client, report, start_file=w.file, start_row=w.row):
+            w.file, w.row = i, n
+            if not w.budget.time_left():
+                return False
+            if self.prefix and not obj["Key"].startswith(self.prefix):
+                continue
+            if not self._consider(obj, w):
+                return False
+            w.row = n + 1
+        return True
+
+    def _consider(self, obj: Mapping[str, Any], w: _Walk) -> bool:
+        """One listed object: read now (a change), queued (a rescan), or passed over. False
+        when the budget has no room for it (the pass stops before it)."""
+        cov, op = w.cov, w.op
+        key = obj["Key"]
+        cov.listed += 1
+        op.seen(key)
+        if key.endswith("/") or obj.get("Size", 0) == 0:
+            return True
+        if self.exclude_prefixes and key.startswith(self.exclude_prefixes):
+            return True  # a catalog table's own source reads it
+        modified = obj.get("LastModified")
+        changed = w.since is None or modified is None or modified > w.since
+        decision = op.decide(key, changed=changed, marker=object_marker(obj))
+        if not (decision.read or decision.rescan):
+            return True  # unchanged, and read with what it would be now
+        cov.eligible += int(decision.read)
+        if sample_point(key) >= self.sample_percent:
+            cov.sampled_out += int(decision.read)
+            return True
+        directory = key.rsplit("/", 1)[0] if "/" in key else ""
+        # A rescan of an object read before was in its directory's sample; one the index
+        # never saw takes its place in the sample like a new object.
+        counted = decision.read or (decision.why is not None and decision.why.reason == UNINDEXED)
+        if self.max_per_prefix and counted:
+            if directory != w.cur_dir:
+                w.cur_dir, w.cur_n = directory, 0
+            if w.cur_n >= self.max_per_prefix:
+                cov.sampled_out += int(decision.read)
+                return True
+        if decision.rescan:
+            op.offer(obj, decision)  # read after this run's changes, if it fits
+            w.cur_n += int(counted)
+            return True
+        size = planned_bytes(key, obj.get("Size", 0), self.max_object_bytes)
+        if not w.budget.has(size):
+            return False
+        w.budget.take(size)
+        w.cur_n += 1
+        error = self._read_one(obj, cov, w.detector, w.store, w.seen_at, op)
+        w.first_error = w.first_error or error
+        return True
 
     def _read_one(  # noqa: PLR0917 - one object of the pass
         self,

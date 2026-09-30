@@ -70,7 +70,14 @@ and its own image (`docker build --target azure`).
   same Blob endpoint; its directories are zero-length blobs and are skipped.
 - **Incremental.** A pass reads only the blobs modified since the previous
   complete pass started (less `skew`), and a pass cut short by the budget
-  resumes at the listing page it stopped in.
+  resumes at the listing page it stopped in. With the object index
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)), a blob
+  whose ETag is the one recorded is not read twice. An unchanged blob is read
+  again only when a component that could change what it gives changed
+  ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)). Every container
+  is still listed each pass: reading an account's blob inventory report in
+  place of a listing is designed, not built
+  ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)).
 - **Never a write.** Nothing is leased, copied, rehydrated or tiered: an
   Archive-tier blob would need a rehydration, so it is counted as skipped
   `archive_tier`. A blob under a customer-provided key (CPK) cannot be read

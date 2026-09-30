@@ -180,6 +180,8 @@ HELPERS = frozenset(
         "exports.py",
         "m365.py",
         "gws.py",
+        # How a large bucket's objects are found (S3 Inventory reports), not how they are read.
+        "inventory.py",
     }
 )
 _KIND = re.compile(r'^\s*(?:self\.)?(?:kind|KIND)\s*(?::\s*str\s*)?=\s*"([a-z0-9_]+)"', re.M)

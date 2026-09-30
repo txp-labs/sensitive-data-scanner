@@ -124,6 +124,8 @@ One run:
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN` | The run budget | 20,000 items, 2 GiB |
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES` | Per-object read and gunzip limits | 20 MiB, 100 MiB |
 | `S3_CLOCK_SKEW_SECONDS` | How far before the last pass an object is still re-read | 300 |
+| `S3_INVENTORY` | Read a large bucket's objects from its own S3 Inventory report instead of listing it ([below](#large-buckets-s3-inventory)) | on |
+| `S3_INVENTORY_MIN_OBJECTS` | What makes a bucket large: the objects its last complete pass saw (0: never) | 1,000,000 |
 | `FINDINGS_EVENT_BUS_ARN` | Also push findings to this EventBridge bus | off |
 | `SCAN_DYNAMODB` | DynamoDB tables to read, as a JSON list (below) | none |
 | `DYNAMODB_PAGE_SIZE` | Items per Query or Scan page (`Limit`) | 100 |
@@ -651,6 +653,57 @@ every pass.
 
 Logs, X-Ray traces and streams are read forward from their position, so their
 history is not re-read.
+
+### Large buckets: S3 Inventory
+
+A bucket of millions of objects costs a `ListObjectsV2` call per thousand keys
+on every pass, whether or not anything changed
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)). When the
+last complete pass saw at least `S3_INVENTORY_MIN_OBJECTS` (1,000,000), the next
+pass looks for the bucket's own **S3 Inventory**:
+
+1. `ListBucketInventoryConfigurations` (`s3:GetInventoryConfiguration`, a
+   read). A configuration is usable when it is enabled, is of current
+   versions, has a filter that covers the source's prefix, and has `Size` and
+   `LastModifiedDate` among its fields (`ETag` too, for the index's marker and
+   fingerprint).
+2. The latest report under its destination
+   (`<prefix>/<bucket>/<configuration id>/<YYYY-MM-DDTHH-MMZ>/manifest.json`),
+   no more than eight days old.
+3. Its files, row by row, each row read as a listed object:
+   - CSV (gzip) is streamed, and its URL-encoded keys are decoded;
+   - Parquet and ORC need pyarrow, so only the container image reads them.
+
+The pass then decides exactly as a listing pass does: the watermark, the object
+index, sampling and rescans. It resumes at a file and row. Its watermark is the
+report's own time, because a report says nothing of objects written after it:
+they are in the next one. Until the next report arrives, a run lists nothing
+for that bucket. So on an inventory the change latency is the inventory's
+schedule, which should be daily. The run summary says `listedBy: inventory`.
+
+The scanner **never creates or changes an inventory configuration**, because
+that is a write. A large bucket with no configuration is named in the run
+summary as `recommendation: s3_inventory` and listed as before. A
+configuration without the needed fields, a destination the scanner may not
+read, a Parquet or ORC report in the Lambda zip, or a report older than eight
+days also means a listing. A bucket read with `S3_MAX_OBJECTS_PER_PREFIX`
+(which needs key order), a directory bucket and a Glue table's location are
+always listed.
+
+**Azure Blob Inventory and Cloud Storage inventory reports (not built).** Both
+work the same way, and the design is the same:
+
+- **Azure:** a storage account's blob inventory policy
+  (`blobServices/default/inventoryPolicies`, readable with Reader) writes CSV
+  or Parquet, with a `*-manifest.json`, to a container. The job would read the
+  latest one with Storage Blob Data Reader where it may, in place of
+  `List Blobs`.
+- **Cloud Storage:** Storage Insights inventory report configurations
+  (`storageinsights.reportConfigs.list`) write CSV or Parquet reports to a
+  bucket.
+
+Neither is built yet. Their large containers and buckets are listed, as S3's
+were before.
 
 ### Glue Data Catalog and Lake Formation
 
@@ -1544,7 +1597,7 @@ named resources because the stores are not known in advance. They are read-only:
 
 | Kind | Actions | Resource |
 |---|---|---|
-| `s3` | `s3:ListAllMyBuckets`; `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`; `s3:GetEncryptionConfiguration` (the bucket's default encryption, for the run summary); `s3:GetBucketTagging` only with tag rules | `*` (buckets `arn:aws:s3:::*`, objects `arn:aws:s3:::*/*`) |
+| `s3` | `s3:ListAllMyBuckets`; `s3:ListBucket`, `s3:GetObject`, `s3:GetObjectVersion`; `s3:GetEncryptionConfiguration` (the bucket's default encryption, for the run summary); `s3:GetInventoryConfiguration` (a large bucket's inventory, read to find its report, never written); `s3:GetBucketTagging` only with tag rules | `*` (buckets `arn:aws:s3:::*`, objects `arn:aws:s3:::*/*`) |
 | `logs` | `logs:DescribeLogGroups`, `logs:FilterLogEvents`; `logs:ListTagsForResource` only with tag rules | `*` |
 | `dynamodb` | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`; `dynamodb:ListTagsOfResource` only with tag rules | `*` |
 | `glue` | `glue:GetDatabases`, `glue:GetTables`; `glue:GetTags` only with tag rules; plus the S3 read actions on each table's location | `*` (catalog, databases and tables) |
@@ -1685,7 +1738,7 @@ several things:
 | Its own results bucket | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`; `s3:ListBucket` (it lists `exports/`, and it makes a missing state file a 404, not a 403) | the results bucket and its objects | |
 | Its configuration document, with `ConfigLocation` in SSM | `ssm:GetParameter` | parameters under `/sensitive-data-scanner/` in this account and region | |
 | Its own logs | `logs:CreateLogStream`, `logs:PutLogEvents` | its log group | |
-| S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`, `s3:GetEncryptionConfiguration`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
+| S3 | `s3:ListAllMyBuckets`, `s3:GetBucketTagging`, `s3:GetEncryptionConfiguration`, `s3:GetInventoryConfiguration`; `s3:ListBucket`; `s3:GetObject`, `s3:GetObjectVersion` | `*`, every bucket, every object | |
 | CloudWatch Logs | `logs:DescribeLogGroups`, `logs:FilterLogEvents`, `logs:ListTagsForResource` | `*` | |
 | DynamoDB | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`, `dynamodb:Query`, `dynamodb:ListTagsOfResource` | `*` | |
 | Glue Data Catalog | `glue:GetDatabases`, `glue:GetTables`, `glue:GetTags` | `*` | |
