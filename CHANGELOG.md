@@ -84,6 +84,18 @@ bumps the minor version. Spec changes are listed under **Spec**.
     Secrets User, each enabled secret's current value is read and reported
     as counts only, like Secrets Manager; disabled, expired and certificate
     secrets are counted, not read.
+- **Azure, step 6: deployment and release** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
+  `deploy/azure/main.bicep`, at a management group, deploys the scheduled
+  Container Apps job with a system-assigned identity, centrally (one job,
+  roles at the management group) or per subscription (a job per
+  subscription, roles at each), with its own state storage (no shared keys).
+  It assigns Reader and the Storage Blob, Table and Queue Data Readers; Key
+  Vault Secrets User only with `readKeyVaultSecrets`; Cosmos DB Built-in Data
+  Reader on the accounts named; and Storage Blob Data Contributor on the
+  job's own container only. `deploy/azure/main.json` is it compiled.
+  Releases publish `ghcr.io/txp-labs/sensitive-data-scanner-azure:X.Y.Z`
+  (with its SBOM and `AZURE_IMAGE_DIGEST`), the Azure wheel and the compiled
+  template.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -225,6 +237,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   docs show the one-line `REVOKE`.
 
 ### Security
+- The Azure deployment's roles are all read-only, held so by a strict test
+  (`scanner/tests/test_azure_template.py`) that checks every role id in the
+  template against the built-in roles' published actions and allows one write
+  role, Storage Blob Data Contributor, on the job's own state container only;
+  no custom role, no `listKeys`. Log Analytics Reader is not assigned (it
+  carries `Microsoft.Support/*`); Reader covers the queries.
 - Step 4's IAM: listing for ECR, SageMaker, Neptune Analytics, EventBridge
   archives and Glacier; opt-in ECR pulls (`BatchGetImage`,
   `GetDownloadUrlForLayer`); the graph export (`StartExportTask` on graphs,
@@ -281,8 +299,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
-- `docs/AZURE.md`: the Azure scanner, its stores and roles, findings and
-  settings.
+- `docs/AZURE.md`: the Azure scanner, its stores and roles, findings,
+  settings and deployment (the Bicep parameters, the roles and why each is a
+  read, what the template cannot grant).
 - `docs/DATABASES.md`: the engines and how each is kept read-only, settings,
   a read-only user per engine, verifying a signed push, and deployment with
   docker run, a Kubernetes CronJob, an ECS task and Azure Container
@@ -290,6 +309,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- CI checks the Azure template: Bicep lint, and `main.json` matches a fresh
+  build with a pinned, checksum-verified Bicep; the `azure` image is built
+  and smoke-tested with no network.
 - The core gains the object reader every blob store shares
   (`sensitive_data_core.scan.objects`: sampling by name, compression, ranged
   reads of table files, `read_object`), which the AWS S3 source's helpers now

@@ -133,6 +133,43 @@ jobs:
             exit 1
           fi
 
+  azure-template:
+    # deploy/azure/main.json is main.bicep compiled; the strict role test
+    # (scanner/tests/test_azure_template.py) reads both. Bicep is a pinned,
+    # checksum-verified binary, so the build is reproducible.
+    name: Azure template (Bicep lint, main.json matches a fresh build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BICEP_VERSION: 0.47.16
+      BICEP_SHA256: 64c345a58e0c3e48b1bc98a4e62d6b3adb1d238281297de3400aeafb2697aa5a
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bicep
+        run: |
+          set -euo pipefail
+          url="https://github.com/Azure/bicep/releases/download/v${BICEP_VERSION}/bicep-linux-x64"
+          curl -fsSL --retry 3 -o /tmp/bicep "$url"
+          echo "${BICEP_SHA256}  /tmp/bicep" | sha256sum -c -
+          sudo install -m 0755 /tmp/bicep /usr/local/bin/bicep
+          bicep --version
+
+      - name: Lint and build
+        run: |
+          set -euo pipefail
+          for f in deploy/azure/main.bicep deploy/azure/modules/*.bicep; do
+            out=$(bicep lint "$f" 2>&1)
+            if [ -n "$out" ]; then echo "$out"; exit 1; fi
+          done
+          bicep build deploy/azure/main.bicep --outfile "${RUNNER_TEMP}/main.json"
+          if ! diff -u deploy/azure/main.json "${RUNNER_TEMP}/main.json"; then
+            echo "::error::deploy/azure/main.json differs from a fresh build: run 'bicep build deploy/azure/main.bicep' and commit it."
+            exit 1
+          fi
+
   package:
     name: Package (Lambda image and zip)
     runs-on: ubuntu-latest

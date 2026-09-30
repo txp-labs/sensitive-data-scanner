@@ -19,7 +19,7 @@ This document covers:
 | Python core | `scanner/core/` | `sensitive_data_core`, which names no cloud: the spec engine and Presidio recognizers, the findings contract, budgets and sampling, the allow, deny and sampling rules, the coverage summary, the findings push interface and the signed HTTPS sink, the sampled SQL pass (`scan/sql.py`), the object reader every blob store shares (`scan/objects.py`) and the `Adapter` interface |
 | AWS scanner | `scanner/` | `sensitive_data_scanner`, built on the core: every boto3 adapter, discovery, the batch runner, the Lambda handler, EventBridge as the findings sink; and `deploy/` |
 | Databases runner | `scanner/db/` | `sensitive_data_db`, built on the core: a container that samples PostgreSQL, MySQL and MariaDB, SQL Server, Oracle, MongoDB, Snowflake and Databricks SQL with a read-only user it checks first ([DATABASES.md](DATABASES.md)); its own image target (`docker build --target db`) |
-| Azure scanner | `scanner/azure/` | `sensitive_data_azure`, built on the core: a Container Apps job with a managed identity that discovers every subscription under a management group (Resource Graph) and reads its stores read-only ([AZURE.md](AZURE.md)); its own image target (`docker build --target azure`) |
+| Azure scanner | `scanner/azure/` | `sensitive_data_azure`, built on the core: a Container Apps job with a managed identity that discovers every subscription under a management group (Resource Graph) and reads its stores read-only ([AZURE.md](AZURE.md)); its own image target (`docker build --target azure`), and `deploy/azure/` (Bicep at a management group) |
 
 The TypeScript package and the Python runner implement the same algorithm.
 Both pass every vector, and a parity test fails if they disagree on any of

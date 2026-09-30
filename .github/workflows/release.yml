@@ -1,6 +1,6 @@
 # Release on a tag v*: build the Lambda zip, the wheels, the Lambda container
-# image and the databases runner's image; attach SPDX SBOMs and SHA-256
-# checksums to a GitHub Release; push both images to GHCR. No AWS resources, no
+# image, the databases runner's image and the Azure scanner's image; attach SPDX
+# SBOMs and SHA-256 checksums to a GitHub Release; push the images to GHCR. No AWS resources, no
 # npm publish, no signing yet (see docs/RELEASING.md).
 name: Release
 
@@ -83,7 +83,8 @@ jobs:
           # and the databases runner's (it depends on the core too).
           (cd scanner && uv build --wheel --package sensitive-data-scanner-core --out-dir ../out \
             && uv build --wheel --package sensitive-data-scanner --out-dir ../out \
-            && uv build --wheel --package sensitive-data-scanner-db --out-dir ../out)
+            && uv build --wheel --package sensitive-data-scanner-db --out-dir ../out \
+            && uv build --wheel --package sensitive-data-scanner-azure --out-dir ../out)
           mkdir -p sbom-src && (cd sbom-src && unzip -q ../out/*-lambda-*.zip)
       - name: SBOM of the Lambda zip (SPDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -191,9 +192,56 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  azure-image:
+    # The Azure scanner (docs/AZURE.md): the Dockerfile's `azure` target, its own
+    # GHCR package, which deploy/azure/main.bicep's `image` names by digest.
+    name: Azure scanner image to GHCR
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: azure
+          push: true
+          provenance: false
+          sbom: false
+          tags: ghcr.io/txp-labs/sensitive-data-scanner-azure:${{ needs.verify.outputs.version }}
+      - name: SBOM of the image (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ghcr.io/txp-labs/sensitive-data-scanner-azure@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sensitive-data-scanner-azure-${{ needs.verify.outputs.version }}-image.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: azure-image-sbom
+          path: sensitive-data-scanner-azure-${{ needs.verify.outputs.version }}-image.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: GitHub Release
-    needs: [verify, artifacts, image, db-image]
+    needs: [verify, artifacts, image, db-image, azure-image]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -212,13 +260,17 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           DIGEST: ${{ needs.image.outputs.digest }}
           DB_DIGEST: ${{ needs.db-image.outputs.digest }}
+          AZURE_DIGEST: ${{ needs.azure-image.outputs.digest }}
         run: |
           set -euo pipefail
           # The estate rollout templates (docs/ARCHITECTURE.md, Estate rollout).
           cp deploy/scanner.yaml deploy/estate-stackset.yaml dist/
+          # The Azure deployment, compiled (docs/AZURE.md, Deploying).
+          cp deploy/azure/main.json dist/sensitive-data-scanner-azure.json
           cd dist
           echo "ghcr.io/txp-labs/sensitive-data-scanner@${DIGEST}" > IMAGE_DIGEST
           echo "ghcr.io/txp-labs/sensitive-data-scanner-databases@${DB_DIGEST}" > DB_IMAGE_DIGEST
+          echo "ghcr.io/txp-labs/sensitive-data-scanner-azure@${AZURE_DIGEST}" > AZURE_IMAGE_DIGEST
           # Name every file as GitHub will serve it, so SHA256SUMS matches the
           # downloads: GitHub replaces characters other than letters, digits,
           # "-", "_" and "." with ".", which turned buildx's
@@ -233,7 +285,7 @@ jobs:
           done
           sha256sum -- * > SHA256SUMS
           cd ..
-          python3 scripts/release-notes.py "${VERSION}" "${DIGEST}" "${DB_DIGEST}" > notes.md
+          python3 scripts/release-notes.py "${VERSION}" "${DIGEST}" "${DB_DIGEST}" "${AZURE_DIGEST}" > notes.md
           cat notes.md
       - name: Create the release
         env:
