@@ -49,6 +49,9 @@ ATLASSIAN_CONFLUENCE = (
 )
 ATLASSIAN_OFFLINE = ("offline_access",)
 
+# The keyless signer's own federated token (Google's STS): IAM Credentials' signJwt only.
+GOOGLE_SIGNER = ("https://www.googleapis.com/auth/iam",)
+
 REQUESTED: dict[str, tuple[str, ...]] = {
     "m365": (
         *M365_PEOPLE,
@@ -61,6 +64,7 @@ REQUESTED: dict[str, tuple[str, ...]] = {
         *M365_TEAMS_CHATS,
     ),
     "google_workspace": (*GWS_DIRECTORY, *GWS_GMAIL, *GWS_DRIVE),
+    "google_signer": GOOGLE_SIGNER,
     "slack": (*SLACK_CHANNELS, *SLACK_FILES, *SLACK_DISCOVERY),
     "atlassian": (*ATLASSIAN_JIRA, *ATLASSIAN_CONFLUENCE, *ATLASSIAN_OFFLINE),
 }

@@ -86,7 +86,8 @@ jobs:
             && uv build --wheel --package sensitive-data-scanner --out-dir ../out \
             && uv build --wheel --package sensitive-data-scanner-db --out-dir ../out \
             && uv build --wheel --package sensitive-data-scanner-azure --out-dir ../out \
-            && uv build --wheel --package sensitive-data-scanner-gcp --out-dir ../out)
+            && uv build --wheel --package sensitive-data-scanner-gcp --out-dir ../out \
+            && uv build --wheel --package sensitive-data-scanner-saas --out-dir ../out)
           mkdir -p sbom-src && (cd sbom-src && unzip -q ../out/*-lambda-*.zip)
       - name: SBOM of the Lambda zip (SPDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -289,9 +290,56 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  saas-image:
+    # The SaaS scanner (docs/SAAS.md): the Dockerfile's `saas` target, its own GHCR
+    # package, which the deploy/saas examples name by digest.
+    name: SaaS scanner image to GHCR
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: saas
+          push: true
+          provenance: false
+          sbom: false
+          tags: ghcr.io/txp-labs/sensitive-data-scanner-saas:${{ needs.verify.outputs.version }}
+      - name: SBOM of the image (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ghcr.io/txp-labs/sensitive-data-scanner-saas@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sensitive-data-scanner-saas-${{ needs.verify.outputs.version }}-image.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saas-image-sbom
+          path: sensitive-data-scanner-saas-${{ needs.verify.outputs.version }}-image.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: GitHub Release
-    needs: [verify, artifacts, image, db-image, azure-image, gcp-image]
+    needs: [verify, artifacts, image, db-image, azure-image, gcp-image, saas-image]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -312,6 +360,7 @@ jobs:
           DB_DIGEST: ${{ needs.db-image.outputs.digest }}
           AZURE_DIGEST: ${{ needs.azure-image.outputs.digest }}
           GCP_DIGEST: ${{ needs.gcp-image.outputs.digest }}
+          SAAS_DIGEST: ${{ needs.saas-image.outputs.digest }}
         run: |
           set -euo pipefail
           # The estate rollout templates (docs/ARCHITECTURE.md, Estate rollout).
@@ -320,11 +369,14 @@ jobs:
           cp deploy/azure/main.json dist/sensitive-data-scanner-azure.json
           # The Google Cloud deployment, the Terraform module (docs/GCP.md, Deploying).
           tar -czf dist/sensitive-data-scanner-gcp-terraform.tar.gz -C deploy gcp
+          # The SaaS scanner's deploy examples (docs/SAAS.md, Deploying).
+          tar -czf dist/sensitive-data-scanner-saas-deploy.tar.gz -C deploy saas
           cd dist
           echo "ghcr.io/txp-labs/sensitive-data-scanner@${DIGEST}" > IMAGE_DIGEST
           echo "ghcr.io/txp-labs/sensitive-data-scanner-databases@${DB_DIGEST}" > DB_IMAGE_DIGEST
           echo "ghcr.io/txp-labs/sensitive-data-scanner-azure@${AZURE_DIGEST}" > AZURE_IMAGE_DIGEST
           echo "ghcr.io/txp-labs/sensitive-data-scanner-gcp@${GCP_DIGEST}" > GCP_IMAGE_DIGEST
+          echo "ghcr.io/txp-labs/sensitive-data-scanner-saas@${SAAS_DIGEST}" > SAAS_IMAGE_DIGEST
           # Name every file as GitHub will serve it, so SHA256SUMS matches the
           # downloads: GitHub replaces characters other than letters, digits,
           # "-", "_" and "." with ".", which turned buildx's
@@ -339,7 +391,7 @@ jobs:
           done
           sha256sum -- * > SHA256SUMS
           cd ..
-          python3 scripts/release-notes.py "${VERSION}" "${DIGEST}" "${DB_DIGEST}" "${AZURE_DIGEST}" "${GCP_DIGEST}" > notes.md
+          python3 scripts/release-notes.py "${VERSION}" "${DIGEST}" "${DB_DIGEST}" "${AZURE_DIGEST}" "${GCP_DIGEST}" "${SAAS_DIGEST}" > notes.md
           cat notes.md
       - name: Create the release
         env:

@@ -15,11 +15,13 @@ pinned by digest.
 | `ghcr.io/txp-labs/sensitive-data-scanner-azure:X.Y.Z` | The Azure scanner ([AZURE.md](AZURE.md)): the Dockerfile's `azure` target, a Container Apps job's image with the Azure SDKs, pyarrow and the database drivers. `AZURE_IMAGE_DIGEST` and the release notes give its digest, which the deployment's `image` parameter takes |
 | `sensitive-data-scanner-azure.json` | The Azure deployment at a management group: `deploy/azure/main.bicep`, compiled |
 | `ghcr.io/txp-labs/sensitive-data-scanner-gcp:X.Y.Z` | The Google Cloud scanner ([GCP.md](GCP.md)): the Dockerfile's `gcp` target, a Cloud Run job's image with google-auth (REST, no gRPC), pyarrow and the Cloud SQL drivers. `GCP_IMAGE_DIGEST` and the release notes give its digest, which the deployment's `image` variable takes (from a mirror in Artifact Registry) |
+| `ghcr.io/txp-labs/sensitive-data-scanner-saas:X.Y.Z` | The SaaS scanner ([SAAS.md](SAAS.md)): the Dockerfile's `saas` target, a container the customer runs in its own environment, with `requests`, `cryptography`, boto3 (S3 state, AWS workload identity) and pyarrow; no vendor SDK. `SAAS_IMAGE_DIGEST` and the release notes give its digest, which the deploy examples name |
+| `sensitive-data-scanner-saas-deploy.tar.gz` | The SaaS scanner's deploy examples: `deploy/saas` (ECS, Azure Container Apps, Cloud Run, Kubernetes) |
 | `sensitive-data-scanner-gcp-terraform.tar.gz` | The Google Cloud deployment: the `deploy/gcp` Terraform module, with its provider lock file |
-| `sensitive_data_scanner-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_core-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_db-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_azure-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_gcp-X.Y.Z-py3-none-any.whl` | The Python packages: the AWS scanner, the cloud-neutral core every runner depends on (with the spec, the findings schema and the licenses inside), the databases runner (its drivers are extras), the Azure scanner and the Google Cloud scanner. There is no sdist: the source release is the tag |
+| `sensitive_data_scanner-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_core-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_db-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_azure-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_gcp-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_saas-X.Y.Z-py3-none-any.whl` | The Python packages: the AWS scanner, the cloud-neutral core every runner depends on (with the spec, the findings schema and the licenses inside), the databases runner (its drivers are extras), the Azure scanner, the Google Cloud scanner and the SaaS scanner. There is no sdist: the source release is the tag |
 | `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout) |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the four images (syft) |
-| `IMAGE_DIGEST`, `DB_IMAGE_DIGEST`, `AZURE_IMAGE_DIGEST`, `GCP_IMAGE_DIGEST` | Each image's digest |
+| `IMAGE_DIGEST`, `DB_IMAGE_DIGEST`, `AZURE_IMAGE_DIGEST`, `GCP_IMAGE_DIGEST`, `SAAS_IMAGE_DIGEST` | Each image's digest |
 | `owner.repo.<id>.dockerbuild` | buildx's record of each image build (its inputs and timings), attached as it comes |
 | `SHA256SUMS` | SHA-256 of every file above, under the names GitHub serves them by. The workflow renames any file whose name GitHub would change (it replaces characters other than letters, digits, `-`, `_` and `.` with `.`), and checks the published names against the list |
 
@@ -50,7 +52,7 @@ pinned by digest.
 4. **Watch the Release workflow.**
    - `verify` fails unless the tag, both package versions and the changelog
      heading agree.
-   - Then `artifacts` (zip, wheels, SBOM), `image`, `db-image`, `azure-image` and `gcp-image` (each:
+   - Then `artifacts` (zip, wheels, SBOM), `image`, `db-image`, `azure-image`, `gcp-image` and `saas-image` (each:
      build, push to GHCR, SBOM) run in parallel.
    - If the workflow itself needs a fix after the tag is pushed, merge the
      fix and run **Release** by hand (`workflow_dispatch`) with the existing
@@ -92,7 +94,8 @@ sha256sum -c SHA256SUMS --ignore-missing
   - removing `private`.
 - **GHCR visibility.** The first push of each image creates its package
   (`sensitive-data-scanner`, `sensitive-data-scanner-databases`,
-  `sensitive-data-scanner-azure`, `sensitive-data-scanner-gcp`) under the
+  `sensitive-data-scanner-azure`, `sensitive-data-scanner-gcp`,
+  `sensitive-data-scanner-saas`) under the
   txp-labs organization. An organization owner may need to make it public,
   and to link it to this repository, in the package settings.
 - **Architectures.** The image and zip are x86_64 only. arm64 (Graviton) can

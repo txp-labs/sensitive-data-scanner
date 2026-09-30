@@ -410,6 +410,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
   gone items drop their findings; capped per project and space. Links to
   issues by key and pages by id. `ATLASSIAN_BYOK_KEY_ID` (Atlassian Cloud BYOK)
   makes findings `customer_managed_key`, hashed.
+- **SaaS, step 5: release and deploy** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
+  releases publish `ghcr.io/txp-labs/sensitive-data-scanner-saas` (its SBOM and
+  `SAAS_IMAGE_DIGEST`), the `sensitive_data_scanner_saas` wheel, and
+  `deploy/saas` as `sensitive-data-scanner-saas-deploy.tar.gz`: examples for ECS
+  Fargate (CloudFormation, EventBridge Scheduler, the task role's web identity,
+  Secrets Manager copied to a task-local volume, an S3 state object), Azure
+  Container Apps (a scheduled job, a managed identity, Key Vault secrets as
+  files), Cloud Run (a job, keyless Workspace signing, Secret Manager files, a
+  Cloud Storage state volume) and Kubernetes (a CronJob, a projected token,
+  Secret files, a persistent volume). docs/SAAS.md gains Deploying, and every
+  grant by vendor in one table.
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -439,6 +450,15 @@ bumps the minor version. Spec changes are listed under **Spec**.
   that were skipped before.
 
 ### Security
+- The SaaS scanner's grants are held to read-only by a strict test
+  (`scanner/tests/test_saas_scopes.py`): every permission or scope it requests,
+  or that its code, docs/SAAS.md or deploy/saas names, is on its vendor's
+  read-only list and reads by its own name; it sends only GETs to the vendors
+  except the named token exchanges (no PUT, PATCH or DELETE anywhere), and only
+  Slack's read methods; the deploy examples set no secret in the environment
+  and only settings the code reads; the ECS template's roles hold only their
+  own actions, none with a wildcard. The keyless Google signer's federated
+  token now asks for the `iam` scope only (was `cloud-platform`).
 - The SaaS scanner's Microsoft 365 grants read only, and mail is read only
   once the scanner has proved Exchange limits the app's `Mail.Read` to the
   mailboxes in scope. A client secret is never taken from the environment;

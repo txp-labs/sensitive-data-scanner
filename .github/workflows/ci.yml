@@ -49,7 +49,7 @@ jobs:
         run: uv run mypy
 
       - name: Templates (cfn-lint)
-        run: uv run cfn-lint ../deploy/*.yaml
+        run: uv run cfn-lint ../deploy/*.yaml ../deploy/saas/ecs.yaml
 
       - name: Tests
         env:

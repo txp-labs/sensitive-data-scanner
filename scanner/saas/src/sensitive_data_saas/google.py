@@ -51,7 +51,8 @@ IAM_CREDENTIALS = "https://iamcredentials.googleapis.com/v1"
 METADATA_TOKEN = (
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"  # noqa: S105
 )
-CLOUD_PLATFORM = "https://www.googleapis.com/auth/cloud-platform"
+# The federated signer's token: IAM Credentials only (what it may do is its one role).
+IAM_SCOPE = "https://www.googleapis.com/auth/iam"
 JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 GOOGLE_HOSTS = frozenset({"gmail.googleapis.com", "www.googleapis.com", "admin.googleapis.com"})
 RATE_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"})
@@ -163,7 +164,7 @@ class IamSigner:
                 data={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
                     "audience": f"//iam.googleapis.com/{self._provider}",
-                    "scope": CLOUD_PLATFORM,
+                    "scope": IAM_SCOPE,
                     "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
                     "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
                     "subject_token": self._federated.token(),

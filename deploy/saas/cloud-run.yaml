@@ -1,0 +1,60 @@
+# The SaaS scanner (docs/SAAS.md) as a Cloud Run job: an example to adapt.
+#
+#   gcloud run jobs replace cloud-run.yaml --region <region>
+#   gcloud scheduler jobs create http sds-saas --schedule "0 6 * * *" \
+#     --uri https://run.googleapis.com/v2/projects/<project>/locations/<region>/jobs/sds-saas:run \
+#     --http-method POST --oauth-service-account-email <scheduler account>
+#
+# - Google Workspace signs its delegation's JWTs keylessly: the job's service
+#   account holds Service Account Token Creator on the delegated service
+#   account (GWS_CREDENTIAL=gcp). No key.
+# - Secrets are Secret Manager secrets mounted as files (the job's service
+#   account holds Secret Manager Secret Accessor on them).
+# - The state is a file on a Cloud Storage volume (the job's own bucket).
+# - One task, no retries.
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: sds-saas
+  annotations:
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    spec:
+      taskCount: 1
+      parallelism: 1
+      template:
+        spec:
+          serviceAccountName: sds-saas@<project>.iam.gserviceaccount.com
+          maxRetries: 0
+          timeoutSeconds: "3600"
+          containers:
+            - image: <region>-docker.pkg.dev/<project>/<repository>/sensitive-data-scanner-saas@sha256:0000000000000000000000000000000000000000000000000000000000000000
+              args: [scan]
+              resources:
+                limits: { cpu: "1", memory: 2Gi }
+              env:
+                - { name: SCANNER_SITE, value: acme-saas }
+                - { name: GWS_CUSTOMER_ID, value: C00000000 }
+                - { name: GWS_SERVICE_ACCOUNT, value: sds-delegated@<project>.iam.gserviceaccount.com }
+                - { name: GWS_ADMIN_USER, value: sds-admin@acme.example }
+                - { name: GWS_CREDENTIAL, value: gcp }
+                - { name: GWS_GROUPS, value: "" }
+                - { name: GWS_SHARED_DRIVES, value: "" }
+                - { name: STATE_LOCATION, value: /state/sds-saas-state.json }
+                - { name: FINDINGS_HTTPS_URL, value: https://collector.example/findings }
+                - { name: FINDINGS_HMAC_KEY_FILE, value: /run/secrets/sds/push-key }
+              volumeMounts:
+                - { name: secrets, mountPath: /run/secrets/sds }
+                - { name: state, mountPath: /state }
+          volumes:
+            - name: secrets
+              secret:
+                secretName: sds-push-key
+                items:
+                  - { key: latest, path: push-key }
+            - name: state
+              csi:
+                driver: gcsfuse.run.googleapis.com
+                volumeAttributes:
+                  bucketName: <state bucket>

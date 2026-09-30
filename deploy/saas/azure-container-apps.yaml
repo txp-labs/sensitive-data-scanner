@@ -1,0 +1,59 @@
+# The SaaS scanner (docs/SAAS.md) as an Azure Container Apps job: an example to adapt.
+#
+#   az containerapp job create -g <group> -n sds-saas --environment <env> --yaml azure-container-apps.yaml
+#
+# - Microsoft 365 signs in as the job's system-assigned managed identity (a
+#   federated identity credential on the Entra app: issuer
+#   https://login.microsoftonline.com/<tenant>/v2.0, subject the identity's
+#   principal id, audience api://AzureADTokenExchange). No secret.
+# - Secrets come from Key Vault (the identity holds Key Vault Secrets User on
+#   those secrets) and are mounted as files, never environment variables.
+# - The state is a file on an Azure Files share (an environment storage mount).
+# - One run at a time: parallelism 1, no retries, a replica timeout below the
+#   schedule's interval.
+location: westus2
+identity:
+  type: SystemAssigned
+properties:
+  configuration:
+    triggerType: Schedule
+    replicaTimeout: 3600
+    replicaRetryLimit: 0
+    scheduleTriggerConfig:
+      cronExpression: "0 6 * * *"
+      parallelism: 1
+      replicaCompletionCount: 1
+    secrets:
+      - name: push-key
+        keyVaultUrl: https://<vault>.vault.azure.net/secrets/sds-push-key
+        identity: system
+  template:
+    containers:
+      - name: scanner
+        image: ghcr.io/txp-labs/sensitive-data-scanner-saas@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        args: [scan]
+        resources:
+          cpu: 1
+          memory: 2Gi
+        env:
+          - { name: SCANNER_SITE, value: acme-saas }
+          - { name: M365_TENANT_ID, value: 00000000-0000-0000-0000-000000000000 }
+          - { name: M365_CLIENT_ID, value: 00000000-0000-0000-0000-000000000000 }
+          - { name: M365_FEDERATED_TOKEN, value: azure }
+          - { name: M365_USERS, value: "" }
+          - { name: M365_MAIL_SCOPE_CHECK, value: "" }
+          - { name: M365_SITES, value: "" }
+          - { name: STATE_LOCATION, value: /state/sds-saas-state.json }
+          - { name: FINDINGS_HTTPS_URL, value: https://collector.example/findings }
+          - { name: FINDINGS_HMAC_KEY_FILE, value: /run/secrets/sds/push-key }
+        volumeMounts:
+          - { volumeName: secrets, mountPath: /run/secrets/sds }
+          - { volumeName: state, mountPath: /state }
+    volumes:
+      - name: secrets
+        storageType: Secret
+        secrets:
+          - { secretRef: push-key, path: push-key }
+      - name: state
+        storageType: AzureFile
+        storageName: sds-saas-state
