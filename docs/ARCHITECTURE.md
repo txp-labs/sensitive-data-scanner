@@ -678,6 +678,79 @@ every pass.
 Logs, X-Ray traces and streams are read forward from their position, so their
 history is not re-read.
 
+#### Worked examples
+
+The numbers assume the defaults: 20,000 items a run, a quarter of each
+source's share for rescans, and one run a day.
+
+**The SharePoint reader changed.** Say a release changes how SharePoint
+libraries are read: `sources/m365_files.py`, the module behind
+`adapter:m365_sharepoint` and `adapter:m365_onedrive`. The manifest's two
+versions move, and nothing else does:
+
+- The **SharePoint** and **OneDrive** files are rescanned; their rows were
+  recorded under the old `adapter:m365_sharepoint` or `adapter:m365_onedrive`
+  version.
+- **S3, Azure Blob, Cloud Storage and Drive files** are not. Their adapters'
+  versions did not move, and neither did their readers'.
+- A delta feed never lists an unchanged file. So after each library's feed,
+  the source lists every item again (a `/root/delta` from no link), and
+  downloads only the items whose row is stale. It resumes the next run where
+  the cap stopped it.
+- A library of 40,000 files, with a 5,000-item share, rescans up to 1,250
+  files a run. Its first run's coverage reads `rescanned: {"adapter": 1250}`
+  and `rescanBacklog: 38750`. It is done in about 32 runs. Its changed files
+  are read first, every run, as before.
+- The findings of a rescanned file say `rescanReason: adapter`.
+
+Had the Word reader changed instead (`_docx` in `scan/office.py`),
+`reader:docx` would move. Only the Word files, and archives holding one, would
+be read again, on every platform: S3, Blob, Cloud Storage, CodeCommit, ECR
+layers, OneDrive, SharePoint and Drive. Excel and PowerPoint files would not,
+since `_xlsx` and `_pptx` are components of their own.
+
+**A new class added.** Say the spec gains a class, `passport`, with its shape,
+context words and prompts:
+
+- The manifest gains `spec-standalone/passport`, and `spec-conversation`
+  moves, because the prompts are part of it.
+- **Every text-bearing object** is rescanned: text, JSON, CSV, Word, Excel,
+  PowerPoint, PDFs with a text layer, tables and transcripts. Their findings
+  say `rescanReason: spec_standalone` and `rescanClasses: ["passport"]`,
+  because the first rule that applies is the standalone spec's. It covers the
+  transcripts too.
+- **Images, audio, video, binaries, image-only PDFs and encrypted files are
+  not.** Detection never ran on them, so no class can change what they gave.
+- **Tables** are rescanned by the same rule, within the same share: SQL
+  tables whose markers have not moved, and BigQuery tables. A DynamoDB table
+  read by export gets a full export as its rescan.
+- A change to one class's own rules (say `card`'s brand table) is named the
+  same way (`rescanClasses: ["card"]`). A change to the engine
+  (`spec-standalone`: the recognizers, the context rules) names no class,
+  since every class may be affected.
+
+**The PDF reader added.** This is the change #66 made. Before it, a PDF was
+counted and not read (`document`).
+
+- An object recorded under a build with no PDF reader has `pdf` among its
+  **unread kinds**. The manifest now has `reader:pdf` reading the kind `pdf`,
+  so the object is rescanned with `rescanReason: new_reader`: on every
+  platform, and inside archives too, since an archive's unread entries are its
+  own unread kinds.
+- The PDFs scanned before the index existed have no row. They are read once as
+  `unindexed`, within the same share.
+- A later change to the PDF reader (`scan/pdf.py`) rescans only the objects
+  the PDF reader read: `reader:pdf` is in their vector. A zip holding a PDF is
+  read again for its PDF, and a zip holding only CSVs is not.
+- The same holds for a 7z reader added later: only the objects that held a 7z
+  archive (`archive_unsupported`) are read again.
+
+**Out of scope: event-driven scan-on-write.** Reading an object seconds after
+it is written, from an S3 event or a log subscription, is a later phase
+([Event-driven mode](#event-driven-mode-phase-2-design-only)). The rules above
+decide what a scheduled pass reads. An event-driven read would record the
+same index row, so the next pass would skip what the event already read.
+
 ### Large buckets: S3 Inventory
 
 A bucket of millions of objects costs a `ListObjectsV2` call per thousand keys

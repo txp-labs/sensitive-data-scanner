@@ -40,6 +40,17 @@ and its own image (`docker build --target saas`).
 - **Incremental**: delta queries (Microsoft Graph), Gmail's history and
   Drive's changes, with the cursors kept at
   `STATE_LOCATION`, so a run reads what changed since the last.
+- **Rescans and copies** (the object index beside `STATE_LOCATION`,
+  [#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
+  - An unchanged OneDrive, SharePoint or Drive file is read again only when a
+    component that could change its result changed. It is found by listing
+    every item again after the feed, within `RESCAN_PERCENT` of the budget
+    ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)).
+  - A file whose hash (SHA-1, QuickXorHash, `md5Checksum`) is a file already
+    read, under a name of the same kind, is not downloaded again. Its findings
+    carry `duplicateOf`.
+  - Mail and Slack attachments, Teams messages and Atlassian pages are read
+    when their message or page changes, and are not rescanned otherwise.
 
 ## Microsoft 365
 

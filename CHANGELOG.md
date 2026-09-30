@@ -788,6 +788,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/ARCHITECTURE.md`: How rescans are chosen gains its worked examples (the
+  SharePoint reader changed, a new class added, the PDF reader added), and
+  event-driven scan-on-write is named as out of scope (a later phase);
+  `docs/FINDINGS.md` shows a coverage entry with the index's fields;
+  `README.md` and `docs/SAAS.md` say what is read again and what is skipped
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 6).
 - `docs/ARCHITECTURE.md` (Duplicates, in How rescans are chosen) and `docs/FINDINGS.md`
   (`duplicateOf`, `duplicates`) ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), part 5).
 - `docs/ARCHITECTURE.md` (Large buckets: S3 Inventory, with the Azure and

@@ -700,6 +700,30 @@ why:
 A finding from a read for a change at the source carries neither field. The
 next read of the object replaces its findings, and the fields with them.
 
+A source that keeps an object index says in its coverage how many objects the
+index holds, what it read again and why, what is still owed, and how many
+copies it did not read:
+
+```json
+{
+  "kind": "s3",
+  "target": "example-drop/",
+  "listed": 120000,
+  "eligible": 310,
+  "scanned": 5310,
+  "indexed": 120000,
+  "rescanned": { "reader": 5000 },
+  "rescanBacklog": 7200,
+  "duplicates": 42
+}
+```
+
+(Other coverage fields as below.) Here 310 objects changed at their source and
+were read. 5,000 unchanged ones were read again because a reader they were read
+with changed (the rescan share of the run), and 7,200 such objects are still
+to come, in later runs. 42 copies of objects already read were not read: their
+findings carry `duplicateOf`.
+
 ### Names are masked
 
 In a bucket name or key, log group or log stream name, DynamoDB table name,
