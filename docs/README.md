@@ -13,6 +13,12 @@ detects, how it stays safe, and how proven each path is.
 | [DATABASES.md](DATABASES.md) | The databases runner: engines and how each is kept read-only, settings, tables unchanged since the last read, deploying with docker, Kubernetes, ECS or Azure Container Instances |
 | [SAAS.md](SAAS.md) | The SaaS scanner: Microsoft 365, Google Workspace, Slack, Jira and Confluence, consent and read-only grants, vendor detection (Purview, Workspace DLP, Slack DLP), settings, deploying |
 
+## Cost
+
+| Document | What it covers |
+|---|---|
+| [COST.md](COST.md) | What a run and a first full pass cost per platform, for 10, 100 and 1,000 accounts: compute, request, export and query charges, with dated public prices, and how budgets, sampling, rescans and S3 Inventory bring them down |
+
 ## Findings and releases
 
 | Document | What it covers |

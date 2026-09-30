@@ -980,6 +980,22 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- **`docs/COST.md`** ([#78](https://github.com/txp-labs/sensitive-data-scanner/issues/78)): the cost of a run and of a first full
+  pass, per platform (AWS, Azure, Google Cloud, databases, SaaS), for 10,
+  100 and 1,000 accounts.
+  - What it covers:
+    - compute (Lambda, Fargate, Container Apps, Cloud Run);
+    - requests (S3 LIST and GET, S3 Inventory, KMS, `FilterLogEvents`,
+      DynamoDB RCUs);
+    - exports and queries (DynamoDB exports, RDS snapshot export, Redshift
+      Serverless, BigQuery).
+  - Prices are from the public pricing pages and the AWS and Azure
+    price-list APIs, read on 30 Sep 2026.
+  - The read speed was measured locally; the cloud speed is an assumption,
+    carried as a range.
+  - The headline: compute is capped by the run budget, at most $0.044 a
+    Lambda run. A first pass is about $17 to $25 an account on AWS, exports
+    included.
 - What has run on a real account, corrected: the v0.2.0 run of 29 Sep read
   one DynamoDB table only (S3 and CloudWatch Logs did not run), and one
   SharePoint site was read in a test Microsoft 365 tenant on 30 Sep. The
