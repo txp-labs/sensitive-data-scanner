@@ -29,6 +29,8 @@ ACCESS_DENIED = frozenset(
         "AuthorizationFailed",
         "AuthorizationPermissionMismatch",
         "Forbidden",
+        # Google Cloud (1.7): a permission the service account lacks.
+        "PERMISSION_DENIED",
     }
 )
 MAX_STORES_IN_SUMMARY = 5000
@@ -52,7 +54,7 @@ _INTERNAL = frozenset(
 
 
 # Store fields that are SHA-256 hex digests, never masked.
-_HASHES = frozenset({"resourceIdHash"})
+_HASHES = frozenset({"resourceIdHash", "resourceNameHash"})
 
 
 @dataclass
@@ -174,6 +176,8 @@ NOTES = {
     # error name (a database driver's exception class says nothing about why).
     "access_denied": ("error", "access_denied"),
     "driver_missing": ("skipped", "driver_missing"),
+    # (1.7) A Cloud Storage bucket whose reads are billed to the reader's project.
+    "requester_pays": ("skipped", "requester_pays"),
 }
 
 

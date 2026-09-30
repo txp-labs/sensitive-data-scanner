@@ -9,6 +9,7 @@ from pathlib import Path
 import sensitive_data_azure
 import sensitive_data_core
 import sensitive_data_db
+import sensitive_data_gcp
 import sensitive_data_scanner
 
 SCANNER = Path(__file__).resolve().parents[1]
@@ -21,8 +22,10 @@ CLOUD_MODULES = (
     "mypy_boto3",
     "cassandra",
     "azure",
+    "google",
     "sensitive_data_scanner",
     "sensitive_data_azure",
+    "sensitive_data_gcp",
     "sensitive_data_db",
 )
 
@@ -46,7 +49,7 @@ def test_the_core_names_no_cloud() -> None:
 def test_the_core_depends_on_no_cloud_sdk() -> None:
     project = tomllib.loads((SCANNER / "core" / "pyproject.toml").read_text())["project"]
     deps = " ".join(project["dependencies"]).lower()
-    for sdk in ("boto", "azure", "google-cloud", "cassandra"):
+    for sdk in ("boto", "azure", "google", "cassandra"):
         assert sdk not in deps
 
 
@@ -58,6 +61,7 @@ def test_every_package_has_the_release_version() -> None:
     assert sensitive_data_core.__version__ == root
     assert sensitive_data_db.__version__ == root
     assert sensitive_data_azure.__version__ == root
+    assert sensitive_data_gcp.__version__ == root
 
 
 def test_azure_sdks_stay_in_the_azure_package() -> None:
@@ -69,6 +73,23 @@ def test_azure_sdks_stay_in_the_azure_package() -> None:
             assert not any(n.startswith("azure") for n in _imports(path)), path.name
     for path in sorted(azure_pkg.rglob("*.py")):
         assert not any(n.startswith(("boto3", "botocore")) for n in _imports(path)), path.name
+
+
+def test_google_libraries_stay_in_the_gcp_package() -> None:
+    """Only `sensitive_data_gcp` imports Google's libraries; it imports no AWS or Azure SDK,
+    and the other packages import nothing of Google's."""
+    gcp_pkg = SCANNER / "gcp" / "src" / "sensitive_data_gcp"
+    others = (
+        SCANNER / "src" / "sensitive_data_scanner",
+        SCANNER / "db" / "src",
+        SCANNER / "azure" / "src",
+    )
+    for pkg in others:
+        for path in sorted(pkg.rglob("*.py")):
+            assert not any(n.startswith("google") for n in _imports(path)), path.name
+    for path in sorted(gcp_pkg.rglob("*.py")):
+        names = _imports(path)
+        assert not any(n.startswith(("boto3", "botocore", "azure")) for n in names), path.name
 
 
 def test_a_store_fact_is_added_to_each_finding_and_never_replaces_a_field() -> None:

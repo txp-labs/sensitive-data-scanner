@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.6",
-  "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
+  "title": "Sensitive-data scanner findings, version 1.7",
+  "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,24 +12,24 @@
   ],
   "allOf": [
     {
-      "description": "An AWS run names its account and region; a databases run (1.4) and an Azure run (1.6) name their site instead.",
-      "if": { "required": ["platform"], "properties": { "platform": { "enum": ["database", "azure"] } } },
+      "description": "An AWS run names its account and region; a databases run (1.4), an Azure run (1.6) and a Google Cloud run (1.7) name their site instead.",
+      "if": { "required": ["platform"], "properties": { "platform": { "enum": ["database", "azure", "gcp"] } } },
       "then": { "required": ["site"] },
       "else": { "required": ["account", "region"] }
     }
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.6" },
+    "schemaVersion": { "const": "1.7" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
     "platform": {
-      "description": "Where the scanner ran (1.4). Absent: AWS, and the document names its account and region. 'database': the databases-anywhere container; 'azure' (1.6): the Azure scanner, whose findings and stores each name their subscription. Both name their site instead of an account and region.",
-      "enum": ["aws", "database", "azure"]
+      "description": "Where the scanner ran (1.4). Absent: AWS, and the document names its account and region. 'database': the databases-anywhere container; 'azure' (1.6): the Azure scanner, whose findings and stores each name their subscription; 'gcp' (1.7): the Google Cloud scanner, whose findings and stores each name their project. Each names its site instead of an account and region.",
+      "enum": ["aws", "database", "azure", "gcp"]
     },
     "site": {
-      "description": "The name the customer gave the place a non-AWS runner runs in (SCANNER_SITE): a data center, a cluster (1.4), an Azure management group (1.6). Never a host or a connection string.",
+      "description": "The name the customer gave the place a non-AWS runner runs in (SCANNER_SITE): a data center, a cluster (1.4), an Azure management group (1.6), a Google Cloud organization or folder (1.7). Never a host or a connection string.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
     },
@@ -63,7 +63,7 @@
     },
     "class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
     "storeKind": {
-      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5; the Azure kinds, from azure_blob, are new in 1.6).",
+      "description": "A kind of store (1.3: one list for coverage, the run summary and listing errors; each kind after rds is new in 1.3; the databases runner's engines, from postgresql, are new in 1.4, and mysql covers MariaDB; stepfunctions, lambda, xray, codecommit, s3_directory, msk, mq, ecr, sagemaker, neptune_analytics, eventbridge_archive and glacier are new in 1.5; the Azure kinds, from azure_blob, are new in 1.6; the Google Cloud kinds, from gcs, are new in 1.7).",
       "enum": [
         "s3", "cloudwatch_logs", "dynamodb", "glue_table", "rds", "redshift", "opensearch",
         "documentdb", "neptune", "ebs", "backup", "efs", "fsx", "kinesis", "firehose", "sqs",
@@ -73,7 +73,8 @@
         "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
         "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo",
-        "log_analytics", "azure_disk_snapshot", "key_vault"
+        "log_analytics", "azure_disk_snapshot", "key_vault",
+        "gcs"
       ]
     },
     "azureSubscription": {
@@ -83,6 +84,16 @@
     },
     "resourceIdHash": {
       "description": "The SHA-256 of the store's Azure resource ID, lower-cased, as lower-case hex (1.6). Never the ID itself, which names the resource group and the resource.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gcpProject": {
+      "description": "A Google Cloud project id (1.7), masked like a key.",
+      "type": "string",
+      "pattern": "^[a-z0-9#][a-z0-9.:#-]{0,62}$"
+    },
+    "resourceNameHash": {
+      "description": "The SHA-256 of the store's Google Cloud full resource name, exactly as Cloud Asset Inventory gives it (//storage.googleapis.com/<bucket>, //bigquery.googleapis.com/projects/<project>/datasets/<dataset>/tables/<table>), as lower-case hex (1.7). Never the name itself.",
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
@@ -228,6 +239,8 @@
               "$ref": "#/$defs/maskedName"
             },
             "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
+            "project": { "$ref": "#/$defs/gcpProject" },
+            "resourceNameHash": { "$ref": "#/$defs/resourceNameHash" },
             "keyMasked": { "const": true }
           }
         },
@@ -262,6 +275,35 @@
               "$ref": "#/$defs/maskedName"
             },
             "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
+            "keyMasked": { "const": true }
+          }
+        },
+        {
+          "description": "One object of a Google Cloud Storage bucket (1.7) and, for a table file, one column of it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "bucket", "object", "generation", "resourceNameHash"],
+          "properties": {
+            "type": { "const": "gcs_object" },
+            "bucket": {
+              "description": "The bucket, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "object": {
+              "description": "The object's name, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "generation": {
+              "description": "The object generation read.",
+              "type": "string",
+              "pattern": "^(?:[0-9]{1,24}|null)$"
+            },
+            "column": {
+              "description": "For a table file (Parquet, ORC, Avro): the column the values are in.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "project": { "$ref": "#/$defs/gcpProject" },
+            "resourceNameHash": { "$ref": "#/$defs/resourceNameHash" },
             "keyMasked": { "const": true }
           }
         }
@@ -317,9 +359,9 @@
         "offsets": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/offset" } },
         "offsetsTruncated": { "type": "boolean" },
         "link": {
-          "description": "A deep link into the account's own AWS console or (1.6) the resource's page in the Azure portal; null when a name it would carry had to be masked.",
+          "description": "A deep link into the account's own AWS console, (1.6) the resource's page in the Azure portal or (1.7) in the Google Cloud console; null when a name it would carry had to be masked.",
           "type": ["string", "null"],
-          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/)"
+          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/|console\\.cloud\\.google\\.com/)"
         },
         "connect": {
           "type": "object",
@@ -397,7 +439,8 @@
         "needs_task", "backup_copy", "archived", "live_queue", "redrive_would_change",
         "no_s3_destination", "in_memory", "no_read_path",
         "db_user_can_write", "grants_unverifiable", "driver_missing", "user_can_write",
-        "archive_retrieval", "network", "needs_sas_export"
+        "archive_retrieval", "network", "needs_sas_export",
+        "requester_pays"
       ]
     },
     "discovery": {
@@ -497,6 +540,8 @@
                 "$ref": "#/$defs/maskedName"
               },
               "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
+              "project": { "$ref": "#/$defs/gcpProject" },
+              "resourceNameHash": { "$ref": "#/$defs/resourceNameHash" },
               "hierarchicalNamespace": {
                 "description": "Azure Storage (1.6): the account has the hierarchical namespace on (ADLS Gen2).",
                 "const": true

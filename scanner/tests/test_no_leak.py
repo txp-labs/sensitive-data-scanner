@@ -2005,3 +2005,74 @@ def test_no_value_leaves_key_vault_secrets(capsys: pytest.CaptureFixture[str]) -
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob and CARDS["mir"] not in blob, where
+
+
+# ------------------------------------------------------------ the Google Cloud scanner
+
+
+def test_no_value_leaves_the_gcp_scanner(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in object contents, and in project, bucket, object and column names, a key's
+    name, a label and Google's error messages: none of them in the findings, the logs, the
+    documents the job writes or any repr."""
+    import io as _io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from gcp_fakes import NOW, Cloud, Obj, bucket_row, error, project_row, settings, vpc_denied
+    from sensitive_data_gcp.runner import run_scan
+
+    project = f"p-{SSN_A}"
+    number = "421000000077"
+    bucket = f"b-{CARDS['visa']}"
+    fenced = f"f-{dashed(SSN_B)}"
+    key = f"projects/{project}/locations/us/keyRings/r/cryptoKeys/k-{CARDS['amex']}"
+    buf = _io.BytesIO()
+    pq.write_table(pa.table({f"ssn_{SSN_A}": [dashed(SSN_B)], "card": [CARDS["jcb"]]}), buf)
+    c = Cloud()
+    c.assets["cloudresourcemanager.googleapis.com/Project"] = [project_row(project, number)]
+    c.assets["storage.googleapis.com/Bucket"] = [
+        bucket_row(bucket, project=project, number=number, kms=key, labels={"o": CARDS["mir"]}),
+        bucket_row(fenced, project=project, number=number),
+        bucket_row(f"denied-{SSN_A}", project=project, number=number),
+    ]
+    c.bucket(bucket).objects.update(
+        {
+            f"exports/{CARDS['discover']}.csv": Obj(
+                f"name,card_{CARDS['unionpay']}\nA,{CARDS['mastercard']}\n".encode(), kms=key
+            ),
+            f"lake/{SSN_A}/part-0.parquet": Obj(buf.getvalue()),
+            "notes.txt": Obj(f"call me, my card is {printed(CARDS['visa'])}".encode()),
+            "bad.txt": Obj(b"x", fail=error(500, "INTERNAL", message=f"on {CARDS['visa']}")),
+        }
+    )
+    c.bucket(fenced).list_fail = vpc_denied(f"perimeter for {bucket}/{SSN_A}")
+    c.bucket(f"denied-{SSN_A}").list_fail = error(
+        403, "PERMISSION_DENIED", message=f"sds cannot list {bucket} {dashed(SSN_B)}"
+    )
+    s = settings()
+    clients = c.clients()
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, clients, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    reasons = {x.get("reason") for x in doc["discovery"]["stores"]}
+    assert {"network", "access_denied"} <= reasons
+    written = "\n".join(
+        o.data.decode()
+        for k, o in c.buckets["acme-sds-state"].objects.items()
+        if k.startswith("findings/")
+    )
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        # The findings documents in the job's own bucket. Its cursors (state/) keep real
+        # names, like the AWS scanner's, to resume a listing; they never leave the project.
+        "written": written,
+        "reprs": repr(s) + repr(clients) + repr(doc.get("discovery")),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        assert CARDS["amex"] not in blob and SSN_B not in blob and SSN_A not in blob, where

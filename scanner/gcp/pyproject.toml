@@ -1,0 +1,38 @@
+[project]
+name = "sensitive-data-scanner-gcp"
+version = "0.3.0"
+description = "The Google Cloud scanner of the sensitive data scanner: a Cloud Run job with its own service account that discovers and samples an organization's or folder's data stores read-only, and reports findings only, never values."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "txp-labs, LLC" }]
+# Google's libraries live here, never in the core. Every Google API is called over REST
+# through google-auth's authorized session (no gRPC stack in the image): the job's own
+# service account signs each request through Application Default Credentials, with no key.
+dependencies = [
+    "sensitive-data-scanner-core",
+    "google-auth>=2.40",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+# Columnar and data-lake formats (Parquet, ORC, zstd, Avro's snappy and zstandard).
+columnar = ["pyarrow>=21"]
+all = ["sensitive-data-scanner-gcp[columnar]"]
+
+[project.scripts]
+sensitive-data-scanner-gcp = "sensitive_data_gcp.__main__:main"
+
+[tool.uv.sources]
+sensitive-data-scanner-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.32.4"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sensitive_data_gcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../LICENSE" = "sensitive_data_gcp/LICENSE"
+"../../NOTICE" = "sensitive_data_gcp/NOTICE"
