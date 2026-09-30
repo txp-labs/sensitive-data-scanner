@@ -124,7 +124,8 @@ value shows up in findings, events, logs, exception messages or object reprs.
   (reading only what changed); `duplicatesAcross` in coverage, and
   `duplicateOf` naming a finding of another store of the same account,
   subscription or project; and the store recommendations
-  `s3_inventory_daily`, `blob_inventory` and `storage_insights`. All additive.
+  `s3_inventory_daily`, `blob_inventory` and `storage_insights`; and (#94)
+  `backlogByKind` in the run summary. All additive.
 
 ## Sources and modes (1.8)
 
@@ -930,7 +931,10 @@ coverage gap is visible rather than silent.
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind
-(`{"s3": "AccessDenied"}`).
+(`{"s3": "AccessDenied"}`). (1.11) `backlogByKind` counts the stores still
+behind after the run, by kind: read in part (`backlog`), or not reached
+(`deferred`, reason `budget`), as in `{"cloudwatch_logs": 137, "dynamodb": 1}`.
+It is empty when every store's pass is complete.
 
 ## Versioning
 

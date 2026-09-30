@@ -256,10 +256,15 @@ def summary(stores: list[Store], list_errors: dict[str, str]) -> dict[str, Any]:
     """The run summary: every store, what happened to it, and the totals."""
     by_status: dict[str, int] = {}
     by_reason: dict[str, int] = {}
+    # (1.11, #94) The stores still behind, by kind: read in part (`backlog`), or not
+    # reached this run (`deferred`). Empty when every pass is complete.
+    backlog: dict[str, int] = {}
     for s in stores:
         by_status[s.status] = by_status.get(s.status, 0) + 1
         if s.reason:
             by_reason[s.reason] = by_reason.get(s.reason, 0) + 1
+        if s.backlog or (s.status == "deferred" and s.reason == "budget"):
+            backlog[s.kind] = backlog.get(s.kind, 0) + 1
     order = {"error": 0, "skipped": 1, "deferred": 2, "scanned": 3, "pending": 4}
     ranked = sorted(stores, key=lambda s: (order.get(s.status, 9), s.kind, s.name))
     kept = ranked[:MAX_STORES_IN_SUMMARY]
@@ -270,4 +275,5 @@ def summary(stores: list[Store], list_errors: dict[str, str]) -> dict[str, Any]:
         "byStatus": dict(sorted(by_status.items())),
         "byReason": dict(sorted(by_reason.items())),
         "listErrors": dict(sorted(list_errors.items())),
+        "backlogByKind": dict(sorted(backlog.items())),
     }
