@@ -18,6 +18,11 @@ starts a new pass.
   the page and message it stopped at.
 - Sampling is stable, by message id.
 - Nothing is modified: no label, no read mark. `gmail.readonly` could not.
+- **Attachments are rescanned** (#67): each is recorded in the mailbox's object
+  index by its stable id (`<message id>/<part id>`). When a reader that read one
+  changed, a pass lists the messages with attachments (`has:attachment`, within
+  `LOOKBACK_DAYS`), reads their part structure, and downloads only the stale
+  attachments, within `RESCAN_PERCENT`. Message bodies are not read again.
 
 **Gaps.** A person without Gmail is `not_provisioned`; a delegation that does
 not cover the scope (`unauthorized_client`) is `access_denied`.
@@ -25,9 +30,9 @@ not cover the scope (`unauthorized_client`) is `access_denied`.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import datetime as _dt
+import functools
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,33 +40,27 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.objects import sample_point
 
 from ..google import GoogleApi
 from ..resources import saas_item
 from ..scopes import GWS_GMAIL
-from .base import Context, ItemReader, bytes_fetch, call_gap, html_text
+from . import gws_gmail_read as _read_path
+from .base import (
+    Attachment,
+    AttachmentPage,
+    AttachmentRescans,
+    Context,
+    ItemReader,
+    call_gap,
+    html_text,
+)
 from .gws import VENDOR, GwsPerson, facts_of, fields_of, people, tenant_of
+from .gws_gmail_read import GMAIL, SERVICE, _files, _parts, attachment_id, b64
 
 KIND = "gws_gmail"
-SERVICE = "gmail"
-GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
-
-
-def b64(data: str) -> bytes:
-    try:
-        return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
-    except (binascii.Error, ValueError):
-        return b""
-
-
-def _parts(part: dict[str, Any]) -> list[dict[str, Any]]:
-    out = [part]
-    for p in part.get("parts") or []:
-        if isinstance(p, dict):
-            out.extend(_parts(p))
-    return out
 
 
 def message_text(msg: dict[str, Any]) -> str:
@@ -140,6 +139,7 @@ class GmailAdapter:
 
 class GmailSource:
     kind = KIND
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self, ctx: Context, person: GwsPerson, store_name: str, sample_percent: int
@@ -169,7 +169,13 @@ class GmailSource:
         self.read = 0
         cov = Coverage(KIND, self.target, sample_percent=self.sample_percent)
         r = ItemReader(detector, s, cov, now.isoformat(), dict(self.facts or {}), store, budget)
-        st: dict[str, Any] = dict(cursor)
+        op = r.index = ObjectPass(
+            self.indexes, self.id, self.kind, columnar=r.columnar, budget=budget
+        )
+        rescans = AttachmentRescans(r, cursor, prefix=f"{self.id}\n")
+        st: dict[str, Any] = {
+            k: v for k, v in cursor.items() if k not in ("indexPass", "indexed", "rescan")
+        }
         note: str | None = None
         done = False
         try:
@@ -178,7 +184,17 @@ class GmailSource:
                 if st.get("mode") != "history":  # the history was too old: a new pass
                     done = self._list(st, r)
             else:
+                first = not cursor.get("mode") or bool(cursor.get("full"))
                 done = self._list(st, r)
+                if done and first and op.index is not None:
+                    rescans.indexed = True  # a first pass read every attachment: all have rows
+                elif first and not done:
+                    st["full"] = True  # still the first pass, next run
+            if done and rescans.due():
+                # Then the attachments a changed component read, within the share (#67).
+                rescans.run(
+                    lambda at: self._attachment_pages(at, r), sample_percent=self.sample_percent
+                )
         except Exception as err:  # recorded by name on the source
             gap = gap_of(err, frozenset({"FAILED_PRECONDITION"}))
             cov.error = None if gap == "throttled" else error_name(err)
@@ -188,6 +204,8 @@ class GmailSource:
         cov.pass_complete = done and cov.error is None
         if not done and cov.error is None:
             cov.backlog = True
+        rescans.save(st)
+        op.settle(cov)
         return SourceRun(cov, st, note=note)
 
     def _room(self, r: ItemReader) -> bool:
@@ -288,40 +306,40 @@ class GmailSource:
             log_event("item.unreadable", source=self.target, error=error_name(err))
         r.store.replace_location(f"{self.id}\n{mid}", findings)
 
-    def _attachments(self, mid: str, msg: dict[str, Any], r: ItemReader) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
-        max_bytes = self.ctx.settings.max_object_bytes
-        for n, p in enumerate(_parts(payload or {})):
-            name = str(p.get("filename") or "")
-            if not name:
-                continue
-            body = p.get("body") or {}
-            size = int(body.get("size") or 0)
-            if size > max_bytes:
-                r.skip("too_large")
-                continue
-            if body.get("attachmentId"):
-                got = self.api.get(f"{GMAIL}/messages/{mid}/attachments/{body['attachmentId']}")
-                data = b64(str(got.get("data") or ""))
-            else:
-                data = b64(str(body.get("data") or ""))
-            item_id = f"{mid}/{p.get('partId') or n}"
+    # The read path (`gws_gmail_read.py`, the `adapter:<kind>` component, #67).
+    _attachments = _read_path._attachments
+    _attachment = _read_path._attachment
 
-            def resource_for(column: str | None, item_id: str = item_id, name: str = name) -> Any:
-                return saas_item(
-                    VENDOR,
-                    SERVICE,
-                    self.tenant,
-                    item_id,
-                    "attachment",
-                    owner=self.person.principal_hash,
-                    name=name,
-                    column=column,
-                )
-
-            out.extend(
-                r.file(name, len(data), bytes_fetch(data), resource_for=resource_for, link=None)
-            )
-            r.budget.bytes += len(data)
-        return out
+    def _attachment_pages(self, at: Any, r: ItemReader) -> Iterator[AttachmentPage]:
+        """The mailbox's attachments, a page of messages at a time (#67): the messages with
+        attachments in the look-back, and each one's part structure. `at` is the page token
+        where a pass stopped."""
+        params = {
+            "q": f"newer_than:{self.ctx.settings.lookback_days}d has:attachment",
+            "maxResults": "100",
+        }
+        token = str(at) if isinstance(at, str) and at else None
+        for page, nxt, _ in self.api.pages(f"{GMAIL}/messages", "messages", params, token=token):
+            items: list[Attachment] = []
+            for ref in page:
+                mid = str(ref.get("id") or "")
+                if not mid or sample_point(mid) >= self.sample_percent:
+                    continue
+                try:
+                    msg = self.api.get(f"{GMAIL}/messages/{mid}", {"format": "full"})
+                except Exception as err:
+                    if error_name(err) == "NOT_FOUND":
+                        continue  # deleted since it was listed
+                    raise
+                for n, p in _files(msg):
+                    items.append(
+                        Attachment(
+                            key=attachment_id(mid, n, p),
+                            size=int((p.get("body") or {}).get("size") or 0),
+                            sample=mid,
+                            location=f"{self.id}\n{mid}",
+                            read=functools.partial(self._attachment, mid, n, p, r),
+                        )
+                    )
+            yield items, token
+            token = nxt

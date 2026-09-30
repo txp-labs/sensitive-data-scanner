@@ -6,6 +6,8 @@
   turns what it found into findings; every source's reads go through it, so
   text, attachments and files are read the same way everywhere.
 - `call_gap`: a refused call as a store's gap.
+- `Attachment` and `AttachmentRescans`: attachments and shared files rescanned when a
+  component that read them changed (#67), found by their stable ids, bodies left alone.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import html
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
@@ -29,13 +31,14 @@ from sensitive_data_core.findings import (
     finding_json,
 )
 from sensitive_data_core.index import ObjectPass
-from sensitive_data_core.safety import error_name
+from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.item import ItemResult, scan_item_text
-from sensitive_data_core.scan.objects import ObjectResult, read_object, record
+from sensitive_data_core.scan.objects import ObjectResult, read_object, record, sample_point
 
 from ..clients import Clients
 from ..config import Settings
+from ..resources import sha
 
 
 @dataclass
@@ -148,8 +151,12 @@ class ItemReader:
     store: FindingStore
     budget: Budget
     columnar: bool = field(default_factory=pyarrow_available)
-    # The pass's object index (#67): a drive's files are recorded by their item id.
+    # The pass's object index (#67): a drive's files are recorded by their item id, and
+    # attachments and shared files by their stable ids.
     index: ObjectPass | None = None
+    # Where each item's findings are, by the item's hash (built when an attachment's
+    # findings are first replaced on their own).
+    _parts: dict[str, set[str]] | None = None
 
     def __repr__(self) -> str:
         return f"ItemReader({self.cov.kind!r})"
@@ -252,6 +259,151 @@ class ItemReader:
         self.index.rescanned(findings, why)
         self.index.record_duplicate(key, original, marker=marker, fingerprint=fingerprint)
         return findings
+
+    def place(
+        self, prefix: str, item_id: str, fallback: str, findings: list[dict[str, Any]]
+    ) -> None:
+        """One attachment's findings, read again on its own (#67): they replace what it had,
+        wherever the source keeps them (its message's, issue's or page's location), and go to
+        `fallback` when it had none. The item's other parts are left as they are."""
+        if self._parts is None:
+            self._parts = {}
+            for fid, f in self.store.items.items():
+                if str(f.get("_location", "")).startswith(prefix):
+                    h = str((f.get("resource") or {}).get("itemHash") or "")
+                    self._parts.setdefault(h, set()).add(fid)
+        h = sha(item_id)
+        old = {
+            fid: self.store.items[fid]
+            for fid in self._parts.pop(h, set())
+            if fid in self.store.items
+        }
+        where = min((str(f["_location"]) for f in old.values()), default=fallback)
+        for fid in old:
+            del self.store.items[fid]
+        kept: set[str] = set()
+        for f in findings:
+            prev = old.get(f["id"])
+            if prev:
+                f["firstSeenAt"] = prev.get("firstSeenAt", f["firstSeenAt"])
+            self.store.put(where, f)
+            kept.add(f["id"])
+        if kept:
+            self._parts[h] = kept
+
+
+@dataclass
+class Attachment:
+    """An attachment or shared file met by a rescan pass (#67): its stable id (the object
+    index's key and the finding's item id), what changes when it changes, its size, the id
+    sampling goes by (its message's), where its findings go when it had none, and how it is
+    read (with `ItemReader.file`, recorded under its id)."""
+
+    key: str
+    size: int
+    sample: str
+    location: str
+    read: Callable[[], list[dict[str, Any]]]
+    marker: str | None = None
+
+    def __repr__(self) -> str:
+        return f"Attachment(size={self.size})"
+
+
+# A page of a rescan pass's enumeration: its attachments, and where to start again to meet
+# them (a page token, a URL, a folder and a link: JSON the cursor keeps).
+AttachmentPage = tuple[list[Attachment], Any]
+
+
+class AttachmentRescans:
+    """Attachments and shared files read again when a component that read them changed (#67).
+
+    A message's (issue's, page's) attachments are recorded in the source's object index by
+    their stable ids when read. When the index has rows whose recorded components are stale,
+    or attachments were read before the index knew them (`indexed` False), a pass enumerates
+    the items that have attachments, metadata only, and downloads just the stale ones, within
+    the rescan share (`RESCAN_PERCENT`), resuming next run where the share stopped it. Message
+    bodies are never read again for it. A pass that completes drops the rows of attachments it
+    no longer met (their items are gone, or past the look-back)."""
+
+    def __init__(self, r: ItemReader, cursor: dict[str, Any], *, prefix: str) -> None:
+        self.r = r
+        self.prefix = prefix
+        self.generation = int(cursor.get("indexPass") or 1)
+        self.indexed = bool(cursor.get("indexed"))
+        rs = cursor.get("rescan")
+        self.state: dict[str, Any] | None = dict(rs) if isinstance(rs, dict) else None
+        if r.index is not None:
+            r.index.generation = self.generation
+
+    def __repr__(self) -> str:
+        return f"AttachmentRescans(pending={self.state is not None})"
+
+    def due(self) -> bool:
+        op = self.r.index
+        return op is not None and (
+            self.state is not None or op.needs_enumeration(indexed=self.indexed)
+        )
+
+    def run(
+        self,
+        pages: Callable[[Any], Iterator[AttachmentPage]],
+        *,
+        sample_percent: int,
+    ) -> bool:
+        """One stretch of the pass, from where the last one stopped: True when complete."""
+        op, r = self.r.index, self.r
+        if op is None:
+            return True
+        if self.state is None:
+            # A new pass: a new generation, so a complete one knows what it did not meet.
+            self.generation += 1
+            op.generation = self.generation
+            self.state = {}
+        rs = self.state
+        skip = int(rs.get("skip") or 0)
+        cap = r.settings.max_object_bytes
+        for items, at in pages(rs.get("at")):
+            for i, a in enumerate(items):
+                if i < skip:
+                    continue
+                op.seen(a.key)
+                if sample_point(a.sample) >= sample_percent or a.size <= 0 or a.size > cap:
+                    continue
+                d = op.decide(a.key, changed=False, marker=a.marker)
+                if not (d.read or d.rescan):
+                    continue
+                if not (r.room() and op.rescans.take(a.size, r.budget)):
+                    if d.why is not None:
+                        op.rescans.miss(d.why)
+                    rs.clear()
+                    rs.update(at=at, skip=i)
+                    return False
+                try:
+                    findings = a.read()
+                except Exception as err:  # one attachment must not stop the pass
+                    op.record(a.key, marker=a.marker, unreadable=True)
+                    r.cov.unreadable += 1
+                    log_event("item.unreadable", error=error_name(err))
+                    continue
+                op.rescanned(findings, d.why)
+                r.place(self.prefix, a.key, a.location, findings)
+            skip = 0
+        op.complete()
+        self.state, self.indexed = None, True
+        return True
+
+    def save(self, cursor: dict[str, Any]) -> None:
+        """What the next run needs: the generation, whether every attachment has a row, and a
+        pass in progress."""
+        if self.r.index is None:
+            return
+        cursor["indexPass"] = self.generation
+        cursor["indexed"] = self.indexed
+        if self.state is not None:
+            cursor["rescan"] = self.state
+        else:
+            cursor.pop("rescan", None)
 
 
 def bytes_fetch(data: bytes) -> Callable[[int, int], bytes]:

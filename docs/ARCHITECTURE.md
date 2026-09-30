@@ -623,7 +623,9 @@ The index is bounded:
 
 The index records S3 (and Glue tables and directory buckets), Azure Blob
 Storage and Files, Cloud Storage, OneDrive, SharePoint and Drive files,
-CodeCommit files (by blob) and ECR layers (by digest).
+CodeCommit files (by blob), ECR layers (by digest), and SaaS attachments and
+shared files by their stable ids: Exchange Online and Gmail attachments, Slack
+channel files, and Jira and Confluence attachments.
 
 ### How rescans are chosen
 
@@ -703,6 +705,21 @@ so it is spread over runs and never a spike.
   When the index has stale rows, or the drive was read before the index knew
   it, a pass over every item runs after the feed, reading only the stale ones
   within the cap. The pass resumes next run where the cap stopped it.
+- **SaaS attachments and files** (Exchange Online and Gmail attachments,
+  Slack channel files, Jira and Confluence attachments). Each is recorded by
+  its stable id when its message, issue or page is read. When the index has
+  stale rows, or attachments were read before the index knew them, a pass
+  after the source's own:
+  - lists the items that have attachments, metadata only (`hasAttachments`,
+    `has:attachment`, `files.list`, `attachments IS NOT EMPTY`,
+    `type = attachment`);
+  - downloads only the stale ones within the cap, replacing just their
+    findings;
+  - resumes next run where the cap stopped it, and drops, once complete, the
+    rows of attachments it no longer met.
+  Message bodies and issue and page text are never read again for a rescan.
+  For these sources `adapter:<kind>` is the attachment read path
+  (`<name>_read.py`); how bodies are read is part of the rest.
 - **CodeCommit and ECR:**
   - A new head reads only the files whose blob changed.
   - A newer image reads only the layers it has not read, since a layer's

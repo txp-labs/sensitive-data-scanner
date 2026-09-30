@@ -126,6 +126,7 @@ SLACK_METHODS = frozenset(
         "conversations.list",
         "conversations.history",
         "conversations.replies",
+        "files.list",  # a channel's files, for rescans (#67): `files:read`
         "discovery.conversations.list",
         "discovery.conversations.history",
     }
