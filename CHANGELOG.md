@@ -633,6 +633,28 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
 
 ### Fixed
+- **RDS and Aurora snapshot export was always denied**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
+  account). `PassTheExportRoleOnly` allowed `iam:PassRole` on the export role
+  only when `iam:PassedToService` was `export.rds.amazonaws.com`, the export
+  role's trust principal. `rds:StartExportTask` evaluates the pass for RDS,
+  so every export failed with "no identity-based policy allows the
+  iam:PassRole action" and Aurora was never read. The condition is now
+  `StringEquals` on `rds.amazonaws.com` or `export.rds.amazonaws.com`,
+  still on the export role alone. The identical-permissions snapshot
+  (`tests/fixtures/scanner_role_statements.json`) changes with it,
+  deliberately.
+- **Log groups under a customer managed key**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). CloudWatch Logs decrypts a group's events with
+  the caller's credentials, and the role's `kms:Decrypt` had no
+  `logs.<region>.amazonaws.com` ViaService: 93 decrypts were denied in the
+  real run. `AllowKmsDecrypt` now includes it. A KMS denial on a log group is
+  now recorded as a gap (`kmsDenied`, reason `kms_access`), never as a clean
+  read.
+- **`parameter-store` had no `atRestEncryption`**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). The store now says its weakest parameter's
+  encryption. A `String` or `StringList` parameter, and its findings, are
+  `none` (they were `unknown`). A `SecureString` goes by its KMS key.
 - **Large stores starved when many stores share a run**
   ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
   account). Each of about 750 sources got an even share of what was left,

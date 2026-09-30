@@ -795,7 +795,7 @@ Where each store's value comes from:
 | Store | From |
 |---|---|
 | S3 object (and Glue tables, Firehose destinations, exported caches) | The object's own `x-amz-server-side-encryption` header, from the GET that read it: `AES256` is `service_managed`; `aws:kms` and `aws:kms:dsse` go by the key; no header is an object stored without encryption, `none`, whatever the bucket's default is now. The run summary gives the bucket's default (`GetBucketEncryption`) |
-| CloudWatch Logs | The group's `kmsKeyId`, else `service_managed` (every group is encrypted) |
+| CloudWatch Logs | The group's `kmsKeyId`, else `service_managed` (every group is encrypted). A group whose customer managed key the scanner may not use is a gap: `kmsDenied`, reason `kms_access` (#94) |
 | DynamoDB (and its exports) | The table's `SSEDescription`: none is the AWS owned key; `KMS` goes by the key |
 | RDS and Aurora (export and Data API) | The cluster's or instance's `StorageEncrypted` and `KmsKeyId`, not the export's |
 | Redshift | A cluster's `Encrypted` and `KmsKeyId`; a Serverless namespace's `kmsKeyId` (`AWS_OWNED_KMS_KEY` is `service_managed`) |
@@ -803,7 +803,7 @@ Where each store's value comes from:
 | EBS | The volume's (or, for a snapshot whose volume is gone, the snapshot's) `Encrypted` and `KmsKeyId` |
 | Kinesis | `DescribeStreamSummary`'s `EncryptionType` and `KeyId` |
 | SQS | `KmsMasterKeyId`, or `SqsManagedSseEnabled` (`service_managed`); neither is `none` |
-| Parameter Store | Per parameter: a `SecureString`'s `KeyId` (`alias/aws/ssm` by default); a `String` or `StringList` is `unknown` (AWS documents no key for them) |
+| Parameter Store | Per parameter: a `SecureString`'s `KeyId` (`alias/aws/ssm` by default); a `String` or `StringList` is `none` (only a `SecureString`'s value is encrypted with KMS). The store's own (the run summary's `parameter-store`) is its weakest parameter's, the scanner's own configuration left out: `none` when it holds any `String` or `StringList`, with a key hash only when every parameter is under one key (#94) |
 | Secrets Manager | Per secret: its `KmsKeyId`, else `aws/secretsmanager` (`service_managed`) |
 | Timestream, Keyspaces | The database's `KmsKeyId`; the table's `encryptionSpecification` |
 | Azure Blob Storage and ADLS Gen2 (1.6) | The blob's encryption scope (from the listing), else its container's default scope, else the account's encryption: `Microsoft.Storage` is `service_managed`; `Microsoft.Keyvault` is `customer_managed_key`, hashed from the key's versionless identifier in lower case (`https://<vault>.vault.azure.net/keys/<name>`). Azure Storage always encrypts, so never `none`. The run summary gives the container's default |

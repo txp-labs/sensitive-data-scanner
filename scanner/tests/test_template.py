@@ -171,8 +171,9 @@ def test_every_allow_is_a_read_or_an_aimed_write() -> None:
                 "PushFindings": s["Resource"] == {"Ref": "FindingsEventBusArn"},
                 "StartExports": all("snapshot:" in str(r) for r in s["Resource"]),
                 "PassTheExportRoleOnly": s["Resource"] == {"Fn::GetAtt": ["RdsExportRole", "Arn"]}
+                # RDS only: StartExportTask evaluates `rds.amazonaws.com` (#94).
                 and s["Condition"]["StringEquals"]["iam:PassedToService"]
-                == "export.rds.amazonaws.com",
+                == ["rds.amazonaws.com", "export.rds.amazonaws.com"],
                 "GrantOnTheExportKeyOnlyThroughRds": s["Resource"] == {"Ref": "RdsExportKmsKeyArn"}
                 and "rds." in str(s["Condition"]["StringEquals"]["kms:ViaService"])
                 and s["Condition"]["Bool"]["kms:GrantIsForAWSResource"] == "true",

@@ -235,7 +235,7 @@ SHARED_READ: tuple[str, ...] = (
 PLUMBING: dict[str, frozenset[str]] = {
     f"{_AWS}/base.py": frozenset({"Context"}),
     f"{_AWS}/encryption.py": frozenset(
-        {"KeyClassifier", "classifier", "log_group_facts", "s3_object_facts"}
+        {"KeyClassifier", "classifier", "log_group_facts", "s3_object_facts", "weakest"}
     ),
     f"{_AWS}/exports.py": frozenset(
         {"ExportQuota", "delete_prefix", "drop_other_passes", "due", "list_keys"}
@@ -425,7 +425,9 @@ def uncovered(root: Path) -> list[str]:
         elif "ObjectPass(" in f.read_text(encoding="utf-8") and not _split(f):
             out.append(f"{rel} (records objects in the index: its read path needs a {READ_SUFFIX})")
     shared = {h: set().union(*(b for _, b in entries)) for h, entries in _shared_read().items()}
-    reads = sorted({e for files in read.values() for e in files if "::" not in e and _in_sources(e)})
+    reads = sorted(
+        {e for files in read.values() for e in files if "::" not in e and _in_sources(e)}
+    )
     for rel in reads:
         for helper, name in sorted(helper_imports(root, rel)):
             if name not in shared.get(helper, set()) and name not in PLUMBING.get(helper, ()):

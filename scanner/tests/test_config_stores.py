@@ -109,6 +109,35 @@ def test_parameters_are_read_decrypted_and_named(env: Env) -> None:
     assert "names" not in st
 
 
+def test_parameter_store_says_its_at_rest_encryption(env: Env) -> None:
+    """#94: the real run had no `atRestEncryption` on `parameter-store`. A SecureString is
+    under its KMS key; a String or StringList is `none`, and so is the store that holds one."""
+    s = stubs(env, "ssm")
+    ssm_estate(s["ssm"])
+    get(s["ssm"], ["/app/db-host", "/app/owner-ssn", "/app/payment", "/app/regions"])
+    doc = env.run(
+        config(s3_targets=[], discover=frozenset({"ssm"}), deny=store_rules("ssm:/prod/*"))
+    )
+    assert doc is not None
+    valid(doc)
+    at_rest = {f["resource"]["store"]: f["atRestEncryption"] for f in doc["findings"]}
+    assert at_rest == {"/app/owner-ssn": "none", "/app/payment": "service_managed"}
+    assert stores(doc)["ssm"]["atRestEncryption"] == "none"
+
+
+def test_a_parameter_store_of_secure_strings_only_is_under_kms(env: Env) -> None:
+    secure = {k: v for k, v in PARAMS.items() if v[0] == "SecureString"}
+    s = stubs(env, "ssm")
+    ssm_estate(s["ssm"], secure)
+    get(s["ssm"], sorted(secure), params=secure)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"ssm"})))
+    assert doc is not None
+    valid(doc)
+    st = stores(doc)["ssm"]
+    assert st["atRestEncryption"] == "service_managed"  # alias/aws/ssm, the default
+    assert "atRestKeyHash" not in st
+
+
 def test_without_decrypt_secure_strings_are_counted_not_read(env: Env) -> None:
     s = stubs(env, "ssm")
     ssm_estate(s["ssm"])
