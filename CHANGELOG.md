@@ -678,6 +678,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   With `partition`, the read is still a `Query`.
 
 ### Changed
+- **SaaS attachments and files are rescanned when their reader changes**
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements): Exchange Online and Gmail
+  attachments, Slack channel files, and Jira and Confluence attachments are
+  recorded in their source's object index by stable ids. When a component
+  that read one changes (a reader, the spec), a pass lists the items with
+  attachments, metadata only, and downloads just the stale ones within
+  `RESCAN_PERCENT`, marking their findings `rescanReason`. Message bodies and
+  issue and page text are not read again. Teams file attachments are
+  SharePoint and OneDrive files, rescanned there. Slack calls `files.list`
+  (`files:read`, already granted) for it.
 - **A copy in another store of the same account is read once** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
   each AWS account, Azure subscription and Google Cloud project keeps a shared
   fingerprint table beside the object indexes (`fp-<hash>/`, HMACs only,

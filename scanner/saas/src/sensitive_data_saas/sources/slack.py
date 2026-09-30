@@ -16,6 +16,12 @@ text and its legacy attachments' text are read together. At most
 `MESSAGES_MAX_PER_CHANNEL` messages a channel a run; the next run goes on
 below where this one stopped.
 
+**Files are rescanned** (#67): each file read is recorded in the channel's
+object index by its file id. When a reader that read one changed, a pass lists
+the channel's files (`files.list`, `files:read`, within `LOOKBACK_DAYS`) and
+downloads only the stale ones, within `RESCAN_PERCENT`. Messages are not read
+again. Files met through the Discovery API are read with their messages only.
+
 **Direct and group messages** (`slack_dm`, opt-in, one store per organization):
 only the **Discovery API** reads them, on **Enterprise Grid**, with an
 org-level app Slack has approved for `discovery:read`
@@ -31,7 +37,9 @@ Management, `SLACK_EKM_KEY_ID` makes findings `customer_managed_key`, hashed.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,14 +47,24 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, Link
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.objects import sample_point
 
 from ..resources import saas_item, store_fields, tenant_hash
 from ..slack import Slack
-from .base import Context, ItemReader, call_gap, vendor_facts
+from . import slack_read as _read_path
+from .base import (
+    Attachment,
+    AttachmentPage,
+    AttachmentRescans,
+    Context,
+    ItemReader,
+    call_gap,
+    vendor_facts,
+)
+from .slack_read import VENDOR
 
-VENDOR = "slack"
 _TEAM = "slack.team"
 NOT_MEMBER = frozenset({"not_in_channel"})
 SLACK_DENIED = frozenset(
@@ -217,41 +235,8 @@ class _Messages:
                 findings.extend(self.file(f, r, channel=channel, container=container, link=link))
         r.store.replace_location(location, findings)
 
-    def file(
-        self, f: dict[str, Any], r: ItemReader, *, channel: str, container: str, link: str | None
-    ) -> list[dict[str, Any]]:
-        fid = str(f.get("id") or "")
-        url = str(f.get("url_private_download") or f.get("url_private") or "")
-        if f.get("mode") in ("tombstone", "hidden_by_limit") or not fid:
-            return []
-        if f.get("is_external") or urllib.parse.urlsplit(url).hostname != "files.slack.com":
-            r.skip("linked_item")
-            return []
-        name = str(f.get("name") or "file")
-        size = int(f.get("size") or 0)
-
-        def fetch(start: int, end: int) -> bytes:
-            return self.api.download(url, start, end)
-
-        def resource_for(column: str | None) -> dict[str, Any]:
-            return saas_item(
-                VENDOR,
-                self.service,
-                self.tenant,
-                fid,
-                "attachment",
-                container=container,
-                channel=channel,
-                name=name,
-                column=column,
-            )
-
-        try:
-            return r.file(name, size, fetch, resource_for=resource_for, link=link)
-        except Exception as err:  # one file must not stop the message
-            r.cov.unreadable += 1
-            log_event("item.unreadable", source=self.target, error=error_name(err))
-            return []
+    # The read path (`slack_read.py`, the `adapter:<kind>` component, #67).
+    file = _read_path.file
 
     def failed(self, err: BaseException, cov: Coverage) -> str | None:
         gap = gap_of(err)
@@ -307,6 +292,7 @@ class ChannelAdapter:
 class ChannelSource(_Messages):
     kind = "slack_channel"
     service = "channel"
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
         self, ctx: Context, channel: Channel, store_name: str, sample_percent: int
@@ -330,8 +316,16 @@ class ChannelSource(_Messages):
         s = self.ctx.settings
         cov = Coverage(self.kind, self.target, sample_percent=self.sample_percent)
         r = ItemReader(detector, s, cov, now.isoformat(), dict(self.facts or {}), store, budget)
+        op = r.index = ObjectPass(
+            self.indexes, self.id, self.kind, columnar=r.columnar, budget=budget
+        )
+        rescans = AttachmentRescans(r, cursor, prefix=f"{self.id}\n")
         floor = (now - _dt.timedelta(days=s.lookback_days)).timestamp()
-        entry = dict(cursor) if cursor else {"mark": f"{floor:.6f}"}
+        mine = ("indexPass", "indexed", "rescan", "full")
+        entry = {k: v for k, v in cursor.items() if k not in mine}
+        # The first read of the channel reads every message in the look-back, and its files.
+        first = not entry or bool(cursor.get("full"))
+        entry = entry or {"mark": f"{floor:.6f}"}
         note: str | None = None
         done = False
         try:
@@ -345,12 +339,62 @@ class ChannelSource(_Messages):
                 link=channel_link(self.team, self.channel.channel_id),
                 threads=True,
             )
+            if done and first and op.index is not None:
+                rescans.indexed = True
+            if done and rescans.due():
+                # Then the files a changed component read, within the share (#67).
+                rescans.run(
+                    lambda at: self._file_pages(at, floor, r), sample_percent=self.sample_percent
+                )
         except Exception as err:  # recorded by name on the source
             note = self.failed(err, cov)
         cov.pass_complete = done and cov.error is None
         if not done and cov.error is None:
             cov.backlog = True
-        return SourceRun(cov, entry, note=note)
+        out = dict(entry)
+        if first and not done:
+            out["full"] = True
+        rescans.save(out)
+        op.settle(cov)
+        return SourceRun(cov, out, note=note)
+
+    def _file_pages(self, at: Any, floor: float, r: ItemReader) -> Iterator[AttachmentPage]:
+        """The channel's files in the look-back (#67), a page at a time; `at` is the cursor of
+        the page where a pass stopped."""
+        channel = self.channel.channel_id
+        link = channel_link(self.team, channel)
+        params = {"channel": channel, "ts_from": f"{floor:.0f}", "limit": "200"}
+        cursor = str(at) if isinstance(at, str) and at else None
+        for page, nxt, _ in self.api.pages("files.list", "files", params, cursor=cursor):
+            items: list[Attachment] = []
+            for f in page:
+                fid = str(f.get("id") or "")
+                url = str(f.get("url_private_download") or f.get("url_private") or "")
+                if (
+                    not fid
+                    or f.get("mode") in ("tombstone", "hidden_by_limit")
+                    or f.get("is_external")
+                    or urllib.parse.urlsplit(url).hostname != "files.slack.com"
+                ):
+                    continue
+                items.append(
+                    Attachment(
+                        key=fid,
+                        size=int(f.get("size") or 0),
+                        sample=fid,
+                        location=f"{self.id}\n{channel}/{fid}",
+                        read=functools.partial(
+                            self.file,
+                            f,
+                            r,
+                            channel=channel,
+                            container=self.channel.name,
+                            link=link,
+                        ),
+                    )
+                )
+            yield items, cursor
+            cursor = nxt
 
 
 class DiscoveryAdapter:
