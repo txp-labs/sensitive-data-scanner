@@ -810,6 +810,14 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `README.md` rewritten to say what the scanner does, accurately: a capability
+  matrix by platform (read by default, opt-in, reported as a gap), what it
+  detects, scanner, vendor or both, how it stays safe, efficiency, how to
+  deploy, and which paths have run in a real account; `docs/README.md` indexes
+  the docs. The platform docs' store tables are brought in line with the code
+  (the run summary's reasons, RDS, OpenSearch, DynamoDB, Neptune Analytics,
+  EventBridge, MQ, KMS; the Microsoft 365 mail scope check, Slack hosts and
+  limits, vendor modes; MongoDB's databases; Cosmos DB vCore, AlloyDB).
 - `docs/ARCHITECTURE.md`: How rescans are chosen gains its worked examples (the
   SharePoint reader changed, a new class added, the PDF reader added), and
   event-driven scan-on-write is named as out of scope (a later phase);

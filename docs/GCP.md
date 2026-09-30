@@ -274,7 +274,8 @@ For a customer who wants dead-letter topics read:
   each secret is read (`versions/latest:access`) and reported like Secrets
   Manager on AWS: **counts only**, `field: value`, no offsets, and never the
   value. A secret whose latest version is disabled or destroyed is counted
-  (`itemTypes: Disabled`), not read.
+  (`itemTypes: Disabled`), not read. A value that is not text is counted as
+  `binary`, not read.
 - **Encryption.** A secret replicated under Cloud KMS keys is
   `customer_managed_key` (hashed from its first key); otherwise
   `service_managed`.
@@ -287,7 +288,8 @@ For a customer who wants dead-letter topics read:
   gives each cluster's key and instances. A Cloud SQL database is a store,
   `instance/database`; an AlloyDB cluster is one store, whose databases are
   listed by SQL once connected (AlloyDB has no API that lists them). System
-  databases are not stores. A stopped instance is `paused`.
+  databases are not stores. A stopped Cloud SQL instance, or an AlloyDB
+  cluster with no instance ready, is `paused`.
 - **Reading is opt-in** (`GCP_DB_READ`: `all`, or kinds such as
   `postgresql,alloydb`). Each database needs an IAM database user for the
   service account first, created by you. Until then every run would add a
@@ -331,7 +333,8 @@ For a customer who wants dead-letter topics read:
   - `access_denied`: no IAM database user yet, `cloudsql.instances.login` (or
     `alloydb.users.login`) missing, or a login the database refused.
   - `no_read_path`: Cloud SQL for SQL Server, which has no IAM database
-    authentication, and an instance with the IAM authentication flag off.
+    authentication, an instance with the IAM authentication flag off, and an
+    AlloyDB cluster with no instances.
   - `driver_missing`, `no_grant`, as for the databases runner.
 - **Encryption.** The instance's or cluster's Cloud KMS key is
   `customer_managed_key` (hashed); otherwise `service_managed`.
@@ -421,7 +424,7 @@ masked.
 | `GCP_ORGANIZATION` | | Discover every project under this organization (its number) |
 | `GCP_FOLDERS` | | Or under these folders (numbers, comma-separated) |
 | `GCP_PROJECTS` | | Or these projects (ids, comma-separated) |
-| `DISCOVER` | every kind read by default | Kinds to discover, comma-separated, or `all` |
+| `DISCOVER` | every kind (opt-in kinds are listed and reported until their setting is on) | Kinds to discover, comma-separated, or `all` |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | | The core's rules: `gcs:prod-*`, `tag:scan=false` (a store's tags are its labels) |
 | `DISCOVER_SAMPLING` | | The core's per-store sampling: `[{"match": "tag:env=prod", "samplePercent": 25}]` |
 | `SAMPLE_PERCENT` | 100 | The share of objects read, by a stable hash of the name |
@@ -434,7 +437,7 @@ masked.
 | `LOGGING_LOOKBACK_DAYS`, `LOGGING_MAX_ENTRIES_PER_LOG`, `LOGGING_MAX_LOGS` | 1, 500, 200 | Cloud Logging: the window sampled, entries per log, logs per project |
 | `LOGGING_PRIVATE_READ` | off | `on` also reads Data Access audit logs (needs Private Logs Viewer) |
 | `SECRET_MANAGER_READ` | off | `on` reads Secret Manager secrets' latest versions, reported as counts only |
-| `GCP_DB_READ` | off | The database kinds read: `all`, or `cloudsql_postgresql`, `cloudsql_mysql`, `alloydb` (or `postgresql`, `mysql`, `alloy`) |
+| `GCP_DB_READ` | off | The database kinds read: `all`, or `cloudsql_postgresql`, `cloudsql_mysql`, `alloydb` (or `postgresql`, `mysql`, `alloy`). `cloudsql_sqlserver` is accepted and stays `no_read_path` |
 | `GCP_DB_PRINCIPAL` | | The service account's email; its IAM database users are logged in as. Required to read |
 | `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's; Spanner too |
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
