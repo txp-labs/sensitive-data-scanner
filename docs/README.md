@@ -32,6 +32,12 @@ detects, how it stays safe, and how proven each path is.
 | [scanner/README.md](../scanner/README.md) | The Python packages, the Presidio recognizers, and development |
 | [BENCHMARK.md](BENCHMARK.md) | The accuracy benchmark: a made-up, labeled corpus, precision and recall per class and confidence, the baseline CI holds, and the false-positive sources it found |
 
+## Security
+
+| Document | What it covers |
+|---|---|
+| [THREAT-MODEL.md](THREAT-MODEL.md) | Assets, trust boundaries, attackers, STRIDE per boundary, mitigations mapped to the code and tests that hold them, and the residual risks |
+
 ## Contributing and security
 
 - [CONTRIBUTING.md](../CONTRIBUTING.md): issues are welcome; outside pull

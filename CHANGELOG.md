@@ -955,6 +955,18 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- **`docs/THREAT-MODEL.md`** ([#76](https://github.com/txp-labs/sensitive-data-scanner/issues/76)). It covers:
+  - the assets;
+  - four trust boundaries: the object and the runner, the runner and the
+    customer's account, Mermera's ingest, and GitHub releases;
+  - four attackers: a malicious file, a compromised release, a curious
+    operator and a tenant-crossing attacker;
+  - STRIDE per boundary, each mitigation named by the code that does it and
+    the test that holds it;
+  - the rules Mermera's ingest must keep: the tenant comes from the key or
+    the EventBridge envelope, never from the body;
+  - the residual risks: unsigned releases, GHCR hosting, no replay nonce, the
+    ingest's rules outside this repository, and findings as a map.
 - Rescans ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 1, 7 and 8): `docs/ARCHITECTURE.md` says
   why the one-time `unindexed` read after an upgrade is kept (within 25% of
   the budget; it is how objects read before the index get the improved
