@@ -315,7 +315,9 @@ def test_the_aws_run_keeps_an_index_beside_its_state(env: Env) -> None:
     salt = state["indexSalt"]
     listed = env.clients.s3.list_objects_v2(Bucket=RESULTS, Prefix="state/index/")
     names = sorted(o["Key"] for o in listed.get("Contents", []))
-    assert names and all(n.startswith("state/index/src-") for n in names)
+    # The bucket's index, and the account's shared fingerprint table (#67).
+    assert names and all(n.startswith(("state/index/src-", "state/index/fp-")) for n in names)
+    assert any(n.startswith("state/index/fp-") for n in names)
     indexes = Indexes(S3Backend(RESULTS, "state/index/", env.clients.s3), salt)
     idx = indexes.open("s3:example-connect-data/")
     assert idx.rows == 3

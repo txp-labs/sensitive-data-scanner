@@ -262,6 +262,8 @@ def _scan(
     for source in sources:
         if hasattr(source, "indexes"):
             source.indexes = indexes
+            if indexes is not None:
+                indexes.register(source.id)
     modes = dict(settings.modes)
     # #55: a vendor in `vendor` mode is read by its importer only: its stores are the
     # importer's (`vendor_mode`) or what it does not cover (`vendor_not_covered`).

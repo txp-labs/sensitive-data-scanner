@@ -432,6 +432,8 @@ def with_indexes(sources: list[Any], indexes: Indexes | None) -> None:
     for source in sources:
         if hasattr(source, "indexes"):
             source.indexes = indexes
+            if indexes is not None:
+                indexes.register(source.id)
 
 
 def build_sources(config: Config, clients: Clients, region: str) -> list[Any]:
@@ -489,6 +491,8 @@ def run_scan(
         cursors: dict[str, Any] = dict(state.get("cursors") or {})
         sources = rotate(sources, stores, state.get("rotation"))
         indexes = indexes_for(config, clients, state)
+        if indexes is not None:
+            indexes.scope = account  # copies across this account's stores are read once (#67)
         with_indexes(sources, indexes)
         mode = config.scan_mode
         importer = (

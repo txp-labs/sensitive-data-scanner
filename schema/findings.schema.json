@@ -575,7 +575,7 @@
           "$ref": "#/$defs/rescanReason"
         },
         "duplicateOf": {
-          "description": "(1.10, #67) This object was not read: its bytes are those of another object of the same store (the same content fingerprint), read with the same components. This finding is that object's finding, as this object's own; duplicateOf is the other's finding id.",
+          "description": "(1.10, #67) This object was not read: its bytes are those of another object of the same store, or (1.11) of another store of the same account, subscription or project (the same content fingerprint), read with the same components. This finding is that object's finding, as this object's own; duplicateOf is the other's finding id.",
           "type": "string",
           "pattern": "^[0-9a-f]{32}$"
         },
@@ -664,6 +664,11 @@
           "description": "(1.10) Rescans still owed: objects whose recorded components are stale, and objects with no row met and not read. Later runs read them within their capped share.",
           "type": "integer",
           "minimum": 0
+        },
+        "duplicatesAcross": {
+          "description": "(1.11, #67) Of duplicates, the objects whose bytes are an object of another store of the same account, subscription or project (found by the account's shared fingerprint table); their findings' duplicateOf names that store's finding.",
+          "type": "integer",
+          "minimum": 1
         },
         "relisted": {
           "description": "(1.11, #67) How this kind of store is listed changed (its listing:<kind> component): this run listed it again from the start and read only what changed at the source or needed a rescan.",

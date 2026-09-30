@@ -206,6 +206,7 @@ class FilesSource:
             generation=generation,
             columnar=self.columnar,
             budget=budget,
+            scope=f"azure:{self.t.rid.subscription}" if self.t.rid.subscription else None,
         )
         for path, size, when in files:
             if after is not None and path <= after:

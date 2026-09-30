@@ -603,6 +603,15 @@ bumps the minor version. Spec changes are listed under **Spec**.
     SharePoint and Drive files.
 
 ### Changed
+- **A copy in another store of the same account is read once** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
+  each AWS account, Azure subscription and Google Cloud project keeps a shared
+  fingerprint table beside the object indexes (`fp-<hash>/`, HMACs only,
+  sharded, bounded by `INDEX_MAX_OBJECTS`). An object whose bytes are those of
+  an object in another store of the run, under a name of the same kind and
+  read with current components, is not read: its findings are that object's,
+  with `duplicateOf` naming the other store's finding. Coverage counts them in
+  `duplicatesAcross`. The original is always checked in its own index, so a
+  changed or deleted original is no original.
 - **An adapter's version is its read path; a listing change re-lists, never
   re-reads** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
   - Every adapter whose objects the index records (S3, Glue tables and
@@ -745,7 +754,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
-  `relisted` in coverage.
+  `relisted` and `duplicatesAcross` in coverage; `duplicateOf` may name a
+  finding of another store of the same account, subscription or project.
 - Version **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on

@@ -550,6 +550,9 @@ class Row:
     flags: int = 0
     duplicate_of: bytes | None = None
     generation: int = 0
+    # The index (`src-<hash>`) of another source this row was found in (a copy across
+    # stores, #67); None for the source's own.
+    source: str | None = None
 
     def __repr__(self) -> str:
         return f"Row(flags={self.flags}, generation={self.generation})"
@@ -868,6 +871,182 @@ class ObjectIndex:
         self._shards = {}
 
 
+# ------------------------------------------------------------------ one account's fingerprints
+
+
+_FP_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS fps(f BLOB NOT NULL, s TEXT NOT NULL, k BLOB NOT NULL,"
+    " PRIMARY KEY (f, s, k)) WITHOUT ROWID",
+)
+
+
+class Fingerprints:
+    """One account's (subscription's, project's) content fingerprints across its sources
+    (#67): for each fingerprint HMAC, the sources' indexes (`src-<hash>`) and key HMACs of
+    the objects read with those bytes, so a copy in another bucket of the same account is
+    read once.
+
+    A pointer, never a verdict: a copy's original is looked up in its own source's index,
+    which says whether it still has those bytes and was read with what this build would read
+    it with. A pointer whose row is gone or changed is dropped when met. Nothing here is a
+    value: HMACs under the index salt and the indexes' own hashed names.
+
+    Stored like an index (`<name>/meta.json`, `<name>/<shard>.db.gz`), sharded by the
+    fingerprint's first byte, so a lookup loads one shard. Bounded by `max_rows`."""
+
+    def __init__(
+        self,
+        backend: IndexBackend,
+        name: str,
+        hasher: Hasher,
+        *,
+        max_rows: int = DEFAULT_MAX_ROWS,
+        shard_rows: int = SHARD_ROWS,
+    ) -> None:
+        self.backend = backend
+        self.name = name
+        self.hasher = hasher
+        self.max_rows = max_rows
+        self.shard_rows = shard_rows
+        self._shards: dict[int, _Shard] = {}
+        self._meta: dict[str, Any] | None = None
+
+    def __repr__(self) -> str:
+        return f"Fingerprints(rows={self.rows})"
+
+    def _load_meta(self) -> dict[str, Any]:
+        if self._meta is None:
+            meta: dict[str, Any] | None = None
+            try:
+                raw = self.backend.get_bytes(f"{self.name}/meta.json")
+                meta = json.loads(raw) if raw else None
+            except Exception as err:  # unreadable: a fresh table
+                log_event("index.failed", error=error_name(err))
+            if (
+                isinstance(meta, dict)
+                and meta.get("version") == FORMAT_VERSION
+                and meta.get("check") == self.hasher.check
+                and isinstance(meta.get("shards"), int)
+                and 1 <= meta["shards"] <= MAX_SHARDS
+            ):
+                self._meta = {"shards": int(meta["shards"]), "rows": int(meta.get("rows") or 0)}
+            else:
+                self._meta = {"shards": 1, "rows": 0, "reset": True}
+        return self._meta
+
+    @property
+    def rows(self) -> int:
+        return int(self._load_meta()["rows"])
+
+    def _shard(self, i: int) -> _Shard:
+        got = self._shards.get(i)
+        if got is not None:
+            return got
+        conn = sqlite3.connect(":memory:")
+        if not self._load_meta().get("reset"):
+            try:
+                data = self.backend.get_bytes(f"{self.name}/{i:03d}.db.gz")
+                if data:
+                    conn.deserialize(gzip.decompress(data))
+            except Exception as err:  # a damaged shard: its pointers are gone
+                log_event("index.failed", error=error_name(err))
+                conn.close()
+                conn = sqlite3.connect(":memory:")
+        for stmt in _FP_SCHEMA:
+            conn.execute(stmt)
+        self._shards[i] = _Shard(conn)
+        return self._shards[i]
+
+    def _of(self, f: bytes) -> _Shard:
+        return self._shard(f[0] % int(self._load_meta()["shards"]))
+
+    def add(self, f: bytes, source: str, k: bytes) -> None:
+        """An object read with bytes `f`: source `source`'s key `k`."""
+        shard = self._of(f)
+        if shard.conn.execute(
+            "SELECT 1 FROM fps WHERE f = ? AND s = ? AND k = ?", (f, source, k)
+        ).fetchone():
+            return
+        if self.rows >= self.max_rows:
+            return
+        shard.conn.execute("INSERT INTO fps(f, s, k) VALUES (?, ?, ?)", (f, source, k))
+        shard.dirty = True
+        self._load_meta()["rows"] += 1
+
+    def remove(self, f: bytes, source: str, k: bytes) -> None:
+        shard = self._of(f)
+        cur = shard.conn.execute("DELETE FROM fps WHERE f = ? AND s = ? AND k = ?", (f, source, k))
+        if cur.rowcount:
+            shard.dirty = True
+            self._load_meta()["rows"] -= cur.rowcount
+
+    def find(self, f: bytes) -> list[tuple[str, bytes]]:
+        """The objects read with bytes `f`, as (source index, key hash), in a stable order."""
+        return [
+            (str(s), bytes(k))
+            for s, k in self._of(f).conn.execute(
+                "SELECT s, k FROM fps WHERE f = ? ORDER BY s, k", (f,)
+            )
+        ]
+
+    def save(self) -> int:
+        meta = self._load_meta()
+        if not (meta.get("reset") or any(sh.dirty for sh in self._shards.values())):
+            return 0
+        want = int(meta["shards"])
+        while want < MAX_SHARDS and meta["rows"] > want * self.shard_rows:
+            want *= 2
+        if want != meta["shards"]:
+            rows = [
+                r
+                for i in range(int(meta["shards"]))
+                for r in self._shard(i).conn.execute("SELECT f, s, k FROM fps")
+            ]
+            self.close()
+            meta["shards"] = want
+            for i in range(want):
+                self._new(i)
+            for f, src, k in rows:
+                self._shards[f[0] % want].conn.execute(
+                    "INSERT OR IGNORE INTO fps(f, s, k) VALUES (?, ?, ?)", (f, src, k)
+                )
+            meta["reset"] = True  # every shard is written anew
+        written = 0
+        for i in range(int(meta["shards"])):
+            sh = self._shards.get(i)
+            if sh is None and meta.get("reset"):
+                sh = self._shard(i)
+            if sh is None or not (sh.dirty or meta.get("reset")):
+                continue
+            sh.conn.commit()
+            sh.conn.execute("VACUUM")
+            data = gzip.compress(sh.conn.serialize(), compresslevel=6, mtime=0)
+            self.backend.put_bytes(f"{self.name}/{i:03d}.db.gz", data)
+            written += len(data)
+            sh.dirty = False
+        body = {
+            "version": FORMAT_VERSION,
+            "check": self.hasher.check,
+            "shards": meta["shards"],
+            "rows": meta["rows"],
+        }
+        self.backend.put_bytes(f"{self.name}/meta.json", json.dumps(body).encode())
+        meta.pop("reset", None)
+        return written
+
+    def _new(self, i: int) -> _Shard:
+        conn = sqlite3.connect(":memory:")
+        for stmt in _FP_SCHEMA:
+            conn.execute(stmt)
+        self._shards[i] = _Shard(conn)
+        return self._shards[i]
+
+    def close(self) -> None:
+        for sh in self._shards.values():
+            sh.conn.close()
+        self._shards = {}
+
+
 # ------------------------------------------------------------------ one run's indexes
 
 
@@ -883,6 +1062,7 @@ class Indexes:
         max_rows: int = DEFAULT_MAX_ROWS,
         shard_rows: int = SHARD_ROWS,
         rescan_percent: int = DEFAULT_RESCAN_PERCENT,
+        scope: str | None = None,
     ) -> None:
         self.backend = backend
         self.salt = salt
@@ -891,29 +1071,58 @@ class Indexes:
         self.max_rows = max_rows
         self.shard_rows = shard_rows
         self.rescan_percent = rescan_percent
+        # The account a run's sources share, for copies across them (#67); a source in a
+        # run over several subscriptions or projects names its own (`ObjectPass(scope=)`).
+        self.scope = scope
         self._open: dict[str, ObjectIndex] = {}
+        self._fingerprints: dict[str, Fingerprints] = {}
+        # The sources of this run (their indexes' names): an original in another source
+        # counts only when that source's findings are in this run's store.
+        self.present: set[str] = set()
 
     def __repr__(self) -> str:
         return f"Indexes({len(self._open)})"
 
+    def name_of(self, source_id: str) -> str:
+        """A source's index name (`src-<hash>`): its id, never in the clear."""
+        return "src-" + self.hasher.name(source_id)
+
+    def register(self, source_id: str) -> None:
+        """A source this run reads, whose findings the run's store holds."""
+        self.present.add(self.name_of(source_id))
+
     def open(self, source_id: str) -> ObjectIndex:
-        got = self._open.get(source_id)
+        return self.open_named(self.name_of(source_id))
+
+    def open_named(self, name: str) -> ObjectIndex:
+        got = self._open.get(name)
         if got is None:
             got = ObjectIndex(
-                self.backend,
-                "src-" + self.hasher.name(source_id),
-                self.hasher,
-                max_rows=self.max_rows,
-                shard_rows=self.shard_rows,
+                self.backend, name, self.hasher, max_rows=self.max_rows, shard_rows=self.shard_rows
             )
-            self._open[source_id] = got
+            self._open[name] = got
+        return got
+
+    def fingerprints(self, scope: str) -> Fingerprints:
+        """The shared fingerprint table of one account, subscription or project (#67)."""
+        name = "fp-" + self.hasher.name(scope)
+        got = self._fingerprints.get(name)
+        if got is None:
+            got = Fingerprints(
+                self.backend, name, self.hasher, max_rows=self.max_rows, shard_rows=self.shard_rows
+            )
+            self._fingerprints[name] = got
         return got
 
     def save(self) -> int:
         """Write every index this run changed; a failure is logged, never raised (the next
         run then decides from what was saved before). Returns how many failed."""
         failed = 0
-        for index in self._open.values():
+        stores: list[ObjectIndex | Fingerprints] = [
+            *self._open.values(),
+            *self._fingerprints.values(),
+        ]
+        for index in stores:
             try:
                 written = index.save()
                 if written:
@@ -924,6 +1133,7 @@ class Indexes:
             finally:
                 index.close()
         self._open = {}
+        self._fingerprints = {}
         return failed
 
 
@@ -1189,16 +1399,23 @@ class ObjectPass:
         generation: int = 0,
         columnar: bool = False,
         budget: Budget | None = None,
+        scope: str | None = None,
     ) -> None:
         self.indexes = indexes
         self.adapter = adapter
         self.generation = generation
         self.columnar = columnar
         self.index = indexes.open(source_id) if indexes is not None else None
+        # The account (subscription, project) whose sources share one fingerprint table: a
+        # copy in another of its stores is read once (#67). None: this source only.
+        where = scope if scope is not None else (indexes.scope if indexes is not None else None)
+        self.shared = indexes.fingerprints(where) if indexes is not None and where else None
         percent = indexes.rescan_percent if indexes is not None else 0
         self.rescans = Rescans(budget, percent if self.index is not None else 0)
         self.duplicates = 0
+        self.duplicates_across = 0  # of them, copies of another source's object
         self._locations: dict[bytes, str] | None = None
+        self._across_locations: dict[tuple[str, bytes], str] | None = None
 
     @property
     def bootstrap(self) -> bool:
@@ -1275,12 +1492,36 @@ class ObjectPass:
         none, or it is stale (both are then read)."""
         if self.index is None or fingerprint is None:
             return None
+        kind = name_kind(name if name is not None else key)
         row = self.index.by_fingerprint(fingerprint, exclude=key)
-        if row is None or row.profile.name_kind != name_kind(name if name is not None else key):
+        if row is not None and self._current(row, kind):
+            return row
+        return self._across(fingerprint, kind)
+
+    def _current(self, row: Row, kind: str) -> bool:
+        """An original: under a name of the same kind, read with what this build reads with."""
+        if row.profile.name_kind != kind or row.flags & (DUPLICATE | UNREADABLE):
+            return False
+        return stale(row.profile, row.flags, self.manifest, columnar=self.columnar) is None
+
+    def _across(self, fingerprint: str, kind: str) -> Row | None:
+        """An original in another source of the same account (#67): found by the shared
+        fingerprint table, and checked in that source's own index (the same bytes still, the
+        same rules as within a source). Only a source of this run counts: its findings are
+        in this run's store. A pointer whose row is gone or changed is dropped."""
+        if self.shared is None or self.indexes is None or self.index is None:
             return None
-        if stale(row.profile, row.flags, self.manifest, columnar=self.columnar) is not None:
-            return None
-        return row
+        f = self.index.hasher.fingerprint(fingerprint)
+        for src, k in self.shared.find(f):
+            if src == self.index.name or src not in self.indexes.present:
+                continue
+            row = self.indexes.open_named(src).get_hashed(k)
+            if row is None or row.fingerprint != f:
+                self.shared.remove(f, src, k)
+                continue
+            if self._current(row, kind):
+                return replace(row, source=src)
+        return None
 
     def copy_findings(
         self,
@@ -1296,7 +1537,11 @@ class ObjectPass:
         """The original's findings as this object's own: its resource, id and link, its own
         storage facts, and `duplicateOf` naming the original's finding (1.10). `prefix` is the
         source's location prefix (`<source id>\n`); the original is found by its key hash."""
-        location = self._location_of(original.key, store, prefix)
+        location = (
+            self._location_of(original.key, store, prefix)
+            if original.source is None
+            else self._location_across(original.source, original.key, store)
+        )
         if location is None:
             return []  # the original holds nothing
         out = []
@@ -1336,6 +1581,20 @@ class ObjectPass:
             }
         return self._locations.get(k)
 
+    def _location_across(self, source: str, k: bytes, store: Any) -> str | None:
+        """The finding store's location of another source's object (`source`: its index
+        name), found by hashing the store's locations: `<source id>\n<key>`."""
+        if self.indexes is None:
+            return None
+        cache = self._across_locations
+        if cache is None or (source, k) not in cache:
+            cache = self._across_locations = {}
+            for loc in store.locations(""):
+                sid, sep, rest = loc.partition("\n")
+                if sep:
+                    cache[(self.indexes.name_of(sid), self.indexes.hasher.key(rest))] = loc
+        return cache.get((source, k))
+
     def record_duplicate(
         self, key: str, original: Row, *, marker: str | None, fingerprint: str | None
     ) -> None:
@@ -1352,6 +1611,8 @@ class ObjectPass:
             generation=self.generation,
         )
         self.duplicates += 1
+        if original.source is not None:
+            self.duplicates_across += 1
 
     def rescanned(self, findings: list[dict[str, Any]] | None, why: Stale | None) -> None:
         """An object read for `why` (a rescan): its findings say so (`rescanReason`, 1.10),
@@ -1387,6 +1648,7 @@ class ObjectPass:
             return
         cov.indexed = (cov.indexed or 0) + self.index.rows
         cov.duplicates += self.duplicates
+        cov.duplicates_across += self.duplicates_across
         for reason, n in self.rescans.done.items():
             cov.rescanned[reason] = cov.rescanned.get(reason, 0) + n
         # Rows still stale, and candidates with no row met and not read.
@@ -1428,15 +1690,19 @@ class ObjectPass:
             unread=unread,
             name_kind=name_kind(name if name is not None else key),
         )
-        self.index.put(
+        # The listing's fingerprint, else one of the bytes when the whole object was read.
+        fp = fingerprint or (got.fingerprint if got is not None else None)
+        stored = self.index.put(
             key,
             profile=profile,
             marker=marker,
-            # The listing's fingerprint, else one of the bytes when the whole object was read.
-            fingerprint=fingerprint or (got.fingerprint if got is not None else None),
+            fingerprint=fp,
             flags=flags | flags_for(got, unreadable=unreadable, text=text),
             generation=self.generation,
         )
+        if stored and fp is not None and not unreadable and self.shared is not None:
+            h = self.index.hasher
+            self.shared.add(h.fingerprint(fp), self.index.name, h.key(key))
 
     def carry(self, store: Any, location: str, pass_id: str) -> None:
         """A pass that skips an unchanged, current location (a file whose blob is the same,

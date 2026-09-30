@@ -664,8 +664,9 @@ backlog is still reported.
   - A head or image already read in full is read again only for the files or
     layers a changed component could read differently.
 
-**Duplicates.** An object whose bytes are those of an object this source
-already read is not read again
+**Duplicates.** An object whose bytes are those of an object already read, in
+this source or in another store of the same account, subscription or project,
+is not read again
 ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
 
 - **The bytes** are known by their content fingerprint. Before a read, it is
@@ -685,8 +686,27 @@ already read is not read again
   id and link, and its own storage encryption (for S3, from one `HeadObject`,
   no bytes). Each names the original's finding in `duplicateOf`.
 - **Coverage** counts copies in `duplicates`, and their rows are flagged.
-- **Scope:** duplicates are found within one source (a bucket, a container, a
-  drive). Across stores they are not (an open question on #67).
+- **Scope:** within one source (a bucket, a container, a drive) first, then
+  across the stores of one AWS account, Azure subscription or Google Cloud
+  project, through that account's **shared fingerprint table**:
+  - For each content fingerprint, the table holds the index name
+    (`src-<hash>`) and key hash of each object read with those bytes. It lives
+    beside the indexes (`fp-<hash of the account>/`), sharded by the
+    fingerprint's first byte, so a lookup loads one shard. It holds HMACs under
+    the index salt only, and is bounded by `INDEX_MAX_OBJECTS`. The no-leak
+    suite searches it with the indexes.
+  - It is a pointer, never a verdict. The original is checked in its own
+    source's index by the same rules as within a source: the same bytes still,
+    a name of the same kind, and read with what this build reads with. A
+    pointer whose row is gone or changed is dropped when met.
+  - The original's store must be one this run reads, since its findings are in
+    this run's store. A copy of an object in a store the run does not read is
+    read.
+  - The copy's findings name the other store's finding in `duplicateOf`, and
+    coverage counts them in `duplicatesAcross` as well as `duplicates`.
+  - This applies to S3 (buckets, directory buckets and Glue locations) across
+    one account, to Blob Storage and Files across one subscription, and to
+    Cloud Storage across one project. SaaS drives dedupe within a drive only.
 
 **Tables.** A database table is skipped when the engine's change marker is
 the one recorded at its last read. PostgreSQL's `pg_stat_user_tables`,

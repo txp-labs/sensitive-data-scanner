@@ -266,6 +266,7 @@ class BlobSource:
             generation=generation,
             columnar=self.columnar,
             budget=budget,
+            scope=f"azure:{self.t.rid.subscription}" if self.t.rid.subscription else None,
         )
         try:
             pages = self.container.list_blobs(
