@@ -33,6 +33,8 @@ and its own image (`docker build --target saas`).
   `throttled` (the vendor kept asking to wait; the next run goes on),
   `not_a_member` (a Slack channel the app's bot was not invited to),
   `read_not_configured` (an opt-in kind not named in `DISCOVER`),
+  `vendor_mode` or `vendor_not_covered` (a vendor in `vendor` mode),
+  `unsupported` (a kind no source reads),
   `deferred` (the budget), `denied` or `not_allowed` (your rules).
 - **Budgets and sampling**: the core's run budget (items, bytes, time) shared
   among the stores, a cap per mailbox, drive and channel per run, a stable
@@ -122,8 +124,8 @@ it:
 
 | Answer | Then |
 |---|---|
-| Exchange refuses (`ErrorAccessDenied`) | the grant is scoped: mail in scope is read |
-| A message is returned | every mailbox is `unscoped_grant`, and none is read |
+| Exchange refuses (`ErrorAccessDenied`, or HTTP 403) | the grant is scoped: mail in scope is read |
+| Graph answers the request (even with no message, for an empty mailbox) | every mailbox is `unscoped_grant`, and none is read |
 | No setting, or any other answer (the mailbox does not exist) | every mailbox is `scope_unverified`, and none is read |
 
 **What is read.** Each folder's messages, from a delta query
@@ -352,7 +354,8 @@ organizations on request). Its token (`xoxp-…`, in `SLACK_TOKEN_FILE`) reads
 `discovery.conversations.list` (`only_im`, `only_mpim`) and
 `discovery.conversations.history`. Until you have it, name `slack_dm` in
 `DISCOVER` only to see it as `access_denied` (`not_allowed_token_type` or
-`missing_scope`); left out, it is `read_not_configured`.
+`missing_scope`); left out, it is `read_not_configured`. Direct messages are
+read without their thread replies.
 
 ### What is read
 
@@ -363,8 +366,9 @@ seen), a message's legacy attachments' text, and its files, downloaded from
 `files.slack.com` with ranged GETs and read by the core's readers (a file
 hosted elsewhere is `linked_item`). At most `MESSAGES_MAX_PER_CHANNEL`
 messages a channel a run; the next run goes on below where this one stopped.
-Slack's `Retry-After` is honored. The token is sent to `slack.com` and
-`files.slack.com` only.
+Slack's `Retry-After` is honored. Archived channels are listed and read
+too. The token is sent to `slack.com`, `files.slack.com` and (for the audit
+importer) `api.slack.com` only.
 
 Slack encrypts its data with its own keys (`service_managed`); with **Slack
 Enterprise Key Management**, set `SLACK_EKM_KEY_ID` to your key's id: findings
@@ -438,6 +442,13 @@ of its own to import: `scanner` only. An importer keeps a vendor's detector
 type, counts and ids (hashed); never a title, a description, a subject, a
 file name, an address or matched text.
 
+A mode applies only to a vendor that is configured: Purview needs the
+`M365_*` settings, Workspace DLP the `GWS_*` settings, and Slack DLP both
+`SLACK_TOKEN_FILE` and `SLACK_AUDIT_TOKEN_FILE` (a Slack mode other than
+`scanner` without the audit token is a configuration error). `SCAN_MODE` never
+applies to Atlassian; `SCAN_MODE_ATLASSIAN` set to anything but `scanner` is a
+configuration error.
+
 | Vendor | What is imported | Grant | Links to the scanner's | Limits |
 |---|---|---|---|---|
 | Microsoft Purview DLP (`vendor:purview`) | Graph security alerts from DLP (`GET /security/alerts_v2`, `serviceSource eq 'microsoftDataLossPrevention'`), updated since the last run | `SecurityAlert.Read.All` (application) | no: an alert names no Graph item, and no kind of data | `alerts_only`, `policy_matches_only`, `item_not_linkable`, `no_data_class` |
@@ -471,7 +482,7 @@ A SaaS document says `"platform": "saas"` and names its `site`
 | Field | What |
 |---|---|
 | `vendor` | `m365`, `google_workspace`, `slack`, `atlassian` |
-| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive`; `channel`, `dm`; `jira`, `confluence` |
+| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive`, `chat` (Workspace DLP only); `channel`, `dm`; Purview findings say `exchange` or `sharepoint` only, so a OneDrive or Teams alert says `sharepoint`; `jira`, `confluence` |
 | `tenantHash` | SHA-256 of the tenant id, lower-case (Microsoft 365: the Entra tenant id; Google Workspace: the customer id; Slack: the Enterprise Grid organization's id, else the workspace's; Atlassian: the site's cloud id) |
 | `ownerHash` | SHA-256 of the mailbox's, OneDrive's or chat's owner (principal name, lower-case) |
 | `container`, `channel` | The site and library, or the team and channel, masked like keys |
@@ -494,13 +505,13 @@ by its id.
 | Setting | Default | What |
 |---|---|---|
 | `SCANNER_SITE` | (required) | A name for this deployment, as findings name it |
-| `DISCOVER` | every default kind of each configured vendor | Kinds to read, comma-separated, or `all` (with the opt-in kinds) |
+| `DISCOVER` | every default kind of each configured vendor | Kinds to read, comma-separated, `all` (with the opt-in kinds), or `off`. Naming a kind of a vendor that is not configured is a configuration error (`discover_vendor_not_configured`) |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | | The core's rules by kind and store name: `m365_sharepoint:HR*`, `m365_mail:user-0123456789abcdef` |
 | `DISCOVER_SAMPLING` | | The core's per-store sampling |
 | `SAMPLE_PERCENT` | 100 | The share of items read, by a stable hash of the item's id |
 | `MAIL_MAX_MESSAGES_PER_MAILBOX` | 500 | Messages read per mailbox per run |
 | `FILES_MAX_PER_DRIVE` | 200 | Files read per library or OneDrive per run |
-| `MESSAGES_MAX_PER_CHANNEL` | 1000 | Teams messages read per team, or per person's chats, per run |
+| `MESSAGES_MAX_PER_CHANNEL` | 1000 | Messages read per run: per Teams team or person's chats, per Slack channel, and across Slack's direct messages |
 | `LOOKBACK_DAYS` | 90 | How far back the first run reads mail and messages |
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES`, `COLUMNAR_MAX_ROWS` | 20 MiB, 100 MiB, 10000 | Per file or attachment |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |

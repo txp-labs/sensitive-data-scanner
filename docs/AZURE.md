@@ -249,7 +249,8 @@ cannot narrow is refused rather than read.
   the core's allow list of MongoDB reads, then `$sample` runs per collection.
   Add the identity as the cluster's Microsoft Entra ID user with a read-only
   role (`readAnyDatabase`). A cluster without Entra authentication is
-  `no_read_path`.
+  `no_read_path`, a stopped one `paused`, and an image without the MongoDB
+  driver reports `driver_missing`.
 - **Encryption.** An account's or cluster's key in Key Vault is
   `customer_managed_key` (hashed). Otherwise Cosmos DB's own keys apply,
   which is `service_managed`.
@@ -263,7 +264,7 @@ cannot narrow is refused rather than read.
   only**: up to 32 messages at the front, which stay visible to their
   consumers with their dequeue count unchanged. The scanner never gets,
   dequeues, updates or deletes a message. A base64-encoded message is decoded
-  when that gives text. A finding is `field: messages`, `readBy: peek`.
+  when that gives text; one that gives no text is counted as `binary`. A finding is `field: messages`, `readBy: peek`.
 - **Encryption.** A table or queue is under the account's key when the
   account's encryption covers that service with it (`keyType: Account`), and
   otherwise under a key Microsoft manages.
@@ -377,7 +378,7 @@ to be masked.
 | `SCANNER_SITE` | (required) | A name for this deployment, as findings name it (the management group, say): lower case, digits, `.`, `_`, `-` |
 | `AZURE_MANAGEMENT_GROUP` | | Discover every subscription under this management group |
 | `AZURE_SUBSCRIPTIONS` | | Or these subscriptions, comma-separated ids |
-| `DISCOVER` | every kind read by default | Kinds to discover, comma-separated, or `all` |
+| `DISCOVER` | every kind (opt-in kinds are listed and reported until their setting is on) | Kinds to discover, comma-separated, or `all` |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | | The core's rules: `azure_blob:prodlake/*`, `tag:scan=false`, `blob:tag:team=data*` (tags are the storage account's) |
 | `DISCOVER_SAMPLING` | | The core's per-store sampling: `[{"match": "tag:env=prod", "samplePercent": 25}]` |
 | `SAMPLE_PERCENT` | 100 | The share of blobs read, by a stable hash of the name |
