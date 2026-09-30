@@ -27,9 +27,12 @@ Parameters:
     Description: SELF from the management account; DELEGATED_ADMIN from a delegated administrator.
   FindingsEventBusArn:
     Type: String
+    AllowedPattern: "^arn:aws[a-z-]*:events:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:event-bus/[A-Za-z0-9._/-]{1,256}$"
+    ConstraintDescription: an EventBridge event bus ARN
     Description: >-
       The central sink (the existing consumer-owned bus). Its policy must allow
-      events:PutEvents with aws:PrincipalOrgID set to this organization.
+      events:PutEvents with aws:PrincipalOrgID set to this organization. The
+      scanners in every region send to the bus's own region, from its ARN.
   ImageUri:
     Type: String
     Default: ""

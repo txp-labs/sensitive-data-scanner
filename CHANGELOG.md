@@ -650,6 +650,36 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
 
 ### Fixed
+- **Cold start past Lambda's 10 s init limit**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
+  account: `INIT_REPORT ... Status: timeout`).
+  - The handler module now imports nothing heavy: about 0.03 s.
+  - The runner, Presidio and spaCy, the AWS SDK, pyarrow and pypdf are
+    imported on the first invoke.
+  - Every image and the Lambda zip now carry bytecode
+    (`scripts/slim-site-packages.sh`, `unchecked-hash`). Without it, every
+    cold start on Lambda's read-only file system compiled them from source:
+    about 10 s, against 0.4 s with bytecode.
+  - `tests/test_handler.py` holds the handler's import under 3 s with no
+    heavy module loaded. CI measures both imports in the image.
+- **Invoking by hand started extra runs**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). A synchronous CLI invoke longer than the
+  CLI's read timeout is retried by the CLI. The docs now say to invoke with
+  `--invocation-type Event`, and describe what concurrent invokes do
+  ([Invoking a run](docs/ARCHITECTURE.md#invoking-a-run)). A second invoke
+  while a run holds the lock returns `locked` and writes nothing (tested). A
+  run now releases the lock only while it is still its own (new log event
+  `run.lock_lost`).
+- **Findings pushed from another region than the bus's**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94)). The EventBridge client was made in the
+  scanner's own region, so a scanner outside the bus's region could not
+  `PutEvents` to it.
+  - The client is now made in the region from the bus's ARN.
+  - `FINDINGS_EVENT_BUS_ARN` must be an EventBridge bus ARN; the
+    configuration and the templates' `FindingsEventBusArn` (new
+    `AllowedPattern`) refuse anything else.
+  - The IAM statement (`PushFindings`) already names the exact bus ARN, so it
+    allows a bus in any region.
 - **RDS and Aurora snapshot export was always denied**
   ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
   account). `PassTheExportRoleOnly` allowed `iam:PassRole` on the export role
@@ -1151,6 +1181,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- **DynamoDB reserved words, audited**
+  ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), from Stugum's find: DynamoDB refuses a bare
+  reserved word in an expression, and a stubbed client does not). Every
+  Projection, KeyCondition and Filter expression the scanner builds from
+  configured attribute names or paths, or from a table's key names, already
+  names each attribute through `ExpressionAttributeNames`; no code changed.
+  `tests/test_dynamodb_reserved_words.py` holds it:
+  - moto reads a table keyed on `name` and `data` with `plan`, `status`,
+    `trigger` and `steps[].observedDtmf` configured, as a Query with a
+    sort-key prefix, a filtered Scan, a sampled Scan and a projection;
+  - a negative control shows the harness refuses a bare reserved word;
+  - a scan of the source fails on any bare name in a written expression.
+  Planting a bare name in each kind of expression failed five of the tests.
 - **Reader fuzzing** ([#77](https://github.com/txp-labs/sensitive-data-scanner/issues/77)): `tests/test_fuzz_readers.py` holds Hypothesis
   property tests (`hypothesis` joins the dev dependencies).
   - What is fuzzed: `sniff`, `csv_cells`, `scan_item_text` over any text and

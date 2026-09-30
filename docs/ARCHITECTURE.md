@@ -52,7 +52,11 @@ One run:
 
 1. **Lock.** A conditional put of `state/lock.json` (`If-None-Match: *`)
    means one run at a time. A lock older than 20 minutes is stale and is
-   taken over.
+   taken over. A Lambda run ends within 15 minutes, so a live run's lock is
+   never stale. A second invoke while a run holds the lock returns
+   `{"status": "locked"}` and writes nothing. A run releases the lock only
+   while it is still its own (its `runId`); one taken over is left for the
+   run that took it (`run.lock_lost`). See [Invoking a run](#invoking-a-run).
 2. **State.** The run reads each source's cursor and the findings carried
    over from the previous run. With `DISCOVER`, it first lists the stores in
    the account and region ([Discovery](#discovery)).
@@ -120,7 +124,10 @@ One run:
    - The run writes the document to `findings/runs/<runId>.json` and
      `findings/latest.json`, then state for the next run.
    - With `FINDINGS_EVENT_BUS_ARN` set, it also sends the document to that
-     bus as `Findings v1` events (see Delivery).
+     bus as `Findings v1` events (see Delivery). The events client is made
+     in the bus's own region, taken from its ARN (`arn:aws:events:<region>:...`),
+     so a scanner in any region can push to one central bus (#94). A value
+     that is not an EventBridge bus ARN fails the configuration.
    - It then releases the lock.
 
 **Failures.**
@@ -130,6 +137,47 @@ One run:
   other sources still run.
 - A failed run raises `ScanError`, whose message is an error name. Logs are
   JSON lines with fixed event names, and every string in them is masked.
+
+### Invoking a run
+
+The schedule (EventBridge Scheduler) invokes the function asynchronously.
+To start a run by hand, invoke it the same way:
+
+```sh
+aws lambda invoke --function-name <FunctionArn> --invocation-type Event \
+  --cli-binary-format raw-in-base64-out --payload '{}' /dev/null
+```
+
+- **Do not invoke synchronously.** A run takes up to 15 minutes. The AWS CLI
+  retries a synchronous invoke whose response does not come back within its
+  read timeout, and each retry is another invoke. In the first real run
+  (#94) a retry started an extra run.
+- **Concurrent invokes are safe.** A second invoke while a run holds the lock
+  returns `{"status": "locked"}` at once and writes nothing. One that comes
+  after the run has finished is a run of its own. Incremental, it reads only
+  what changed since, so it costs little.
+- **Asynchronous retries.** Lambda retries an asynchronous invoke that fails
+  (a `ScanError`), up to twice. The schedule's own retry policy is 0.
+- **What a run did** is in `findings/latest.json` and the function's log
+  (`run.done`, or `run.locked` for an invoke that found the lock held).
+
+**Cold start.** Lambda gives a function's init 10 seconds. The first real run
+passed it (`INIT_REPORT ... Status: timeout`). Two things caused it:
+- The handler imported the runner, and with it Presidio, spaCy and the AWS
+  SDK.
+- The image carried no bytecode. On Lambda's read-only file system, every
+  cold start compiled them from source. Measured locally, that was about 10 s
+  cold and 0.4 s with bytecode.
+
+Now:
+- The handler module imports nothing heavy (`tests/test_handler.py` holds
+  its import under 3 s and checks that no heavy module is loaded).
+- The runner, the detector, pyarrow and pypdf are imported on the first
+  invoke, which has the function's whole timeout.
+- `scripts/slim-site-packages.sh` byte-compiles every image and the Lambda
+  zip (`unchecked-hash`, so the zip's reproducible timestamps keep the caches
+  valid).
+- CI measures both imports in the image, on a read-only file system.
 
 ### Configuration
 
@@ -1729,6 +1777,20 @@ Stugum's call-test runs for one test:
 | `prompts` | Paths that hold what the IVR said: the prompts |
 | `planted` | Paths that hold test inputs planted on purpose, such as a test script's steps |
 | `orderBy` | The list-element attribute that orders a list (`stepIndex`), for pairing an entry with its prompt. Elements without it, or without `orderBy`, go by position |
+
+**Reserved words.** Any attribute name may be one of DynamoDB's reserved words
+(`status`, `name`, `data`, `plan`, `trigger`, and about 570 more). A key name
+may be one too. The request names every attribute through an
+`ExpressionAttributeNames` placeholder, never bare:
+- the projection's top-level attributes are `#p0`, `#p1`, ...;
+- the partition key is `#pk`, and the sort key in `begins_with` is `#sk`.
+
+A stubbed client accepts a bare reserved word, and DynamoDB refuses it
+(`ValidationException`). So `tests/test_dynamodb_reserved_words.py` reads a
+table whose keys and attributes are reserved words through moto, which parses
+expressions as DynamoDB does, in every shape of read. It also checks the
+source: every literal part of an expression names attributes only as
+placeholders (#94, from Stugum's find).
 
 **Paths.**
 - A `.` goes between map keys: `result.status`.
