@@ -308,6 +308,20 @@ class M365:
                 }
 
             return self._delta(box, path, query, shape)
+        m = re.fullmatch(r"/users/([^/]+)/mailFolders/([^/]+)/messages", path)
+        if m:
+            # A folder's messages with attachments in the look-back, ids only (#67 rescans).
+            box = self.users[m[1]].folders[m[2]]
+            flt = query.get("$filter", "")
+            assert flt.startswith("hasAttachments eq true and receivedDateTime ge ")
+            assert query.get("$select") == "id"
+            floor = flt.rsplit(" ", 1)[1]
+            rows = [
+                {"id": x.id}
+                for x in sorted(box.items, key=lambda x: x.id)
+                if not x.removed and x.attachments and x.received >= floor
+            ]
+            return self._page(rows, path, query, None)
         m = re.fullmatch(r"/users/([^/]+)/messages/([^/]+)/attachments(?:/([^/]+)/\$value)?", path)
         if m:
             msg = next(

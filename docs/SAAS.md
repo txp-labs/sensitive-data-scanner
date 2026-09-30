@@ -51,8 +51,20 @@ and its own image (`docker build --target saas`).
   - A file whose hash (SHA-1, QuickXorHash, `md5Checksum`) is a file already
     read, under a name of the same kind, is not downloaded again. Its findings
     carry `duplicateOf`.
-  - Mail and Slack attachments, Teams messages and Atlassian pages are read
-    when their message or page changes, and are not rescanned otherwise.
+  - **Attachments and shared files are rescanned too**: Exchange Online and
+    Gmail attachments, Slack channel files, and Jira and Confluence
+    attachments. Each is recorded by its stable id (`<message id>/<attachment
+    id>`, `<message id>/<part id>`, the Slack file id, `<issue key or page
+    id>/<attachment id>`). When a component that read one changed, a pass
+    lists the items that have attachments, metadata only, and downloads just
+    the stale ones within `RESCAN_PERCENT`, resuming next run where the share
+    stopped it. A pass that completes drops the rows of attachments it no
+    longer met.
+  - Message bodies, Teams messages, and issue and page text are **not**
+    rescanned. They are read when they change. A Teams file attachment is a
+    SharePoint or OneDrive file, rescanned there by its drive item id. Slack
+    direct messages' files, read through the Discovery API, are read with
+    their messages only.
 
 ## Microsoft 365
 

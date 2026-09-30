@@ -31,6 +31,7 @@ READ_METHODS = frozenset(
         "conversations.list",
         "conversations.history",
         "conversations.replies",
+        "files.list",
         "discovery.conversations.list",
         "discovery.conversations.history",
     }
@@ -152,6 +153,16 @@ class SlackOrg:
             c = self.channels[q["channel"]]
             parent = next(m for m in c.messages if m["ts"] == q["ts"])
             return self._page("messages", [parent, *c.replies.get(q["ts"], [])], q)
+        if name == "files.list":
+            # A channel's files shared since `ts_from` (#67 rescans), from its messages.
+            c = self.channels[q["channel"]]
+            floor = float(q.get("ts_from") or 0)
+            seen: dict[str, dict[str, Any]] = {}
+            for m in c.messages:
+                if float(m["ts"]) >= floor:
+                    for f in m.get("files") or []:
+                        seen.setdefault(str(f["id"]), f)
+            return self._page("files", [seen[k] for k in sorted(seen)], q)
         if name == "discovery.conversations.list":
             if not self.grid:
                 return Resp(200, {"ok": False, "error": "not_allowed_token_type"})

@@ -17,6 +17,12 @@ an attached item or a link to a cloud file as `linked_item`.
 - At most `MAIL_MAX_MESSAGES_PER_MAILBOX` messages a run; the pass resumes at
   the page and message it stopped at, then at the delta link, which returns
   only what changed. A deleted message drops its findings.
+- **Attachments are rescanned** (#67): each is recorded in the mailbox's object
+  index by its stable id (`<message id>/<attachment id>`). When a reader that
+  read one changed, a pass lists the messages with attachments
+  (`hasAttachments eq true`, within `LOOKBACK_DAYS`, ids only) and their
+  attachments' metadata, and downloads only the stale ones, within
+  `RESCAN_PERCENT`. Message bodies are not read again.
 - Sampling is stable, by the message's id (`SAMPLE_PERCENT`).
 - Nothing is marked read, moved or changed: every call is a GET.
 
@@ -28,7 +34,9 @@ Exchange Online mailbox is `not_provisioned`; `scope_unverified` and
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,19 +44,27 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage
+from sensitive_data_core.index import Indexes, ObjectPass
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.objects import sample_point
 
 from ..graph import Graph
 from ..resources import outlook_link, saas_item
-from .base import Context, ItemReader, bytes_fetch, call_gap
+from . import m365_mail_read as _read_path
+from .base import (
+    Attachment,
+    AttachmentPage,
+    AttachmentRescans,
+    Context,
+    ItemReader,
+    call_gap,
+)
 from .m365 import Person, facts_of, fields_of, mail_scope, people, tenant_of
+from .m365_mail_read import ATTACHMENT_FIELDS, FILE_ATTACHMENT, SERVICE
 
 KIND = "m365_mail"
-SERVICE = "exchange"
 MESSAGE_FIELDS = "subject,body,hasAttachments,receivedDateTime"
 PREFER = 'odata.maxpagesize=50, outlook.body-content-type="text"'
-FILE_ATTACHMENT = "#microsoft.graph.fileAttachment"
 
 
 @dataclass
@@ -93,6 +109,7 @@ class MailAdapter:
 
 class MailSource:
     kind = KIND
+    indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(self, ctx: Context, person: Person, store: Store, *, sample_percent: int) -> None:
         self.ctx = ctx
@@ -127,6 +144,13 @@ class MailSource:
         s = self.ctx.settings
         cov = Coverage(KIND, self.target, sample_percent=self.sample_percent)
         r = ItemReader(detector, s, cov, now.isoformat(), dict(self.facts or {}), store, budget)
+        op = r.index = ObjectPass(
+            self.indexes, self.id, self.kind, columnar=r.columnar, budget=budget
+        )
+        rescans = AttachmentRescans(r, cursor, prefix=f"{self.id}\n")
+        # A pass from no delta links reads every message in the look-back: once it completes
+        # with the index on, every attachment has a row (`indexed`).
+        full = bool(cursor.get("full")) or not cursor.get("folders")
         folders_state: dict[str, Any] = dict(cursor.get("folders") or {})
         since = (now - _dt.timedelta(days=s.lookback_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
         read = 0
@@ -143,6 +167,14 @@ class MailSource:
                 if not done:
                     complete = False
                     break
+            if complete and full and op.index is not None:
+                rescans.indexed = True
+            if complete and rescans.due():
+                # Then the attachments a changed component read, within the share (#67).
+                rescans.run(
+                    lambda at: self._attachment_pages(folders, at, since, r),
+                    sample_percent=self.sample_percent,
+                )
         except Exception as err:  # recorded by name on the source
             cov.error = error_name(err)
             gap = call_gap(err)
@@ -156,7 +188,12 @@ class MailSource:
         cov.pass_complete = complete and cov.error is None
         if not complete and cov.error is None:
             cov.backlog = True
-        return SourceRun(cov, {"folders": folders_state}, note=note)
+        out: dict[str, Any] = {"folders": folders_state}
+        if full and not complete:
+            out["full"] = True
+        rescans.save(out)
+        op.settle(cov)
+        return SourceRun(cov, out, note=note)
 
     def _folder(
         self, folder: str, st: dict[str, Any], r: ItemReader, *, read: int, since: str, cap: int
@@ -200,7 +237,7 @@ class MailSource:
         location = f"{self.id}\n{mid}"
         if "@removed" in msg:
             r.store.remove_location(location)
-            return 0
+            return 0  # its attachments' rows go when a rescan pass no longer meets them
         r.cov.listed += 1
         r.cov.eligible += 1
         if sample_point(mid) >= self.sample_percent:
@@ -223,51 +260,56 @@ class MailSource:
         r.store.replace_location(location, findings)
         return 1
 
-    def _attachments(self, mid: str, reader: ItemReader) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        base = f"/users/{self.user_id}/messages/{mid}/attachments"
-        max_bytes = self.ctx.settings.max_object_bytes
-        for page, _, _ in self.graph.pages(base, {"$select": "id,name,size,isInline"}):
-            for att in page:
-                aid = str(att.get("id") or "")
-                name = str(att.get("name") or "attachment")
-                size = int(att.get("size") or 0)
-                if att.get("@odata.type") != FILE_ATTACHMENT:
-                    reader.skip("linked_item")
-                    continue
-                if size > max_bytes:
-                    reader.skip("too_large")
-                    continue
-                try:
-                    data: bytes = self.graph.call(f"{base}/{aid}/$value").content
-                except Exception as err:  # one attachment must not stop the message
-                    reader.cov.unreadable += 1
-                    log_event("item.unreadable", source=self.target, error=error_name(err))
-                    continue
-                item_id = f"{mid}/{aid}"
+    # The read path (`m365_mail_read.py`, the `adapter:<kind>` component, #67).
+    _attachments = _read_path._attachments
+    _attachment = _read_path._attachment
 
-                def resource_for(
-                    column: str | None, item_id: str = item_id, name: str = name
-                ) -> Any:
-                    return saas_item(
-                        "m365",
-                        SERVICE,
-                        self.tenant,
-                        item_id,
-                        "attachment",
-                        owner=self.person.principal_hash,
-                        name=name,
-                        column=column,
-                    )
-
-                out.extend(
-                    reader.file(
-                        name,
-                        len(data),
-                        bytes_fetch(data),
-                        resource_for=resource_for,
-                        link=outlook_link(mid),
-                    )
-                )
-                reader.budget.bytes += len(data)
-        return out
+    def _attachment_pages(
+        self, folders: list[str], at: Any, since: str, r: ItemReader
+    ) -> Iterator[AttachmentPage]:
+        """The mailbox's file attachments, a page of messages at a time (#67): the messages
+        with attachments in the look-back, by id, and their attachments' metadata. `at` is
+        where a pass stopped: a folder and the page it was on."""
+        start = at if isinstance(at, dict) else {}
+        first = str(start.get("folder") or "")
+        for folder in folders:
+            if first and folder < first:
+                continue
+            query = urllib.parse.urlencode(
+                {
+                    "$select": "id",
+                    "$filter": f"hasAttachments eq true and receivedDateTime ge {since}",
+                    "$top": "50",
+                }
+            )
+            url: str | None = (
+                str(start["page"])
+                if folder == first and start.get("page")
+                else f"/users/{self.user_id}/mailFolders/{folder}/messages?{query}"
+            )
+            while url is not None:
+                page = self.graph.get(url)
+                items: list[Attachment] = []
+                for msg in page.get("value") or []:
+                    mid = str(msg.get("id") or "") if isinstance(msg, dict) else ""
+                    if not mid or sample_point(mid) >= self.sample_percent:
+                        continue
+                    for meta, _, _ in self.graph.pages(
+                        f"/users/{self.user_id}/messages/{mid}/attachments",
+                        {"$select": ATTACHMENT_FIELDS},
+                    ):
+                        for att in meta:
+                            if att.get("@odata.type") != FILE_ATTACHMENT or not att.get("id"):
+                                continue
+                            items.append(
+                                Attachment(
+                                    key=f"{mid}/{att['id']}",
+                                    size=int(att.get("size") or 0),
+                                    sample=mid,
+                                    location=f"{self.id}\n{mid}",
+                                    read=functools.partial(self._attachment, mid, att, r),
+                                )
+                            )
+                yield items, {"folder": folder, "page": url}
+                nxt = page.get("@odata.nextLink")
+                url = str(nxt) if nxt else None

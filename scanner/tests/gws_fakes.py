@@ -259,11 +259,13 @@ class Workspace:
         if path == f"{base}/profile":
             return Resp(200, {"emailAddress": who, "historyId": str(self.history_id)})
         if path == f"{base}/messages":
-            days = int(re.fullmatch(r"newer_than:(\d+)d", str(query["q"]))[1])  # type: ignore[index]
+            q = re.fullmatch(r"newer_than:(\d+)d( has:attachment)?", str(query["q"]))
+            assert q is not None
+            days, with_files = int(q[1]), bool(q[2])
             ids = [
                 {"id": x.id}
                 for x in sorted(u.messages.values(), key=lambda x: x.id)
-                if x.days_old <= days
+                if x.days_old <= days and (x.attachments or not with_files)
             ]
             return self._page("messages", ids, query)
         m = re.fullmatch(rf"{base}/messages/([^/]+)", path)

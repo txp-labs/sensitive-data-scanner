@@ -146,6 +146,9 @@ class Site:
             if m[1] in self.forbidden_projects:
                 return Resp(403, {"errorMessages": [f"no access to {m[1]}"]})
             issues = sorted(self.projects[m[1]], key=lambda i: (i.updated, i.key))
+            if "attachments IS NOT EMPTY" in q["jql"]:  # a rescan pass (#67)
+                assert q["jql"].endswith("ORDER BY key ASC") and q["fields"] == "attachment"
+                issues = sorted((i for i in issues if i.attachments), key=lambda i: i.key)
             if m[2]:
                 floor = dt.datetime.strptime(m[2], "%Y-%m-%d %H:%M").replace(tzinfo=dt.UTC)
                 issues = [
@@ -199,6 +202,21 @@ class Site:
                 {"id": f"9{i:04d}", "key": k, "name": k} for i, k in enumerate(sorted(self.spaces))
             ]
             return Resp(200, {"results": rows, "_links": {}})
+        if path == "/wiki/rest/api/content/search" and "type = attachment" in q["cql"]:
+            # A space's attachments, each with its page (#67 rescans).
+            sm = re.fullmatch(r'space = "([^"]+)" and type = attachment', q["cql"])
+            assert sm and q["expand"] == "container,extensions"
+            found: list[dict[str, Any]] = [
+                {
+                    "id": aid,
+                    "title": name,
+                    "extensions": {"fileSize": len(data)},
+                    "container": {"id": pg.id},
+                }
+                for pg in sorted(self.spaces[sm[1]], key=lambda x: x.id)
+                for aid, name, data in pg.attachments
+            ]
+            return Resp(200, {"results": found, "_links": {}})
         if path == "/wiki/rest/api/content/search":
             m = re.match(
                 r'space = "([^"]+)" and type in \(page, blogpost\)'
