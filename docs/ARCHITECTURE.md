@@ -154,6 +154,12 @@ One run:
 | `MSK_RECORDS_PER_PARTITION`, `MSK_MAX_TOPICS`, `MSK_MAX_PARTITIONS` | Records read per partition from its earliest offset, topics per cluster, partitions per topic | 100, 50 and 50 |
 | `MQ_READ`, `MQ_BROKERS` | Browse ActiveMQ queues: a JSON list of `{"broker", "secretArn", "queues"}`, the secret holding a read-only broker user's `username` and `password` | off; none |
 | `MQ_MESSAGES_PER_QUEUE` | Messages browsed per queue | 100 |
+| `ECR_READ` | Sample ECR images' layers ([below](#ecr-sagemaker-and-neptune-analytics)) | off: reported `read_not_configured` |
+| `ECR_MAX_LAYERS`, `ECR_MAX_LAYER_BYTES`, `ECR_MAX_FILES_PER_LAYER` | The latest image's top layers read, bytes downloaded per layer, files read per layer | 5, 256 MiB and 200 |
+| `SAGEMAKER_READ` | Read feature groups' offline stores | off |
+| `NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN`, `NEPTUNE_ANALYTICS_EXPORT_KMS_KEY_ARN` | The role Neptune Analytics assumes to write graph exports, and the customer's key for them. Both are needed to read graphs | none: graphs reported `export_not_configured` |
+| `EVENTBRIDGE_REPLAY`, `EVENTBRIDGE_REPLAY_QUEUE_URL`, `EVENTBRIDGE_REPLAY_QUEUE_ARN` | Read archives by a replay to the scanner's own queue (the template creates it) | off |
+| `EVENTBRIDGE_REPLAY_HOURS`, `EVENTBRIDGE_REPLAY_MAX_EVENTS` | How much of an archive a replay covers (the most recent hours), and events read from it | 24 and 1,000 |
 | `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
 
 #### Configuration beyond 4 KB
@@ -236,6 +242,11 @@ region, and a bucket in another region is left to that region's scanner.
 | `s3express` | `ListDirectoryBuckets` | each directory bucket, by the S3 source, through read-only S3 Express sessions |
 | `msk` | `ListClustersV2` | each topic's partitions sampled from the earliest offset with IAM authentication, never committed, opt-in ([below](#msk-and-amazon-mq)) |
 | `mq` | `ListBrokers`, `DescribeBroker` | an ActiveMQ broker's named queues browsed (never consumed) by a checked read-only user, opt-in; RabbitMQ reported |
+| `ecr` | `DescribeRepositories` | files sampled from the latest image's top layers, opt-in ([below](#ecr-sagemaker-and-neptune-analytics)) |
+| `sagemaker` | `ListFeatureGroups`, `DescribeFeatureGroup`, `ListNotebookInstances` | each feature group's offline store, by the S3 source, opt-in; the rest reported |
+| `neptune-analytics` | `ListGraphs` | each graph by an export to CSV in the results bucket, read by column and deleted |
+| `eventbridge` | `ListArchives`, `DescribeArchive` | reported with size and retention; opt-in, a replay to the scanner's own rule and queue ([below](#eventbridge-archives-and-glacier-vaults)) |
+| `glacier` | `ListVaults` | reported (`archive_retrieval`) |
 
 #### Coverage by store
 
@@ -273,6 +284,12 @@ reason.
 | MSK, provisioned and Serverless | **Opt-in** (`MSK_READ`) | sampled from the earliest offset, IAM authentication, a throwaway group id, never committed | `read_not_configured`, `vpc_only`, `no_read_path` (no IAM authentication), `unsupported` |
 | Amazon MQ for ActiveMQ | **Opt-in** (`MQ_READ`, `MQ_BROKERS`) | named queues browsed over STOMP (`browser:true`) by a checked read-only user | `read_not_configured`, `user_can_write`, `vpc_only` |
 | Amazon MQ for RabbitMQ | Coverage only | | `no_read_path` |
+| ECR images | **Opt-in** (`ECR_READ`) | files sampled from the latest image's top layers | `read_not_configured` |
+| SageMaker Feature Store (offline) | **Opt-in** (`SAGEMAKER_READ`) | its S3 objects, by the S3 source | `read_not_configured`; an online-only group `no_read_path` |
+| SageMaker notebook instances | Coverage only | | `no_read_path` |
+| Neptune Analytics | **Scanned** with the export role and key | export to CSV, read by column, deleted | `export_not_configured`, `export_pending` |
+| EventBridge archives | Coverage only; **opt-in** replay (`EVENTBRIDGE_REPLAY`) | a replay to the scanner's own rule and queue | `read_not_configured` |
+| S3 Glacier vaults | Coverage only | | `archive_retrieval` |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -980,6 +997,82 @@ the broker's KMS key).
   Findings are `store_field` with the broker as `store`, the queue as
   `table`, `field: messages` and `readBy: browse`.
 
+### ECR, SageMaker and Neptune Analytics
+
+**ECR** (`ecr`, `ECR_READ`). Opt-in because a layer is downloaded. For
+each repository (`DescribeRepositories`, with its encryption), the most
+recently pushed image (`DescribeImages`), its manifest (`BatchGetImage`; for a
+multi-platform index, `linux/amd64`, else the first), and its top
+`ECR_MAX_LAYERS` layers, where an application's own files are. Each layer is
+fetched from the URL ECR signs for it (`GetDownloadUrlForLayer`), at most
+`ECR_MAX_LAYER_BYTES`, and read as a stream (gzip or plain tar; a zstd layer
+is counted as an archive, not read): up to `ECR_MAX_FILES_PER_LAYER` regular
+files outside the operating system's own directories (`usr/`, `lib/`,
+`bin/`, ...), each to `MAX_OBJECT_BYTES`, with the kinds S3 skips counted.
+Nothing is extracted to disk. Findings are `store_field` with the
+repository, the layer's digest as `table`, the path as `field`, and `readBy:
+layer_sample`. An image read in full is not read again until a newer push.
+
+**SageMaker** (`sagemaker`, `SAGEMAKER_READ`).
+- A **feature group's offline store** is S3 (Parquet under its resolved URI):
+  it is read there by the S3 source, as a Firehose destination is, and the
+  bucket's own source leaves that prefix to it.
+- The **online store** has no API that lists its records (`GetRecord` needs
+  each record's identifier), so an online-only group is `no_read_path`; the
+  offline store, when there is one, holds the same records' history.
+- A **notebook instance** is `no_read_path`: its ML storage volume lives in
+  SageMaker's own account, where no snapshot or EBS direct read reaches it.
+
+**Neptune Analytics** (`neptune-analytics`). Like RDS, a graph is read by an
+**export**, never by a query: `StartExportTask` to CSV in the results
+bucket's `exports/neptune-graph/`, written by the export role
+(`NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN`, trusted by `neptune-graph.amazonaws.com`)
+and encrypted with the customer's key, within `MAX_EXPORTS_PER_RUN` (shared
+with RDS and DynamoDB) and `EXPORT_MIN_INTERVAL_DAYS`. Later runs wait
+(`GetExportTask`), read each CSV file by column (the openCypher headers name
+the properties), then delete the export. Findings are `store_field` with the
+graph, `nodes` or `edges` as `table`, the property as `field`, and `readBy:
+export`. Queries that write (`WriteDataViaQuery`, `DeleteDataViaQuery`) are
+denied.
+
+### EventBridge archives and Glacier vaults
+
+**EventBridge archives** (`eventbridge`). Every archive is reported with its
+size (`sizeBytes`), its events (`eventCount`) and its retention
+(`retentionDays`), and its encryption. An archive has no read API: its
+events come back only by a replay, and a replay can only go to the bus the
+archive belongs to. So reading is opt-in (`EVENTBRIDGE_REPLAY`), and aimed
+at the scanner's own resources only:
+
+1. On the archive's bus, a rule of the scanner's own for that archive,
+   `sensitive-data-scanner-replay-<hash>`, matches only events the scanner
+   replays from it (`replay-name` starting `sds-<hash>-`) and targets the
+   scanner's own queue, `sensitive-data-scanner-replay` (created by the
+   template, SQS-managed encryption, a policy that lets only those rules
+   send to it).
+2. `StartReplay` of the last `EVENTBRIDGE_REPLAY_HOURS`, with `FilterArns`
+   naming only that rule: **none of the bus's other rules, the customer's,
+   receives a replayed event.**
+3. Later runs wait (`DescribeReplay`), then receive the replayed events from
+   the queue (up to `EVENTBRIDGE_REPLAY_MAX_EVENTS`), read each event's
+   `detail`, and delete them from that queue: the scanner's own.
+4. When the queue is empty, the rule's target and the rule are removed.
+
+The role may put, target and delete only rules named
+`sensitive-data-scanner-replay-*`, start and describe only replays named
+`sds-*`, and delete messages only from its own queue (each with a matching
+Deny for everything else). A replay counts as an export against
+`MAX_EXPORTS_PER_RUN` and `EXPORT_MIN_INTERVAL_DAYS`. Findings are
+`store_field` with the archive as `store`, `field: events` and `readBy:
+replay`.
+
+**S3 Glacier vaults** (`glacier`, the legacy vault API). `ListVaults`: each
+vault is reported with its archives (`archives`) and size as
+`archive_retrieval`. Reading an archive needs a retrieval job, which takes
+hours and is billed; the scanner starts none, and the role denies
+`glacier:InitiateJob`. (Objects in the S3 Glacier storage classes are S3,
+read by the S3 source where they can be; archived ones are skipped by S3.)
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -1199,6 +1292,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:DescribeStreamSummary` (the stream's encryption), `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
 | `stepfunctions`, `lambda`, `xray`, `codecommit` | `states:ListStateMachines`, `states:DescribeStateMachine`, `states:ListTagsForResource`, `states:ListExecutions`, `states:GetExecutionHistory`, `lambda:ListFunctions`, `lambda:ListTags`, `lambda:GetFunctionConfiguration`, `xray:GetEncryptionConfig`, `xray:GetTraceSummaries`, `xray:BatchGetTraces`, `codecommit:ListRepositories`, `codecommit:GetRepository`, `codecommit:ListTagsForResource`, `codecommit:GetBranch`, `codecommit:GetFolder`, `codecommit:GetFile` | `*` |
 | `msk`, `mq` | `kafka:ListClustersV2`, `mq:ListBrokers`, `mq:DescribeBroker`; with `MskRead`, `kafka:GetBootstrapBrokers`, `kafka-cluster:Connect`, `kafka-cluster:DescribeCluster`, `kafka-cluster:DescribeTopic`, `kafka-cluster:ReadData`, and `kafka-cluster:DescribeGroup` on the scanner's own `sensitive-data-scanner-*` groups only; with `MqRead`, `mq:DescribeUser`, `mq:DescribeConfigurationRevision` and `secretsmanager:GetSecretValue` on the named secrets | `*`; this account's clusters, topics and groups; the ARNs named |
+| `ecr`, `sagemaker`, `neptune-analytics`, `eventbridge`, `glacier` | `ecr:DescribeRepositories`, `ecr:ListTagsForResource`, `sagemaker:ListFeatureGroups`, `sagemaker:DescribeFeatureGroup`, `sagemaker:ListNotebookInstances`, `sagemaker:ListTags`, `neptune-graph:ListGraphs`, `neptune-graph:ListTagsForResource`, `events:ListArchives`, `events:DescribeArchive`, `glacier:ListVaults`, `glacier:ListTagsForVault`; with `EcrRead`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`; with the graph export key, `neptune-graph:StartExportTask`, `neptune-graph:GetExportTask`, `iam:PassRole` on its role, `kms:Decrypt` through S3; with `EventBridgeReplay`, `events:PutRule`, `events:PutTargets`, `events:RemoveTargets`, `events:DeleteRule` on its own rules, `events:StartReplay`, `events:DescribeReplay` on its own replays, `sqs:ReceiveMessage`, `sqs:DeleteMessage` on its own queue | `*`; the ARNs named |
 | `s3express` | `s3express:ListAllMyDirectoryBuckets`; `s3express:CreateSession` with `s3express:SessionMode` `ReadOnly` only | `*`; this account's directory buckets |
 | `ssm`, `secretsmanager` | `ssm:DescribeParameters`, `ssm:GetParameters` (on this account's parameters), `secretsmanager:ListSecrets`; `ssm:ListTagsForResource` only with tag rules; with `SsmDecrypt`, `kms:Decrypt` through SSM; with `SecretsRead`, `secretsmanager:GetSecretValue` on this account's secrets and `kms:Decrypt` through Secrets Manager | `*`; the ARNs named |
 | `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
@@ -1340,6 +1434,15 @@ several things:
 | | `kafka-cluster:DescribeGroup` | this account's `group/*/*/sensitive-data-scanner-*` | only with `MskRead`; the scanner's own throwaway groups |
 | Amazon MQ reads (opt-in) | `mq:DescribeUser`, `mq:DescribeConfigurationRevision` | this account's brokers and configurations | only with `MqRead` and `MqSecretArns` |
 | | `secretsmanager:GetSecretValue` | the named secrets (`MqSecretArns`) | the read-only broker users |
+| Images, ML, graphs and archives (discovery) | `ecr:DescribeRepositories`, `ecr:ListTagsForResource`, `sagemaker:ListFeatureGroups`, `sagemaker:DescribeFeatureGroup`, `sagemaker:ListNotebookInstances`, `sagemaker:ListTags`, `neptune-graph:ListGraphs`, `neptune-graph:ListTagsForResource`, `events:ListArchives`, `events:DescribeArchive`, `glacier:ListVaults`, `glacier:ListTagsForVault` | `*` | A feature group's offline store is read with the S3 statements |
+| ECR layers (opt-in) | `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` | this account's `repository/*` in the region | only with `EcrRead` |
+| Neptune Analytics export | `neptune-graph:StartExportTask` | this account's `graph/*` | only with `NeptuneAnalyticsExportKmsKeyArn` |
+| | `neptune-graph:GetExportTask` | this account's `export-task/*` | |
+| | `iam:PassRole` | the graph export role only | `iam:PassedToService` is `neptune-graph.amazonaws.com` |
+| | `kms:Decrypt` | the graph export key | `kms:ViaService` is `s3.<region>` (to read the export) |
+| EventBridge replays (opt-in) | `events:PutRule`, `events:PutTargets`, `events:RemoveTargets`, `events:DeleteRule` | this account's `rule/sensitive-data-scanner-replay-*` and `rule/*/sensitive-data-scanner-replay-*` | only with `EventBridgeReplay`; `NoRulesButOwnReplayRules` denies every other rule |
+| | `events:StartReplay`, `events:DescribeReplay` | this account's `replay/sds-*` | `NoReplaysButOwn` denies any other replay |
+| | `sqs:ReceiveMessage`, `sqs:DeleteMessage` | the scanner's own queue, `sensitive-data-scanner-replay` | `NoMessageDeletesButOwnQueue` denies deletes anywhere else |
 | KMS aliases (1.5) | `kms:ListAliases` | `*` | The one KMS action with no `kms:ViaService`: it lists names and names no key material (`ListKmsAliases`) |
 | Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
 | RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
@@ -1375,15 +1478,24 @@ several things:
 | Keyspaces | `cassandra:Select` (listing, through the system keyspaces, and reading) | this account's `/keyspace/*` in the region | |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
-And four explicit denies, as defense in depth against any other policy the
+And seven explicit denies, as defense in depth against any other policy the
 role might gain:
 
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner`; (#35) Step Functions `Start*`, `Stop*`, `SendTask*`, `RedriveExecution`, `Publish*`, create, update, delete and tags; Lambda `Invoke*`, create, update, delete, `Put*`, `Publish*`, permissions and tags; X-Ray `Put*`, create, update, delete and tags; CodeCommit `GitPush`, `Put*`, `Merge*`, `Post*`, `Override*`, associations, create, update, delete and tags; S3 directory bucket create, delete, policy, encryption and lifecycle changes; MSK `WriteData`, `WriteDataIdempotently`, `AlterGroup`, `DeleteGroup`, topic and cluster create, alter and delete, `AlterTransactionalId`, and cluster create, update, reboot and tags; Amazon MQ create, update, delete, reboot and promote |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner`; (#35) Step Functions `Start*`, `Stop*`, `SendTask*`, `RedriveExecution`, `Publish*`, create, update, delete and tags; Lambda `Invoke*`, create, update, delete, `Put*`, `Publish*`, permissions and tags; X-Ray `Put*`, create, update, delete and tags; CodeCommit `GitPush`, `Put*`, `Merge*`, `Post*`, `Override*`, associations, create, update, delete and tags; S3 directory bucket create, delete, policy, encryption and lifecycle changes; MSK `WriteData`, `WriteDataIdempotently`, `AlterGroup`, `DeleteGroup`, topic and cluster create, alter and delete, `AlterTransactionalId`, and cluster create, update, reboot and tags; Amazon MQ create, update, delete, reboot and promote; ECR pushes, image deletes, uploads, create, delete, set, start, replicate and tags; SageMaker create, update, delete, put (feature records included), start, stop and tags; Neptune Analytics create, update, delete, reset, restore, import, export cancel, `WriteDataViaQuery`, `DeleteDataViaQuery` and tags; EventBridge archive create, update and delete, replay cancel, bus create, update and delete, and bus permissions; Glacier `InitiateJob` (retrieval), uploads, deletes, vault locks, notifications and tags |
+| `NoMessageDeletesButOwnQueue` | `sqs:DeleteMessage*` anywhere but the scanner's own replay queue (every other queue's messages stay; the dead-letter reads never delete) |
+| `NoRulesButOwnReplayRules` | EventBridge rule and target changes anywhere but the scanner's own `sensitive-data-scanner-replay-*` rules |
+| `NoReplaysButOwn` | `events:StartReplay` of any replay not named `sds-*` |
 | `NoReadWriteExpressSessions` | `s3express:CreateSession` unless `s3express:SessionMode` is `ReadOnly`: a directory bucket session that could write is never created |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
+
+The **graph export role** (`NeptuneGraphExportRole`, trusted by
+`neptune-graph.amazonaws.com` for this account only) can write, read and
+delete under `exports/neptune-graph/` in the results bucket, list it, and use
+the graph export key. The **replay queue** (`ReplayQueue`) accepts messages
+only from the scanner's own replay rules.
 
 The RDS **export role** (`RdsExportRole`, trusted by
 `export.rds.amazonaws.com` for this account only) can write, read and delete

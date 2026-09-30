@@ -98,7 +98,10 @@ READ = re.compile(
     r"|codecommit:(List|GetRepository$|GetBranch$|GetFolder$|GetFile$)"
     r"|s3express:ListAllMyDirectoryBuckets$"
     r"|kafka:(ListClustersV2|GetBootstrapBrokers)$|mq:(List|Describe)"
-    r"|kafka-cluster:(Connect|DescribeCluster|DescribeTopic|ReadData|DescribeGroup)$)"
+    r"|kafka-cluster:(Connect|DescribeCluster|DescribeTopic|ReadData|DescribeGroup)$"
+    r"|ecr:(Describe|ListTagsForResource$|BatchGetImage$|GetDownloadUrlForLayer$)"
+    r"|sagemaker:(List|DescribeFeatureGroup$)|neptune-graph:(List|GetExportTask$)"
+    r"|events:(ListArchives|DescribeArchive|DescribeReplay)$|glacier:List)"
 )
 IN_ACCOUNT = "${AWS::Partition}:{service}:${AWS::Region}:${AWS::AccountId}:"
 
@@ -156,6 +159,21 @@ AIMED: dict[str, Any] = {
     "ReadServerlessCollections": lambda s, a: (
         a == "aoss:APIAccessAll" and in_account(s["Resource"], "aoss", "collection/")
     ),
+    # A graph export, written by the export role to the scanner's own bucket only.
+    "StartGraphExports": lambda s, a: (
+        a == "neptune-graph:StartExportTask"
+        and in_account(s["Resource"], "neptune-graph", "graph/")
+    ),
+    "PassTheGraphExportRoleOnly": lambda s, a: (
+        s["Resource"] == {"Fn::GetAtt": ["NeptuneGraphExportRole", "Arn"]}
+        and s["Condition"]["StringEquals"]["iam:PassedToService"] == "neptune-graph.amazonaws.com"
+    ),
+    # A replay reaches only the scanner's own rule, which sends it to the scanner's own queue.
+    "OwnReplayRules": lambda s, a: all(
+        str(r["Fn::Sub"]).endswith("sensitive-data-scanner-replay-*") for r in s["Resource"]
+    ),
+    "StartOwnReplays": lambda s, a: str(s["Resource"]["Fn::Sub"]).endswith(":replay/sds-*"),
+    "OwnReplayQueue": lambda s, a: s["Resource"] == {"Fn::GetAtt": ["ReplayQueue", "Arn"]},
     # A directory bucket is read only through a session, and the session is read-only.
     "ReadOnlyExpressSessions": lambda s, a: (
         a == "s3express:CreateSession"
@@ -327,6 +345,10 @@ SERVICES = {
     "codecommit": "codecommit",
     "kafka": "kafka",
     "mq": "mq",
+    "ecr": "ecr",
+    "sagemaker": "sagemaker",
+    "neptune-graph": "neptune-graph",
+    "glacier": "glacier",
 }
 
 
@@ -616,3 +638,50 @@ def test_brokers_are_read_with_no_commit_and_no_consume() -> None:
     source = (PACKAGE / "sources" / "brokers.py").read_text()
     assert "enable_auto_commit=False" in source and "commit(" not in source
     assert '"browser": "true"' in source and '"ACK"' not in source
+
+
+def test_images_graphs_and_archives_write_only_their_own() -> None:
+    """#35: ECR layers and SageMaker are opt-in reads; a graph export and an archive replay
+    are aimed at the scanner's own bucket, rules and queue; Glacier retrieval is denied."""
+    wrapped = [
+        s["Fn::If"]
+        for s in RES["ScannerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        if isinstance(s, dict) and "Fn::If" in s
+    ]
+    gates = {st.get("Sid"): c for c, st, _ in wrapped}
+    assert gates["ReadEcrImageLayers"] == "EcrReads"
+    assert gates["StartGraphExports"] == gates["PassTheGraphExportRoleOnly"] == "NeptuneGraphExport"
+    for sid in ("OwnReplayRules", "StartOwnReplays", "OwnReplayQueue"):
+        assert gates[sid] == "EventBridgeReplays"
+    denies = {s["Sid"]: s for s in statements() if s["Effect"] == "Deny"}
+    assert denies["NoMessageDeletesButOwnQueue"]["NotResource"] == {
+        "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:"
+        "sensitive-data-scanner-replay"
+    }
+    assert RES["ReplayQueue"]["Properties"]["QueueName"] == "sensitive-data-scanner-replay"
+    assert all(
+        str(r["Fn::Sub"]).endswith("sensitive-data-scanner-replay-*")
+        for r in denies["NoRulesButOwnReplayRules"]["NotResource"]
+    )
+    denied = {a for s in denies.values() for a in actions(s)}
+    assert {
+        "glacier:InitiateJob",
+        "ecr:Put*",
+        "ecr:BatchDeleteImage",
+        "sagemaker:Put*",
+        "neptune-graph:WriteDataViaQuery",
+        "events:CreateArchive",
+        "events:CancelReplay",
+    } <= denied
+    queue = RES["ReplayQueuePolicy"]["Properties"]["PolicyDocument"]["Statement"][0]
+    assert queue["Principal"] == {"Service": "events.amazonaws.com"}
+    assert queue["Action"] == "sqs:SendMessage"
+    role = RES["NeptuneGraphExportRole"]["Properties"]
+    assert role["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {
+        "Service": "neptune-graph.amazonaws.com"
+    }
+    writes = role["Policies"][0]["PolicyDocument"]["Statement"][0]
+    assert writes["Resource"] == {"Fn::Sub": "${ResultsBucket.Arn}/exports/neptune-graph/*"}
+    source = (PACKAGE / "sources" / "archives.py").read_text()
+    assert '"FilterArns": [rule_arn]' in source
+    assert "delete_message(\n                    QueueUrl=self.queue_url" in source

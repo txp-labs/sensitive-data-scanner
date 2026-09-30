@@ -1113,6 +1113,134 @@ def test_no_value_leaves_the_brokers(
         assert "pw-" not in blob, name_
 
 
+def test_no_value_leaves_images_graphs_or_archives(
+    env: Env,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ECR repository, layer paths, a graph, its properties, an archive and a vault named
+    with values, carrying values (#35)."""
+    import io
+
+    from botocore.stub import ANY
+
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+    from test_images_archives import layer
+    from test_streams import stubs
+
+    s = stubs(env, "ecr", "neptune-graph", "events", "sqs", "glacier")
+    repo = f"app-{SSN_A}"
+    s["ecr"].add_response(
+        "describe_repositories",
+        {"repositories": [{"repositoryName": repo, "repositoryArn": "arn:aws:ecr:x:1:r/a"}]},
+    )
+    digest = "sha256:" + "c" * 64
+    s["ecr"].add_response("describe_images", {"imageDetails": [{"imageDigest": digest}]})
+    manifest = {
+        "layers": [{"digest": digest, "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"}]
+    }
+    s["ecr"].add_response("batch_get_image", {"images": [{"imageManifest": json.dumps(manifest)}]})
+    s["ecr"].add_response("get_download_url_for_layer", {"downloadUrl": "https://l.example/x"})
+    blob = layer({f"app/{CARDS['visa']}.json": json.dumps({"pan": CARDS["amex"]}).encode()})
+    env.clients.services["layer-fetch"] = lambda url, n: io.BytesIO(blob)
+    graph = f"g-{SSN_B}"
+    s["neptune-graph"].add_response(
+        "list_graphs",
+        {
+            "graphs": [
+                {
+                    "id": "g-1",
+                    "name": graph,
+                    "arn": "arn:aws:neptune-graph:x:1:graph/g-1",
+                    "status": "AVAILABLE",
+                }
+            ]
+        },
+    )
+    s["neptune-graph"].add_response(
+        "get_export_task",
+        {
+            "graphId": "g-1",
+            "roleArn": "arn:aws:iam::1:role/r",
+            "taskId": "t-1",
+            "status": "SUCCEEDED",
+            "format": "CSV",
+            "destination": "s3://b/",
+            "kmsKeyIdentifier": "k",
+        },
+    )
+    env.clients.s3.put_object(
+        Bucket=RESULTS,
+        Key="exports/neptune-graph/t-1/Nodes/n.csv",
+        Body=f"~id,c_{CARDS['jcb']}:String\n1,{CARDS['discover']}\n".encode(),
+    )
+    archive = f"arch-{CARDS['mir']}"
+    s["events"].add_response("list_archives", {"Archives": [{"ArchiveName": archive}]})
+    s["events"].add_response(
+        "describe_archive",
+        {
+            "ArchiveArn": "arn:aws:events:x:1:archive/a",
+            "ArchiveName": archive,
+            "EventSourceArn": "arn:aws:events:x:1:event-bus/b",
+            "State": "ENABLED",
+        },
+    )
+    s["events"].add_response("describe_replay", {"State": "COMPLETED"})
+    event = {"replay-name": "sds-r", "detail": {"ssn": dashed(SSN_A), "card": CARDS["mastercard"]}}
+    s["sqs"].add_response(
+        "receive_message",
+        {"Messages": [{"MessageId": "1", "ReceiptHandle": "h", "Body": json.dumps(event)}]},
+    )
+    s["sqs"].add_response("delete_message", {})
+    s["sqs"].add_response("receive_message", {"Messages": []})
+    s["events"].add_response("remove_targets", {"FailedEntryCount": 0})
+    s["events"].add_response("delete_rule", {})
+    s["glacier"].add_response(
+        "list_vaults",
+        {"VaultList": [{"VaultName": f"v-{SSN_A}", "NumberOfArchives": 1}]},
+        {"accountId": ANY},
+    )
+    sent = _bus(env)
+    capsys.readouterr()
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    cfg = config(
+        s3_targets=[],
+        discover=frozenset({"ecr", "neptune_analytics", "eventbridge_archive", "glacier"}),
+        ecr_read=True,
+        neptune_analytics_export_role_arn="arn:aws:iam::123456789012:role/r",
+        neptune_analytics_export_kms_key_arn="arn:aws:kms:us-west-2:123456789012:key/k",
+        eventbridge_replay=True,
+        eventbridge_replay_queue_url="https://sqs.us-west-2.amazonaws.com/123456789012/q",
+        eventbridge_replay_queue_arn="arn:aws:sqs:us-west-2:123456789012:q",
+        event_bus_arn="arn:aws:events:x:1:b/c",
+    )
+    # The graph's export and the archive's replay as a previous run left them: finished.
+    import sensitive_data_scanner.sources.archives as archives_mod
+    import sensitive_data_scanner.sources.ml as ml_mod
+
+    real_graph, real_replay = (
+        ml_mod.NeptuneGraphExportSource.run,
+        archives_mod.EventBridgeReplaySource.run,
+    )
+
+    def graph_run(self: Any, cursor: dict[str, Any], *a: Any) -> Any:
+        return real_graph(self, {"task": "t-1", "phase": "exporting", "passId": "p"}, *a)
+
+    def replay_run(self: Any, cursor: dict[str, Any], *a: Any) -> Any:
+        return real_replay(self, {"replay": "sds-r", "phase": "replaying", "passId": "p"}, *a)
+
+    monkeypatch.setattr(ml_mod.NeptuneGraphExportSource, "run", graph_run)
+    monkeypatch.setattr(archives_mod.EventBridgeReplaySource, "run", replay_run)
+    doc = env.run(cfg)
+    assert doc is not None
+    services = {f["resource"]["service"] for f in doc["findings"]}
+    assert services == {"ecr", "neptune_analytics", "eventbridge"}
+    for name_, blob_ in _outputs(env, sent, capsys, caplog).items():
+        assert leaks(blob_) == [], name_
+
+
 # A made-up tenant id holding a bare nine-digit run, keyed the way Stugum keys its
 # tables (#24). The run passes the SSN structure rules, so it is masked however
 # masking is tuned; the finding keeps its link because the link names the table only.

@@ -41,10 +41,10 @@ AWS_SERVICES = ("kms",)
 KEYS = "kms-keys"
 # A key id (a UUID, or a multi-Region key's `mrk-` and 32 hex digits), bare or in an ARN.
 _KEY_ID = re.compile(
-    r"(?:^|:key/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$"
+    r"^(?:.*:key/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$"
 )
-_AWS_ALIAS = re.compile(r"(?:^|:)alias/aws/")
-_ALIAS = re.compile(r"(?:^|:)(alias/.+)$")
+_AWS_ALIAS = re.compile(r"^(?:.*:)?alias/aws/")
+_ALIAS = re.compile(r"^(?:.*:)?(alias/.+)$")
 
 
 class KeyClassifier:
@@ -79,10 +79,10 @@ class KeyClassifier:
     def key_id(self, key: str) -> str | None:
         """The key id a key ARN, key id or alias names; None when it cannot be told."""
         k = key.strip()
-        m = _KEY_ID.search(k)
+        m = _KEY_ID.match(k)
         if m:
             return m[1]
-        alias = _ALIAS.search(k)
+        alias = _ALIAS.match(k)
         if alias:
             self._list()
             return self._aliases.get(alias[1])
@@ -104,7 +104,7 @@ class KeyClassifier:
             if encrypted is None:
                 return encryption_facts(UNKNOWN_ENCRYPTION)
             return encryption_facts(SERVICE_MANAGED)
-        if _AWS_ALIAS.search(key):
+        if _AWS_ALIAS.match(key):
             return encryption_facts(SERVICE_MANAGED)
         key_id = self.key_id(key)
         if key_id is None:
