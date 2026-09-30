@@ -1,4 +1,4 @@
-# Findings, schema version 1.3
+# Findings, schema version 1.4
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.3"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.4"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -35,6 +35,14 @@ value shows up in findings, events, logs, exception messages or object reprs.
   `approximateMessages`, `items`, `itemTypes`, `excluded` and `snapshots`. The kinds are one list
   (`$defs/storeKind`) for coverage, the run summary and listing errors. All
   additive.
+- Version 1.4 adds the databases-anywhere runner ([DATABASES.md](DATABASES.md)):
+  `platform` (`database`; absent means AWS) and `site` (where the runner
+  runs, which a databases document names in place of `account` and
+  `region`; an AWS document still has both), the `postgresql`, `mysql`
+  (MySQL and MariaDB), `sqlserver`, `oracle`, `mongodb`, `snowflake` and
+  `databricks` kinds, the store reasons `db_user_can_write`,
+  `grants_unverifiable` and `driver_missing`, and the store field
+  `writeGrants`. All additive: an AWS document is 1.3's with a new version.
 
 ## Where findings go
 
@@ -246,8 +254,14 @@ one field of one store as `store_field`. A Redshift column:
 | `snapshotTime` | For EBS: when the snapshot read was taken. Not part of the id |
 | `offsets` | Empty: a sampled row is not addressable later. `count` is distinct values in the sample |
 
-The shape names no cloud, so a store elsewhere (a database hosted anywhere)
-reports the same way.
+The shape names no cloud, so a store elsewhere reports the same way. The
+databases runner (1.4) reports every engine's columns, and MongoDB's
+top-level fields, as `store_field` with `service` the engine
+(`postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`,
+`databricks`), `store` the name the customer gave the database, `database`
+the database (or catalog) connected to, `table` as `schema.table` (for
+MongoDB, `database.collection`), `readBy: sample`, format `sql` (MongoDB:
+`json`) and no `link`.
 
 ### A DynamoDB finding
 
@@ -359,10 +373,10 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`; and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database); and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
-| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB) |
+| `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB); (1.4) `db_user_can_write` (the databases runner's user can write, so it was refused; see `writeGrants`), `grants_unverifiable` (the user's privileges could not be read, so it was refused) and `driver_missing` (the image carries no driver for the engine) |
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
@@ -380,6 +394,7 @@ coverage gap is visible rather than silent.
 | `destinations` | (1.3) For Firehose: where the stream delivers (`S3`, `Redshift`, `OpenSearch`, `Splunk`, `HttpEndpoint`, `Snowflake`, `Iceberg`) |
 | `deadLetterQueue`, `approximateMessages` | (1.3) For SQS: the queue is a dead-letter queue; its approximate message count |
 | `snapshots` | (1.3) For ElastiCache and MemoryDB: the cache's snapshots, counted |
+| `writeGrants` | (1.4) The databases runner: the write privileges the database user holds, by name (`superuser`, `table_write`, `INSERT`, `db_datawriter`, `MODIFY`, ...), when the store is refused as `db_user_can_write` |
 | `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`) |
 
 `stores` lists the stores not read first, and holds at most 5,000

@@ -1065,3 +1065,133 @@ def test_raised_exceptions_carry_no_message_from_below() -> None:
                         isinstance(arg, ast.Name) and arg.id in ("name",)
                     )
                     assert ok, f"{path.name}: raise {ast.unparse(node.exc)}"
+
+
+# ------------------------------------------------------------ the databases runner
+
+
+def test_no_value_leaves_the_databases_runner(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Values in cells, and in schema, table, column, collection and field names; a password
+    and a host holding numbers too: none of them in findings, logs, files or reprs."""
+    from db_fakes import (
+        Collection,
+        Db,
+        Driver,
+        MongoClient,
+        MongoDb,
+        MongoDriver,
+        read_only_mongo_status,
+    )
+    from sensitive_data_db.config import read_settings
+    from sensitive_data_db.runner import run
+    from sensitive_data_db.sinks import sinks_for
+
+    password = f"pw{SSN_B}x"
+    host = f"db-{CARDS['jcb']}.internal"
+    rows = [
+        {
+            f"card_{CARDS['visa']}": CARDS["discover"],
+            f"ssn_{dashed(SSN_A)}": dashed(SSN_B),
+            "note": f"call me, my card is {printed(CARDS['mastercard'])} and SSN {SSN_A}",
+            "nested": json.dumps({"k": spaced(SSN_B)}),
+        }
+    ]
+    db = Db(tables={(f"hr_{SSN_A}", f"staff_{CARDS['amex']}"): rows})
+    db.on(
+        r"FROM pg_roles r",
+        [
+            {
+                "superuser": False,
+                "createrole": False,
+                "createdb": False,
+                "database_create": False,
+                "table_write": 0,
+                "schema_create": 0,
+            }
+        ],
+    )
+    refused = Db(tables={("public", "t"): rows}).on(
+        r"FROM pg_roles r",
+        [
+            {
+                "superuser": True,
+                "createrole": True,
+                "createdb": False,
+                "database_create": False,
+                "table_write": 9,
+                "schema_create": 0,
+            }
+        ],
+    )
+    mongo = MongoClient(
+        {
+            f"crm_{SSN_B}": MongoDb(
+                {
+                    f"people_{CARDS['visa']}": Collection(
+                        [
+                            {
+                                f"card_{CARDS['mir']}": CARDS["unionpay"],
+                                "profile": {f"ssn_{SSN_A}": dashed(SSN_A)},
+                            }
+                        ]
+                    ),
+                    "broken": Collection([], fail=PermissionError(f"denied {CARDS['visa']}")),
+                }
+            )
+        },
+        read_only_mongo_status(),
+    )
+    out_file = tmp_path / "findings.json"
+    settings = read_settings(
+        {
+            "SCANNER_SITE": "dc-1",
+            f"DATABASE_URL_HR_{SSN_A}": f"postgresql://ro:{password}@{host}:5432/app_{SSN_B}",
+            "DATABASE_URL_RW": f"postgresql://admin:{password}@{host}/app",
+            "DATABASE_URL_DOCS": f"mongodb://ro:{password}@{host}/",
+            "DATABASE_URL_DOWN": f"oracle://ro:{password}@{host}:1521/ERP",
+            "FINDINGS_FILE": str(out_file),
+        }
+    )
+
+    class Down:
+        def connect(self, **kwargs: Any) -> None:
+            raise ConnectionError(f"could not reach {kwargs['host']} as {kwargs['password']}")
+
+    pg_ro, pg_rw = Driver(db), Driver(refused)
+
+    class Pg:
+        def connect(self, url: str, **kwargs: Any) -> Any:
+            return (pg_rw if "admin:" in url else pg_ro).connect(url, **kwargs)
+
+    capsys.readouterr()
+    doc, failed = run(
+        settings,
+        sinks_for(settings),
+        drivers={"postgresql": Pg(), "mongodb": MongoDriver(mongo), "oracle": Down()},
+    )
+    out = capsys.readouterr().out
+    assert failed == 0
+    classes_found = {f["class"] for f in doc["findings"]}
+    assert {"card", "us_ssn"} <= classes_found
+    stores = {
+        s["kind"] + ":" + s["reason"] if "reason" in s else s["kind"]
+        for s in doc["discovery"]["stores"]
+    }
+    assert "postgresql:db_user_can_write" in stores and "oracle:error" in stores
+    blobs = {
+        "document": json.dumps(doc),
+        "file": out_file.read_text(),
+        "logs": out,
+        "settings": repr(settings),
+        "databases": repr(settings.databases),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        assert password not in blob, where
+        assert host not in blob, where
+        assert CARDS["jcb"] not in blob, where
+    # The names that held values are masked, and say so.
+    masked = [f["resource"] for f in doc["findings"] if f["resource"].get("keyMasked")]
+    assert masked and all("#" in (r.get("table", "") + r.get("field", "")) for r in masked)

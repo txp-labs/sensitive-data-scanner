@@ -6,7 +6,61 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
+  `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
+  own network, with its own image target (`docker build --target db`):
+  - Engines: PostgreSQL, MySQL and MariaDB, SQL Server (and Azure SQL),
+    Oracle (thin mode), MongoDB (including Atlas), Snowflake and Databricks
+    SQL (Unity Catalog). SQL engines use the core's sampled pass
+    (`scan/sql.py`, which gains the SQL Server, Oracle, Snowflake and
+    Databricks dialects); MongoDB is read with `$sample` per collection.
+  - Connection strings come from `DATABASE_URL_<NAME>`,
+    `DATABASE_URL_FILE_<NAME>` or a mounted `DATABASE_URLS_DIR`, are held so
+    no repr shows them, and are never logged; a wrong setting is reported by
+    a fixed code.
+  - **The user is checked before anything is read**: from each engine's
+    catalog, against an allow list of read privileges, including every role
+    granted to a MySQL or MariaDB user, active or not, and Snowflake's role
+    hierarchy. A user that can write is refused as `db_user_can_write`, with
+    its write privileges by name (`writeGrants`); one whose privileges cannot
+    be read is `grants_unverifiable`. Sessions and transactions are read-only
+    where the engine has them, and always rolled back. This settles the open
+    question of MySQL's read-only access for this runner.
+  - Findings go to the core's sink interface: an HTTPS endpoint with an
+    HMAC-SHA256 signature over a timestamp and the body, an EventBridge bus
+    (the `aws` extra), or a file.
+  - Drivers are optional extras per engine (`[postgresql]`, `[mysql]`, ...,
+    `[all]`); the image takes `DB_EXTRAS` for a slimmer build, and a missing
+    driver is a coverage gap (`driver_missing`).
+  - `python -m sensitive_data_db check` connects and checks every user
+    without reading or sending anything.
+- The core's findings take per-store facts (`finding_json(..., facts=)`),
+  added to each finding and never replacing a field: the hook for recording
+  at-rest encryption ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35)). Nothing fills it yet.
+
+### Findings schema
+- `schemaVersion` is now **1.4**, additive: `platform` and `site` (a
+  databases document names its site in place of an AWS account and
+  region), the `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`,
+  `snowflake` and `databricks` kinds, the reasons `db_user_can_write`,
+  `grants_unverifiable` and `driver_missing`, and the store field
+  `writeGrants`.
+
+### Docs
+- `docs/DATABASES.md`: the engines and how each is kept read-only, settings,
+  a read-only user per engine, verifying a signed push, and deployment with
+  docker run, a Kubernetes CronJob, an ECS task and Azure Container
+  Instances, with the image sizes. `docs/ARCHITECTURE.md`: the design for
+  hosting the EFS and FSx file-system task in the same image.
+
 ### Internal
+- CI runs the databases runner's PostgreSQL 16 and MySQL 8.4 tests in Docker
+  (testcontainers, images pinned by digest; `SDS_REQUIRE_DOCKER=1`, so a
+  missing Docker fails rather than skips), builds the `db` image with every
+  engine and with PostgreSQL and MySQL only, and smoke-tests both with no
+  network. The no-leak suite covers the runner, with values in cells and in
+  schema, table, column, collection and field names, a password and a host.
 - The Python runner is two packages in one uv workspace
   ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 2), with no change in
   behavior:

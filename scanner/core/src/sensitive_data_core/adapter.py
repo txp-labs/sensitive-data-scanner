@@ -13,7 +13,7 @@ configuration, a client per service, the account and region).
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
@@ -136,14 +136,16 @@ def column_findings(
     resource_for: Callable[[str], dict[str, Any]],
     link: str | None,
     seen_at: str,
+    facts: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Per-column findings with counts only: the rows of a sample are not addressable later."""
+    """Per-column findings with counts only: the rows of a sample are not addressable later.
+    `facts`: the store's own (`findings.finding_json`)."""
     out = []
     for column, item in sorted(table.by_column.items()):
         resource = resource_for(column)
         for cf in item.findings.values():
             cf.offsets = []
-            out.append(finding_json(resource, link, table.format, cf, seen_at))
+            out.append(finding_json(resource, link, table.format, cf, seen_at, facts=facts))
     return out
 
 
@@ -153,12 +155,14 @@ def class_findings(
     link: str | None,
     fmt: str,
     seen_at: str,
+    *,
+    facts: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Findings for one field with counts only (a record, message or value read once)."""
     out = []
     for cf in findings.values():
         cf.offsets = []
-        out.append(finding_json(resource, link, fmt, cf, seen_at))
+        out.append(finding_json(resource, link, fmt, cf, seen_at, facts=facts))
     return out
 
 

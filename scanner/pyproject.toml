@@ -17,6 +17,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  # The databases runner with every engine's driver, for its tests and types.
+  "sensitive-data-scanner-db[all]",
   "boto3-stubs[dynamodb,events,glue,logs,rds,rds-data,s3]>=1.43.103",
   "cfn-lint>=1.40",
   "fastavro>=1.12",
@@ -25,6 +27,8 @@ dev = [
   "mypy>=1.18",
   "pytest>=8.4",
   "ruff>=0.13",
+  # PostgreSQL and MySQL in containers for the databases runner (skipped without Docker).
+  "testcontainers>=4.8",
   "types-jsonschema>=4.26.0.20260518",
   "types-pyyaml>=6.0.12.20260906",
 ]
@@ -42,12 +46,13 @@ columnar = [
 default-groups = ["dev", "columnar"]
 
 # The cloud-neutral core is its own package (core/); this project is the AWS
-# scanner built on it.
+# scanner built on it; db/ is the databases-anywhere runner, also built on it.
 [tool.uv.workspace]
-members = ["core"]
+members = ["core", "db"]
 
 [tool.uv.sources]
 sensitive-data-scanner-core = { workspace = true }
+sensitive-data-scanner-db = { workspace = true }
 
 [build-system]
 requires = ["hatchling>=1.32.4"]
@@ -66,7 +71,7 @@ packages = ["src/sensitive_data_scanner"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "core/src", "tests"]
+src = ["src", "core/src", "db/src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "RUF", "SIM", "PL", "T20"]
@@ -75,21 +80,23 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sensitive_data_scanner", "sensitive_data_core", "conftest", "synthetic", "aws_fixtures"]
+known-first-party = ["sensitive_data_scanner", "sensitive_data_core", "sensitive_data_db", "conftest", "synthetic", "aws_fixtures"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLC0415"]
+"tests/**" = ["S101", "PLC0415", "S608"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "core/src", "tests"]
+files = ["src", "core/src", "db/src", "tests"]
 
 # pyarrow and the Cassandra driver ship no type information.
 [[tool.mypy.overrides]]
 module = [
   "pyarrow", "pyarrow.*", "fastavro", "fastavro.*",
   "cassandra", "cassandra.*", "cassandra_sigv4", "cassandra_sigv4.*",
+  "pymysql", "pymysql.*", "pymssql", "pymssql.*", "snowflake", "snowflake.*",
+  "databricks", "databricks.*", "testcontainers", "testcontainers.*", "docker", "docker.*",
 ]
 ignore_missing_imports = true
 

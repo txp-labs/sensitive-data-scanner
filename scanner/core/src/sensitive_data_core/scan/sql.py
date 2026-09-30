@@ -36,6 +36,9 @@ SYSTEM_SCHEMAS = {
     "postgresql": ("pg_catalog", "information_schema"),
     "redshift": ("pg_catalog", "information_schema", "pg_internal", "pg_automv", "pg_auto_copy"),
     "mysql": (),
+    "sqlserver": ("sys", "INFORMATION_SCHEMA"),
+    "snowflake": ("INFORMATION_SCHEMA",),
+    "databricks": ("information_schema",),
 }
 
 
@@ -43,14 +46,17 @@ SYSTEM_SCHEMAS = {
 class Dialect:
     """How one SQL engine quotes names and lists its tables."""
 
-    name: str  # postgresql | mysql | redshift
+    name: str  # postgresql | mysql | redshift | sqlserver | oracle | snowflake | databricks
     quote: str  # the identifier quote character
-    placeholder: str  # ":{name}" (RDS and Redshift Data API)
+    placeholder: str  # ":{name}" (RDS and Redshift Data API), or a driver's ("%({name})s", "?")
+    quote_end: str = ""  # the closing quote when it differs ("]" for SQL Server)
+    limit: str = "limit"  # how a sample is capped: limit | top (SQL Server) | fetch (Oracle)
 
     def ident(self, name: str) -> str:
         """A SQL identifier, quoted so that nothing in it is SQL."""
         q = self.quote
-        return q + name.replace(q, q + q) + q
+        end = self.quote_end or q
+        return q + name.replace(end, end + end) + end
 
     def param(self, name: str) -> str:
         return self.placeholder.format(name=name)
@@ -60,6 +66,12 @@ POSTGRESQL = Dialect("postgresql", '"', ":{name}")
 MYSQL = Dialect("mysql", "`", ":{name}")
 REDSHIFT = Dialect("redshift", '"', ":{name}")
 DIALECTS = {d.name: d for d in (POSTGRESQL, MYSQL, REDSHIFT)}
+# The engines a database runner reads (sensitive_data_db) take their drivers'
+# placeholders; the statements are the same.
+SQLSERVER = Dialect("sqlserver", "[", "%({name})s", quote_end="]", limit="top")
+ORACLE = Dialect("oracle", '"', ":{name}", limit="fetch")
+SNOWFLAKE = Dialect("snowflake", '"', "%({name})s")
+DATABRICKS = Dialect("databricks", "`", ":{name}")
 
 
 def tables_sql(dialect: Dialect, schemas: tuple[str, ...]) -> tuple[str, Params]:
@@ -72,6 +84,19 @@ def tables_sql(dialect: Dialect, schemas: tuple[str, ...]) -> tuple[str, Params]
             [],
         )
     params = [(f"s{i}", s) for i, s in enumerate(schemas)]
+    if dialect.name == "oracle":
+        # Oracle has no information_schema: the tables of every schema Oracle does not maintain.
+        where = (
+            "t.owner IN (" + ", ".join(dialect.param(n) for n, _ in params) + ")"
+            if schemas
+            else "u.oracle_maintained = 'N'"
+        )
+        return (
+            "SELECT t.owner AS table_schema, t.table_name AS table_name FROM all_tables t "  # noqa: S608 - placeholders only
+            f"JOIN all_users u ON u.username = t.owner WHERE t.nested = 'NO' AND "
+            f"t.secondary = 'N' AND {where} ORDER BY t.owner, t.table_name",
+            params,
+        )
     if schemas:
         where = "table_schema IN (" + ", ".join(dialect.param(n) for n, _ in params) + ")"
     else:
@@ -79,17 +104,29 @@ def tables_sql(dialect: Dialect, schemas: tuple[str, ...]) -> tuple[str, Params]
         where = f"table_schema NOT IN ({system})"
     view = "svv_tables" if dialect.name == "redshift" else "information_schema.tables"
     # svv_tables also lists external (Spectrum) tables, which are S3 data read by the
-    # Glue and S3 sources; only local base tables are read here.
+    # Glue and S3 sources; only local base tables are read here. Databricks (Unity
+    # Catalog) calls its tables MANAGED or EXTERNAL; views are never read.
+    kinds = (
+        "table_type IN ('MANAGED', 'EXTERNAL')"
+        if dialect.name == "databricks"
+        else "table_type = 'BASE TABLE'"
+    )
     sql = (
         f"SELECT table_schema, table_name FROM {view} "  # noqa: S608 - placeholders only
-        f"WHERE table_type = 'BASE TABLE' AND {where} ORDER BY table_schema, table_name"
+        f"WHERE {kinds} AND {where} ORDER BY table_schema, table_name"
     )
     return sql, params
 
 
 def sample_sql(dialect: Dialect, schema: str, table: str, limit: int) -> str:
     """The one statement that reads data: a sample of rows, by quoted identifiers."""
-    return f"SELECT * FROM {dialect.ident(schema)}.{dialect.ident(table)} LIMIT {int(limit)}"  # noqa: S608 - quoted identifiers
+    name = f"{dialect.ident(schema)}.{dialect.ident(table)}"
+    n = int(limit)
+    if dialect.limit == "top":
+        return f"SELECT TOP ({n}) * FROM {name}"  # noqa: S608 - quoted identifiers
+    if dialect.limit == "fetch":
+        return f"SELECT * FROM {name} FETCH FIRST {n} ROWS ONLY"  # noqa: S608 - quoted identifiers
+    return f"SELECT * FROM {name} LIMIT {n}"  # noqa: S608 - quoted identifiers
 
 
 @dataclass

@@ -18,6 +18,7 @@ This document covers:
 | TypeScript package | `packages/spec-ts` | The spec as a zero-dependency classifier, for in-memory redaction in a live call (Stugum's call engine) |
 | Python core | `scanner/core/` | `sensitive_data_core`, which names no cloud: the spec engine and Presidio recognizers, the findings contract, budgets and sampling, the allow, deny and sampling rules, the coverage summary, the findings push interface, the sampled SQL pass (`scan/sql.py`) and the `Adapter` interface |
 | AWS scanner | `scanner/` | `sensitive_data_scanner`, built on the core: every boto3 adapter, discovery, the batch runner, the Lambda handler, EventBridge as the findings sink; and `deploy/` |
+| Databases runner | `scanner/db/` | `sensitive_data_db`, built on the core: a container that samples PostgreSQL, MySQL and MariaDB, SQL Server, Oracle, MongoDB, Snowflake and Databricks SQL with a read-only user it checks first ([DATABASES.md](DATABASES.md)); its own image target (`docker build --target db`) |
 
 The TypeScript package and the Python runner implement the same algorithm.
 Both pass every vector, and a parity test fails if they disagree on any of
@@ -655,6 +656,54 @@ design is an ECS task on Fargate, deployed only where it is turned on:
   `EXPORT_MIN_INTERVAL_DAYS`, like the exports.
 
 Until it is built, these stores stay in the run summary as `needs_task`.
+
+##### Hosting it in the databases runner's image (design, not built)
+
+The databases runner's image ([DATABASES.md](DATABASES.md), `docker build
+--target db`) already runs anywhere a container runs, with the core, the
+budget, the coverage summary and the signed sinks. The file-system task can
+be the same image with a second command, so one image serves databases and
+file shares, in AWS and outside it:
+
+- **A package and a command.** `scanner/fs` (`sensitive_data_fs`), on the
+  core only (the standard library walks a tree), installed in the `db` image
+  by an `fs` extra; `python -m sensitive_data_db files` (or an entry point of
+  its own) scans the mounts named by `FS_MOUNTS` (`name=/mnt/path`, one per
+  store). pyarrow, for Parquet and ORC on a share, is a further extra, since
+  it adds about 150 MB.
+- **Read-only, checked first.** Like `db_user_can_write`: before walking, the
+  runner checks the mount is read-only (`statvfs` `ST_RDONLY`, and
+  `os.access(..., W_OK)` false) and refuses a writable one as a coverage gap
+  (`mount_writable`). Files are opened read-only with `O_NOATIME` where the
+  kernel allows it, symlinks are not followed out of the mount, and device
+  files, FIFOs and sockets are skipped.
+- **Mounting, by where it runs.**
+  - EFS: a Fargate task (as above) with an EFS volume, `readOnly: true`, an
+    access point whose POSIX user can only read, and IAM authorization
+    allowing `elasticfilesystem:ClientMount` only.
+  - FSx for Windows: an ECS task on EC2 (Fargate cannot mount it) with
+    `fsxWindowsFileServerVolumeConfiguration`, the container's mount point
+    `readOnly`, and a domain account that can only read, in Secrets Manager.
+  - FSx for ONTAP, OpenZFS and Lustre: NFS or Lustre mounted read-only on an
+    ECS container instance or an EKS node (a `PersistentVolume` with
+    `readOnly: true`), bind-mounted read-only into the task or pod. Fargate
+    mounts only EFS, so these need EC2 capacity, which is part of the opt-in.
+  - Outside AWS: any share the host or cluster mounts (NFS, SMB, Azure
+    Files, Filestore), passed to the container read-only (`docker run -v
+    /mnt/share:/data:ro`, a Kubernetes volume with `readOnly: true`).
+- **Reading.** A file-tree source that walks by path in sorted order, reads
+  each file as the S3 source reads an object (the same formats, size caps and
+  decompression limits, sampling per directory with `FS_MAX_FILES_PER_DIR`,
+  and a budget of files, bytes and time), and resumes after its last path.
+  Findings name the store and the path, masked like an object key: a new
+  `file` resource (a findings schema minor bump when it is built).
+- **State and findings.** In AWS, the batch run starts the task
+  (`ecs:RunTask`), and the task writes its findings document and cursor
+  under the results bucket (`fs/<file system>/`), which the next batch run
+  reads to settle the store (`scanned`, or its gap); its findings also go to
+  the central EventBridge bus. Outside AWS, the cursor lives in a small
+  mounted state volume (or none: each run samples afresh), and findings go
+  to the HTTPS or file sinks, as for databases.
 
 ### Streams and queues
 

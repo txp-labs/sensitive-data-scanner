@@ -1,12 +1,14 @@
 # sensitive-data-scanner (Python runner)
 
-Two packages in one uv workspace: the cloud-neutral core in `core/`
+Three packages in one uv workspace: the cloud-neutral core in `core/`
 (`sensitive-data-scanner-core`, import `sensitive_data_core`: detection,
 findings, budgets and sampling, the coverage summary, the findings push
 interface, the sampled SQL pass and the adapter interface), and the AWS
 scanner in `src/` (`sensitive-data-scanner`, import `sensitive_data_scanner`:
 every boto3 adapter, discovery, the runner and the Lambda handler). The
-core imports no cloud SDK, and a test keeps it that way.
+core imports no cloud SDK, and a test keeps it that way. `db/` is the
+databases-anywhere runner (`sensitive-data-scanner-db`, import
+`sensitive_data_db`), also on the core ([docs/DATABASES.md](../docs/DATABASES.md)).
 
 Detection for the scanner: [Microsoft Presidio](https://github.com/microsoft/presidio)
 Analyzer, with **no NLP model**, and recognizers for the classes in the

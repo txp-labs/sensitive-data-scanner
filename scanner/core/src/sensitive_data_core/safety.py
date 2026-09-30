@@ -59,6 +59,7 @@ EVENTS: Final = frozenset(
         "discovery.done",
         "discovery.failed",
         "source.deferred",
+        "source.refused",
     }
 )
 

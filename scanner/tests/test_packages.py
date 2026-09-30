@@ -45,3 +45,20 @@ def test_every_package_has_the_release_version() -> None:
         assert tomllib.loads(pyproject.read_text())["project"]["version"] == root, pyproject
     assert sensitive_data_scanner.__version__ == root
     assert sensitive_data_core.__version__ == root
+
+
+def test_a_store_fact_is_added_to_each_finding_and_never_replaces_a_field() -> None:
+    """The hook #35 fills: what an adapter knows about the store (`atRestEncryption`)."""
+    import pytest
+
+    from sensitive_data_core.findings import ClassFinding, finding_json
+
+    cf = ClassFinding("card", count=1, occurrences=1, confidence="high")
+    resource = {"type": "store_field", "service": "x", "store": "y", "readBy": "sample"}
+    plain = finding_json(resource, None, "sql", cf, "2026-09-29T00:00:00+00:00")
+    with_fact = finding_json(
+        resource, None, "sql", cf, "2026-09-29T00:00:00+00:00", facts={"fact": "value"}
+    )
+    assert with_fact == {**plain, "fact": "value"}
+    with pytest.raises(ValueError, match="may not replace"):
+        finding_json(resource, None, "sql", cf, "2026-09-29T00:00:00+00:00", facts={"class": "x"})
