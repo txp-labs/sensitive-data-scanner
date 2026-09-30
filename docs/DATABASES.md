@@ -312,12 +312,12 @@ a Logic App or an Azure Container Apps job.
 
 The `db` target carries Python 3.12 (Debian slim), Presidio and spaCy (no
 model), the core and the runner, and the drivers named in `DB_EXTRAS`.
-Measured by CI (`docker image ls`, uncompressed):
+Measured by CI (`docker image ls`, uncompressed, 30 Sep 2026; the Lambda image is 422 MB):
 
 | Build | `DB_EXTRAS` | Size |
 |---|---|---|
-| Every engine (the default) | `postgresql mysql sqlserver oracle mongodb snowflake databricks aws` | IMAGE_SIZE_ALL |
-| PostgreSQL and MySQL | `postgresql mysql` | IMAGE_SIZE_SLIM |
+| Every engine (the default) | `postgresql mysql sqlserver oracle mongodb snowflake databricks aws` | 445 MB |
+| PostgreSQL and MySQL | `postgresql mysql` | 292 MB |
 
 Databricks' connector brings pandas and NumPy, and Snowflake's brings
 boto3 and cryptography: leave out the engines you do not read. A database of
