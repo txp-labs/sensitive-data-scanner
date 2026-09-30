@@ -22,6 +22,8 @@ reported by a fixed code, never by its value.
   rows sampled per table.
 - `KEYVAULT_SECRETS_READ`: `on` reads Key Vault secrets' values (counts only);
   off by default.
+- `AZURE_FILES_READ`: `on` reads Azure Files shares' files (Storage File Data
+  Privileged Reader, over REST with the backup intent); off by default.
 - `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
   `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
@@ -73,6 +75,7 @@ DATABASE_KINDS: tuple[str, ...] = (
 # Every kind this package discovers, and the ones discovered by default.
 KINDS: tuple[str, ...] = (
     "azure_blob",
+    "azure_files",
     "azure_table",
     "azure_queue",
     "cosmosdb",
@@ -86,6 +89,8 @@ DEFAULT_KINDS: tuple[str, ...] = KINDS
 KIND_ALIASES = {
     **{k: k for k in KINDS},
     "blob": "azure_blob",
+    "files": "azure_files",
+    "fileshares": "azure_files",
     "adls": "azure_blob",
     "sql": "azure_sql",
     "sqlmi": "azure_sql_mi",
@@ -175,6 +180,8 @@ class Settings:
     logs_max_rows: int = 500
     # Key Vault secrets' values: off by default, counts only when on.
     keyvault_secrets_read: bool = False
+    # Azure Files shares' files: off by default (Storage File Data Privileged Reader).
+    files_read: bool = False
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -297,6 +304,9 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     keyvault = _on(e.get("KEYVAULT_SECRETS_READ"))
     if keyvault is None:
         raise ConfigError("keyvault_secrets_read")
+    files = _on(e.get("AZURE_FILES_READ"))
+    if files is None:
+        raise ConfigError("azure_files_read")
     try:
         db_read = _kinds(e.get("AZURE_DB_READ"), (), DATABASE_KINDS)
     except ConfigError:
@@ -346,4 +356,5 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         logs_lookback_days=_int(e.get("LOGS_LOOKBACK_DAYS"), 1, 1, 730),
         logs_max_rows=_int(e.get("LOGS_MAX_ROWS_PER_TABLE"), 500, 1, 30_000),
         keyvault_secrets_read=keyvault,
+        files_read=files,
     )

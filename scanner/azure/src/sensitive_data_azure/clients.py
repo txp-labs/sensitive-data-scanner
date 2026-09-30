@@ -12,6 +12,8 @@ connection string or SAS is configured or made. The clients are:
   Storage Blob Data Reader;
 - `table`, `queue`: a storage account's Table and Queue services, with Storage
   Table Data Reader and Storage Queue Data Reader;
+- `files`: a storage account's File service (Azure Files) over REST, with
+  Storage File Data Privileged Reader and the backup intent (opt-in);
 - `cosmos`: a Cosmos DB for NoSQL account, with its Built-in Data Reader role;
 - `logs`: the Log Analytics query API, with Log Analytics Reader;
 - `keyvault`: a key vault's secrets, with Key Vault Secrets User (opt-in);
@@ -150,6 +152,17 @@ class Clients:
             from azure.storage.queue import QueueServiceClient  # noqa: PLC0415
 
             return QueueServiceClient(endpoint, credential=self.credential, user_agent=USER_AGENT)
+        if service == "files":
+            from azure.storage.fileshare import ShareServiceClient  # noqa: PLC0415
+
+            # An OAuth token reads files over REST only with the backup intent, which
+            # Storage File Data Privileged Reader's readFileBackupSemantics grants.
+            return ShareServiceClient(
+                endpoint,
+                credential=self.credential,
+                token_intent="backup",  # noqa: S106 - the request intent, not a secret
+                user_agent=USER_AGENT,
+            )
         if service == "cosmos":
             from azure.cosmos import CosmosClient  # noqa: PLC0415
 

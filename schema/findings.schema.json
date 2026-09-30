@@ -73,7 +73,7 @@
         "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
         "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo",
-        "log_analytics", "azure_disk_snapshot", "key_vault",
+        "log_analytics", "azure_disk_snapshot", "key_vault", "azure_files",
         "gcs", "bigquery", "firestore", "datastore", "spanner", "bigtable", "cloud_logging",
         "pubsub", "gce_snapshot", "secret_manager", "cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver",
         "alloydb"
@@ -274,6 +274,35 @@
             "subscription": { "$ref": "#/$defs/azureSubscription" },
             "resourceGroup": {
               "description": "The Azure resource group (1.6), masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },
+            "keyMasked": { "const": true }
+          }
+        },
+        {
+          "description": "One file of an Azure Files share (1.7) and, for a table file, one column of it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "account", "share", "path", "resourceIdHash"],
+          "properties": {
+            "type": { "const": "azure_file" },
+            "account": {
+              "description": "The storage account, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "share": { "$ref": "#/$defs/maskedName" },
+            "path": {
+              "description": "The file's path in the share, masked like a key.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "column": {
+              "description": "For a table file (Parquet, ORC, Avro): the column the values are in.",
+              "$ref": "#/$defs/maskedName"
+            },
+            "subscription": { "$ref": "#/$defs/azureSubscription" },
+            "resourceGroup": {
+              "description": "The Azure resource group, masked like a key.",
               "$ref": "#/$defs/maskedName"
             },
             "resourceIdHash": { "$ref": "#/$defs/resourceIdHash" },

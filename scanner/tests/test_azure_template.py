@@ -4,7 +4,8 @@ The strict test, as test_template.py is for the AWS templates: every role the
 template assigns is looked up in the built-in role definitions below (their
 actions and data actions as Azure publishes them), and every action must read.
 The one exception is Storage Blob Data Contributor, and only on the job's own
-state container. Key Vault Secrets User only with `readKeyVaultSecrets`. No
+state container. Key Vault Secrets User only with `readKeyVaultSecrets`;
+Storage File Data Privileged Reader only with `readFileShares`. No
 custom role, no `listKeys`, no role on anything else. CI rebuilds main.json
 with a pinned Bicep and fails if it differs (the `azure-template` job).
 """
@@ -52,6 +53,16 @@ BUILT_IN_ROLES: dict[str, dict[str, Any]] = {
         # Peek only: Get Messages (dequeue) needs .../messages/process/action, not granted.
         "dataActions": ["Microsoft.Storage/storageAccounts/queueServices/queues/messages/read"],
     },
+    "b8eda974-7b85-4f76-af95-65846b26df6d": {
+        "name": "Storage File Data Privileged Reader",
+        "actions": [],
+        # Read files over REST with an OAuth token and the backup intent, whatever their
+        # NTFS ACLs say: reads only.
+        "dataActions": [
+            "Microsoft.Storage/storageAccounts/fileServices/fileshares/files/read",
+            "Microsoft.Storage/storageAccounts/fileServices/readFileBackupSemantics/action",
+        ],
+    },
     "4633458b-17de-408a-b874-0445c86b69e6": {
         "name": "Key Vault Secrets User",
         "actions": [],
@@ -68,11 +79,14 @@ READ_ACTIONS = frozenset(
         "Microsoft.KeyVault/vaults/secrets/getSecret/action",
         "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
         "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
+        # Azure Files over REST with the backup intent: reading a file past its ACL.
+        "Microsoft.Storage/storageAccounts/fileServices/readFileBackupSemantics/action",
     }
 )
 # The one write role, on the job's own container only.
 STATE_WRITER = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"  # Storage Blob Data Contributor
 VAULT_READ_ROLE = "4633458b-17de-408a-b874-0445c86b69e6"
+FILE_READ_ROLE = "b8eda974-7b85-4f76-af95-65846b26df6d"
 COSMOS_DATA_READER = "00000000-0000-0000-0000-000000000001"
 _GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -152,7 +166,9 @@ def test_the_read_role_list_is_exactly_the_read_roles() -> None:
     ids = _GUID.findall(block)
     assert ids and all(i in BUILT_IN_ROLES for i in ids)
     assert VAULT_READ_ROLE not in ids  # only with readKeyVaultSecrets
+    assert FILE_READ_ROLE not in ids  # only with readFileShares
     assert "readKeyVaultSecrets ? [vaultReadRole] : []" in text
+    assert "readFileShares ? [fileReadRole] : []" in text
 
 
 def test_key_vault_secrets_user_only_when_asked() -> None:
@@ -160,6 +176,14 @@ def test_key_vault_secrets_user_only_when_asked() -> None:
     roles = t["variables"]["roles"]
     assert "readKeyVaultSecrets" in roles and "vaultReadRole" in roles
     assert t["parameters"]["readKeyVaultSecrets"]["defaultValue"] is False
+
+
+def test_file_privileged_reader_only_when_asked() -> None:
+    t = load()
+    roles = t["variables"]["roles"]
+    assert "readFileShares" in roles and "fileReadRole" in roles
+    assert t["variables"]["fileReadRole"] == FILE_READ_ROLE
+    assert t["parameters"]["readFileShares"]["defaultValue"] is False
 
 
 def test_the_state_writer_is_on_the_jobs_own_container_only() -> None:

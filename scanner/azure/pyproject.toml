@@ -19,6 +19,8 @@ dependencies = [
     # Table and Queue Storage, peeked and sampled with their data-reader roles.
     "azure-data-tables>=12.7",
     "azure-storage-queue>=12.13",
+    # Azure Files shares (opt-in), read over REST with Storage File Data Privileged Reader.
+    "azure-storage-file-share>=12.20",
     # Cosmos DB for NoSQL, with the Cosmos DB Built-in Data Reader role.
     "azure-cosmos>=4.9",
     # Log Analytics workspaces (Azure Monitor logs), sampled KQL with Log Analytics Reader.

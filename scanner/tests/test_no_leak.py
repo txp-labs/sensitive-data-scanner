@@ -2281,3 +2281,56 @@ def test_no_value_leaves_logging_topics_snapshots_or_secrets(
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob and SSN_A not in blob and CARDS["amex"] not in blob, where
+
+
+def test_no_value_leaves_azure_files(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in files, and in account, share, directory, file and column names, and Azure
+    error messages: none of them leave."""
+    from azure_fakes import (
+        NOW,
+        SUB_A,
+        Arm,
+        AzureError,
+        File,
+        FileService,
+        Graph,
+        Share,
+        Tenant,
+        account_id,
+        account_row,
+        settings,
+    )
+    from sensitive_data_azure.runner import run_scan
+
+    account, group = f"st{CARDS['visa']}", f"rg-{SSN_A}"
+    share, broken = f"s-{dashed(SSN_B)}", f"b-{SSN_A}"
+    rid = account_id(SUB_A, group, account)
+    t = Tenant(
+        Graph({"storageaccounts": [account_row(account, group=group, kind="FileStorage")]}),
+        Arm({f"{rid}/fileServices/default/shares": [{"name": share}, {"name": broken}]}),
+    )
+    files = Share(
+        {
+            f"d-{SSN_B}/{CARDS['discover']}.csv": File(
+                f"name,card_{CARDS['unionpay']}\nA,{CARDS['mastercard']}\n".encode()
+            ),
+            "bad.txt": File(b"x", fail=AzureError("InternalError", f"failed {CARDS['jcb']}")),
+        }
+    )
+    down = Share()
+    down.list_fail = AzureError("AuthorizationFailure", f"denied {account}/{broken}")
+    c = t.clients()
+    c.made[("files", f"https://{account}.file.core.windows.net/")] = FileService(
+        {share: files, broken: down}
+    )
+    s = settings(DISCOVER="files", AZURE_FILES_READ="on")
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, c, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert "card" in {f["class"] for f in doc["findings"]}
+    assert any(x.get("reason") == "network" for x in doc["discovery"]["stores"])
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob and SSN_A not in blob and CARDS["jcb"] not in blob, where

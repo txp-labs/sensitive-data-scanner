@@ -11,7 +11,7 @@
 //
 // Every role the job is given reads, except Storage Blob Data Contributor on its
 // own state container (modules/job.bicep); Key Vault Secrets User only with
-// readKeyVaultSecrets. deploy/azure/main.json is this template compiled
+// readKeyVaultSecrets; Storage File Data Privileged Reader only with readFileShares. deploy/azure/main.json is this template compiled
 // (`bicep build`), and scanner/tests/test_azure_template.py holds it to that.
 targetScope = 'managementGroup'
 
@@ -41,6 +41,8 @@ param discover string = ''
 param readDatabases string = ''
 @description('Key Vault secrets: off by default. On grants Key Vault Secrets User and reads values (counts only).')
 param readKeyVaultSecrets bool = false
+@description('Azure Files shares: off by default. On grants Storage File Data Privileged Reader (reads files over REST, overriding their ACLs) and reads them.')
+param readFileShares bool = false
 @description('Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on.')
 param cosmosAccountIds array = []
 @secure()
@@ -62,7 +64,12 @@ var readRoles = [
   '19e7f393-937e-4f77-808e-94535e297925' // Storage Queue Data Reader
 ]
 var vaultReadRole = '4633458b-17de-408a-b874-0445c86b69e6'
-var roles = concat(readRoles, readKeyVaultSecrets ? [vaultReadRole] : [])
+var fileReadRole = 'b8eda974-7b85-4f76-af95-65846b26df6d' // Storage File Data Privileged Reader
+var roles = concat(
+  readRoles,
+  readKeyVaultSecrets ? [vaultReadRole] : [],
+  readFileShares ? [fileReadRole] : []
+)
 var central = mode == 'central'
 
 module centralGroup 'modules/resource-group.bicep' = if (central) {
@@ -92,6 +99,7 @@ module centralJob 'modules/job.bicep' = if (central) {
     discover: discover
     readDatabases: readDatabases
     readKeyVaultSecrets: readKeyVaultSecrets
+    readFileShares: readFileShares
     findingsHttpsUrl: findingsHttpsUrl
     findingsHmacKey: findingsHmacKey
     findingsEventGridEndpoint: findingsEventGridEndpoint
@@ -144,6 +152,7 @@ module jobs 'modules/job.bicep' = [
       discover: discover
       readDatabases: readDatabases
       readKeyVaultSecrets: readKeyVaultSecrets
+      readFileShares: readFileShares
       findingsHttpsUrl: findingsHttpsUrl
       findingsHmacKey: findingsHmacKey
       findingsEventGridEndpoint: findingsEventGridEndpoint

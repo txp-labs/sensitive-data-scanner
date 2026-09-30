@@ -61,6 +61,7 @@ STORAGE_ACCOUNTS = """resources
     blobEndpoint = tostring(properties.primaryEndpoints.blob),
     tableEndpoint = tostring(properties.primaryEndpoints.table),
     queueEndpoint = tostring(properties.primaryEndpoints.queue),
+    fileEndpoint = tostring(properties.primaryEndpoints.file),
     tableKeyType = tostring(properties.encryption.services.table.keyType),
     queueKeyType = tostring(properties.encryption.services.queue.keyType),
     hns = tobool(properties.isHnsEnabled),
