@@ -34,7 +34,9 @@ core, `scanner/core`), in its own package (`scanner/db`,
   `SELECT TOP (n)`, Oracle `FETCH FIRST n ROWS ONLY`) with quoted
   identifiers. Nothing else is sent. MongoDB: `$sample` of `n` documents per
   collection, views and `system.*` skipped; ids, binary and other non-text
-  BSON types are not read.
+  BSON types are not read. The database named in the URL is the only one
+  read; with none, every database but `admin`, `local` and `config` is.
+  `DB_SCHEMAS` does not apply to MongoDB.
 - **MySQL's read-only question.** MySQL has no read-only role, and the RDS
   Data API cannot check a user's grants. Here the runner reads `SHOW GRANTS`
   for the user and for every role granted to it (MySQL 8's `USING`, or
@@ -73,7 +75,7 @@ scanner's own JSON log lines (the drivers' logging is switched off).
 | `DATABASE_URL_FILE_<NAME>` | | A file holding one (a mounted secret) |
 | `DATABASE_URLS_DIR` | | A directory of files, one connection string each, named by the store; dot files are skipped (a Kubernetes secret volume) |
 | `DISCOVER_ALLOW`, `DISCOVER_DENY` | | Rules by store name, optionally per engine: `postgresql:hr-*`, `mongodb:*` |
-| `DB_SCHEMAS` | all but the system's | Schemas to read, comma-separated |
+| `DB_SCHEMAS` | all but the system's | Schemas to read, comma-separated (not MongoDB) |
 | `DB_MAX_ROWS_PER_TABLE` | 1000 | Rows (MongoDB: documents) sampled per table |
 | `DB_MAX_TABLES` | 500 | Tables (collections) per database |
 | `DB_STATEMENT_TIMEOUT_SECONDS` | 60 | Per statement |
