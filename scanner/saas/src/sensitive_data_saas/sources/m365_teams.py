@@ -126,7 +126,7 @@ class _Messages:
         gap = call_gap(err)
         cov.error = None if gap == "throttled" else error_name(err)
         log_event("source.failed", source=self.target, error=error_name(err))
-        if cov.scanned == 0 and gap not in (None, "access_denied"):
+        if cov.scanned == 0 and gap is not None:
             return gap
         return None
 

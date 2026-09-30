@@ -77,7 +77,8 @@
         "gcs", "bigquery", "firestore", "datastore", "spanner", "bigtable", "cloud_logging",
         "pubsub", "gce_snapshot", "secret_manager", "cloudsql_postgresql", "cloudsql_mysql", "cloudsql_sqlserver",
         "alloydb",
-        "m365_mail", "m365_onedrive", "m365_sharepoint", "m365_teams_channel", "m365_teams_chat"
+        "m365_mail", "m365_onedrive", "m365_sharepoint", "m365_teams_channel", "m365_teams_chat",
+        "gws_gmail", "gws_drive", "gws_shared_drive"
       ]
     },
     "azureSubscription": {
@@ -102,10 +103,10 @@
     },
     "saasVendor": {
       "description": "The SaaS vendor whose tenant a finding or store is in (1.8).",
-      "enum": ["m365"]
+      "enum": ["m365", "google_workspace"]
     },
     "saasHash": {
-      "description": "The SHA-256 of a SaaS identifier, as lower-case hex (1.8): tenantHash of the tenant's id (Microsoft 365: the Entra tenant id, lower-case); ownerHash of a mailbox's or drive's owner (the user's principal name or address, lower-case: an address is PII, never written); itemHash of the vendor's id for the item. Hash yours the same way to match.",
+      "description": "The SHA-256 of a SaaS identifier, as lower-case hex (1.8): tenantHash of the tenant's id (Microsoft 365: the Entra tenant id; Google Workspace: the customer id; lower-case); ownerHash of a mailbox's or drive's owner (the user's principal name or address, lower-case: an address is PII, never written); itemHash of the vendor's id for the item. Hash yours the same way to match.",
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
@@ -357,7 +358,7 @@
             "type": { "const": "saas_item" },
             "vendor": { "$ref": "#/$defs/saasVendor" },
             "service": {
-              "description": "The vendor's product: exchange, onedrive, sharepoint, teams_channel, teams_chat.",
+              "description": "The vendor's product: exchange, onedrive, sharepoint, teams_channel, teams_chat (Microsoft 365); gmail, drive, shared_drive (Google Workspace).",
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]{1,39}$"
             },
@@ -446,9 +447,9 @@
         "offsets": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/offset" } },
         "offsetsTruncated": { "type": "boolean" },
         "link": {
-          "description": "A deep link into the account's own AWS console, (1.6) the resource's page in the Azure portal, (1.7) in the Google Cloud console, or (1.8) the item in its SaaS vendor's own web app, built from ids only (Outlook on the web by message id, a SharePoint document by its unique id, a Teams channel); null when a name it would carry had to be masked.",
+          "description": "A deep link into the account's own AWS console, (1.6) the resource's page in the Azure portal, (1.7) in the Google Cloud console, or (1.8) the item in its SaaS vendor's own web app, built from ids only (Outlook on the web by message id, a SharePoint document by its unique id, a Teams channel, a Google Drive file by its id); null when a name it would carry had to be masked.",
           "type": ["string", "null"],
-          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/|console\\.cloud\\.google\\.com/|outlook\\.office365\\.com/|teams\\.microsoft\\.com/|[a-z0-9-]+(?:-my)?\\.sharepoint\\.com/)"
+          "pattern": "^https://(?:[a-z0-9-]+\\.console\\.aws\\.amazon\\.com/|portal\\.azure\\.com/|console\\.cloud\\.google\\.com/|outlook\\.office365\\.com/|teams\\.microsoft\\.com/|[a-z0-9-]+(?:-my)?\\.sharepoint\\.com/|drive\\.google\\.com/)"
         },
         "connect": {
           "type": "object",

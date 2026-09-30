@@ -10,9 +10,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from .config import M365Settings, Settings
+from .config import GwsSettings, M365Settings, Settings
 from .entra import Certificate, EntraApp
 from .federation import workload_token
+from .google import Delegation, GoogleApi, IamSigner, KeySigner
 from .graph import Graph
 from .http import Http
 
@@ -24,7 +25,7 @@ def _session() -> Any:
 
 
 class Clients:
-    """The session, and Graph as the app."""
+    """The session, Graph as the app, and Google Workspace's delegation."""
 
     def __init__(
         self,
@@ -44,6 +45,7 @@ class Clients:
         self._aws_client = aws_client
         self._http: Http | None = None
         self._graph: Graph | None = None
+        self._delegation: Delegation | None = None
 
     def __repr__(self) -> str:
         return "Clients()"
@@ -88,3 +90,32 @@ class Clients:
                 raise RuntimeError("m365 is not configured")
             self._graph = Graph(self.http, self.entra(m))
         return self._graph
+
+    def signer(self, g: GwsSettings) -> KeySigner | IamSigner:
+        if g.key_file is not None:
+            return KeySigner(g.key_file)
+        if g.credential == "gcp":
+            return IamSigner(self.http, g.service_account, clock=self._wall)
+        source = workload_token(
+            # The audience a workload identity provider accepts by default.
+            str(g.credential),
+            f"https://iam.googleapis.com/{g.provider}",
+            self.http,
+            aws_client=self._aws_client,
+        )
+        return IamSigner(
+            self.http, g.service_account, federated=source, provider=g.provider, clock=self._wall
+        )
+
+    @property
+    def delegation(self) -> Delegation:
+        if self._delegation is None:
+            g = self.settings.gws
+            if g is None:
+                raise RuntimeError("google workspace is not configured")
+            self._delegation = Delegation(self.http, self.signer(g), clock=self._wall)
+        return self._delegation
+
+    def google(self, user: str, scopes: tuple[str, ...]) -> GoogleApi:
+        """Google's APIs as `user` in scope, for read-only `scopes`."""
+        return GoogleApi(self.delegation, user, scopes)

@@ -2,7 +2,7 @@
 
 The SaaS scanner runs **in your own environment**: a container you schedule on
 ECS, Azure Container Apps, Cloud Run or Kubernetes, with **read-only** grants
-to your SaaS tenants. It samples mail, files and messages, and sends **findings
+to your SaaS tenants: Microsoft 365 and Google Workspace. It samples mail, files and messages, and sends **findings
 only, never values** ([FINDINGS.md](FINDINGS.md), schema 1.8). **Mermera's own
 servers never read your SaaS content for this**: they receive findings, the
 same as from the cloud scanners, so they stay out of what your content is in
@@ -34,7 +34,8 @@ and its own image (`docker build --target saas`).
 - **Budgets and sampling**: the core's run budget (items, bytes, time) shared
   among the stores, a cap per mailbox, drive and channel per run, a stable
   sample by item id, and the vendors' rate limits honored (`Retry-After`).
-- **Incremental**: delta queries (Microsoft Graph), with the cursors kept at
+- **Incremental**: delta queries (Microsoft Graph), Gmail's history and
+  Drive's changes, with the cursors kept at
   `STATE_LOCATION`, so a run reads what changed since the last.
 
 ## Microsoft 365
@@ -207,6 +208,87 @@ say `customer_managed_key`, with `atRestKeyHash`, the SHA-256 of that id (the
 id itself is never written). Graph does not report the policy, so the scanner
 takes it from you.
 
+## Google Workspace
+
+| Kind (`DISCOVER`) | Store | Read with (domain-wide delegation) | Default |
+|---|---|---|---|
+| `gws_gmail` (`gmail`) | A person's mailbox | `https://www.googleapis.com/auth/gmail.readonly`, as that person | read |
+| `gws_drive` (`drive`) | A person's My Drive (the files they own) | `https://www.googleapis.com/auth/drive.readonly`, as that person | read |
+| `gws_shared_drive` (`shared_drive`) | A shared drive | `https://www.googleapis.com/auth/drive.readonly`, as `GWS_ADMIN_USER` (a member of the drive) | read |
+
+And, for who is in scope, as `GWS_ADMIN_USER`:
+`https://www.googleapis.com/auth/admin.directory.user.readonly` and
+`https://www.googleapis.com/auth/admin.directory.group.member.readonly`.
+Every one of these reads; no other scope is ever requested.
+
+### Consent: domain-wide delegation, read-only scopes only
+
+1. Make a service account in any Google Cloud project (no IAM role on
+   anything; it needs none). Note its unique id (the OAuth client id).
+2. In the Admin console, **Security > Access and data control > API controls
+   > Domain-wide delegation > Add new**: the client id, and exactly these
+   scopes, comma-separated:
+
+   ```text
+   https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly
+   ```
+
+3. `GWS_ADMIN_USER`: an administrator whose role can read users and groups
+   (a custom admin role with *Users: Read* and *Groups: Read* is enough), and a
+   member (Viewer) of each shared drive to read.
+
+The scanner then acts as each person in scope, for those scopes: the JWT it
+exchanges names the person (`sub`) and the scopes, and Google refuses any
+scope the delegation does not list (`unauthorized_client`, the store's
+`access_denied`).
+
+### Who signs: keyless where possible
+
+| `GWS_CREDENTIAL` | Where the container runs | Setup |
+|---|---|---|
+| `gcp` | Cloud Run, as a Google service account | Give the job's own service account **Service Account Token Creator** on the delegated service account (it may be the same one). Its metadata token calls IAM Credentials' `signJwt`; no key exists |
+| `file:<path>`, `aws`, `azure` | Kubernetes, ECS or EKS, Azure Container Apps | **Workload identity federation**: a workload identity pool with a provider for the platform (OIDC: the cluster's issuer, AWS's outbound federation issuer, or Entra's issuer; default audience), and **Service Account Token Creator** on the delegated service account for the workload's principal. `GWS_WORKLOAD_PROVIDER` is the provider's resource name. The platform's token is exchanged at Google's STS; no key exists |
+| (`GWS_KEY_FILE`) | anywhere (the fallback) | A service account key, a JSON file on a mounted secret volume, signs the JWT locally |
+
+The signer needs only `iam.serviceAccounts.signJwt` on the delegated service
+account. No key, JWT or token is ever logged.
+
+### The people in scope
+
+`GWS_USERS` (addresses), `GWS_GROUPS` (group addresses: their members, nested
+groups included) and `GWS_ORG_UNITS` (organizational unit paths, `/Sales`),
+listed with the Directory API; suspended users are left out. A person's
+address is used only as the delegation's subject (inside a signed JWT): every
+Gmail and Drive call is to `users/me`, so no address is in a URL, a cursor or
+a log. A person's store is `user-<first 16 hex of ownerHash>`, as for
+Microsoft 365.
+
+### Gmail
+
+The first run lists the last `LOOKBACK_DAYS` of messages (`newer_than:<n>d`,
+spam and trash left out) and reads each: its subject and text parts together
+(an HTML-only body as its text), and each attachment with the core's readers.
+The mailbox's `historyId` at the start is kept; later runs read only the
+messages added since (`users.history.list`), and a deleted message drops its
+findings. A history too old for Gmail to keep starts a new pass. A person
+without Gmail is `not_provisioned`. Nothing is labeled or marked read.
+Gmail findings carry no link: Gmail has no link to another person's message.
+
+### Drive
+
+Each drive's files are listed once (`files.list`), after its change token is
+taken; later runs read only what changed (`changes.list`), and a removed or
+trashed file drops its findings. My Drive is the files a person owns (a file
+shared with them is read in its owner's store). A file is read with ranged
+`alt=media` GETs; a Google Docs, Sheets or Slides file is exported as text or
+CSV (Drive caps an export at 10 MB). Forms, Drawings and other Google types
+are counted as `document`, shortcuts as `linked_item`. A shared drive the
+administrator is not a member of is `access_denied`.
+
+Google encrypts Workspace data with its own keys (`service_managed`). A file
+under Workspace client-side encryption is ciphertext to the API: it is not
+read (counted by kind).
+
 ## Findings
 
 A SaaS document says `"platform": "saas"` and names its `site`
@@ -214,9 +296,9 @@ A SaaS document says `"platform": "saas"` and names its `site`
 
 | Field | What |
 |---|---|
-| `vendor` | `m365` |
-| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat` |
-| `tenantHash` | SHA-256 of the tenant id, lower-case |
+| `vendor` | `m365`, `google_workspace` |
+| `service` | `exchange`, `onedrive`, `sharepoint`, `teams_channel`, `teams_chat`; `gmail`, `drive`, `shared_drive` |
+| `tenantHash` | SHA-256 of the tenant id, lower-case (Microsoft 365: the Entra tenant id; Google Workspace: the customer id) |
 | `ownerHash` | SHA-256 of the mailbox's, OneDrive's or chat's owner (principal name, lower-case) |
 | `container`, `channel` | The site and library, or the team and channel, masked like keys |
 | `itemId`, `itemHash` | The vendor's id for the item (a message id, `message/attachment`, a drive item id), masked, and its SHA-256 |
@@ -228,7 +310,8 @@ A store in the run summary carries `vendor`, `tenantHash` and, for a person's
 store, `ownerHash`. A finding's `link` opens the item in the vendor's own web
 app, built from ids only, and is `null` when an id it carries had to be
 masked: a message in Outlook on the web (its owner or a delegate opens it), a
-SharePoint or OneDrive file by its unique id, a Teams channel.
+SharePoint or OneDrive file by its unique id, a Teams channel, a Google Drive
+file by its id.
 
 ## Settings
 
@@ -257,6 +340,12 @@ SharePoint or OneDrive file by its unique id, a Teams channel.
 | `M365_SITES` | | SharePoint sites, or `all` |
 | `M365_TEAMS` | | Team ids whose channels are read |
 | `M365_CUSTOMER_KEY_ID` | | Your Customer Key data encryption policy's id |
+| `GWS_CUSTOMER_ID` | | The Workspace customer id (`C0…`); set to scan Google Workspace |
+| `GWS_SERVICE_ACCOUNT` | | The delegated service account's email |
+| `GWS_ADMIN_USER` | | The administrator for the Directory API and shared drives |
+| `GWS_CREDENTIAL`, `GWS_WORKLOAD_PROVIDER`, `GWS_KEY_FILE` | | Who signs ([Who signs](#who-signs-keyless-where-possible)): exactly one of `GWS_CREDENTIAL` and `GWS_KEY_FILE` |
+| `GWS_USERS`, `GWS_GROUPS`, `GWS_ORG_UNITS` | | Whose Gmail and My Drive are read |
+| `GWS_SHARED_DRIVES` | | Shared drive ids, or `all` |
 
 At least one of `FINDINGS_HTTPS_URL` and `FINDINGS_FILE` is required.
 

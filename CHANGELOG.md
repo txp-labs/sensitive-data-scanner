@@ -365,6 +365,23 @@ bumps the minor version. Spec changes are listed under **Spec**.
     web, SharePoint and Teams built from ids only. `M365_CUSTOMER_KEY_ID`
     (Microsoft Purview Customer Key) makes findings `customer_managed_key`,
     hashed; otherwise `service_managed`.
+- **SaaS, step 2: Google Workspace** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
+  Gmail (`gws_gmail`), My Drive (`gws_drive`) and shared drives
+  (`gws_shared_drive`), read through domain-wide delegation to a service
+  account for read-only scopes only (`gmail.readonly`, `drive.readonly`, and
+  the directory's `user.readonly` and `group.member.readonly` to list the
+  people in `GWS_USERS`, `GWS_GROUPS` and `GWS_ORG_UNITS`):
+  - The delegation's JWTs are signed keylessly where possible: IAM
+    Credentials' `signJwt` with the Cloud Run job's own token, or with a
+    workload identity federated through Google's STS (a token file, AWS or
+    Azure); a service account key file is the fallback.
+  - Gmail: the first run lists the lookback window, later runs read only the
+    history since; subjects, text (or HTML's text) and attachments.
+  - Drive: files listed, then only changes; Google Docs, Sheets and Slides
+    exported as text or CSV; ranged media reads; each file read in its
+    owner's store; shared drives read as a member administrator.
+  - Every Gmail and Drive call is to `users/me`: no address in a URL, a
+    cursor or a log. Links to Drive files by id; Gmail has none.
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -399,6 +416,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   mailboxes in scope. A client secret is never taken from the environment;
   no token, assertion, secret or address is logged; the app's token is sent
   to `graph.microsoft.com` only (a file download's redirect goes without it).
+- Google Workspace is read through domain-wide delegation of read-only
+  scopes only; the delegated service account holds no IAM role, and its
+  signer only `iam.serviceAccounts.signJwt` on it. Google tokens go to
+  Gmail, Drive and the Directory API only.
 - The Azure deployment assigns Storage File Data Privileged Reader only with
   `readFileShares` (off by default); the strict test lists its data actions
   (`fileshares/files/read`, `readFileBackupSemantics/action`) and holds it to
@@ -460,11 +481,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `tenantHash`, `ownerHash`, `container`, `channel`, `itemId`, `itemHash`,
   `part`, `name`, `column`), `vendor`, `tenantHash` and `ownerHash` on a
   store, the `m365_mail`, `m365_onedrive`, `m365_sharepoint`,
-  `m365_teams_channel` and `m365_teams_chat` kinds, the `docx`, `xlsx` and
-  `pptx` formats, the `encrypted`, `too_large` and `linked_item` skip kinds,
+  `m365_teams_channel`, `m365_teams_chat`, `gws_gmail`, `gws_drive` and
+  `gws_shared_drive` kinds, the `google_workspace` vendor, the `docx`, `xlsx`
+  and `pptx` formats, the `encrypted`, `too_large` and `linked_item` skip kinds,
   the `scope_unverified`, `unscoped_grant`, `protected_api`,
   `not_provisioned` and `throttled` reasons, and Outlook on the web,
-  SharePoint and Teams links.
+  SharePoint, Teams and Google Drive links.
 - `schemaVersion` is now **1.7**, additive: Azure Files' `azure_files` kind
   and `azure_file` resource, and the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and

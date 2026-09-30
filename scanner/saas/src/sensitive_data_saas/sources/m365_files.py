@@ -248,7 +248,7 @@ class DriveSource:
         except Exception as err:  # recorded by name on the source
             gap = call_gap(err)
             cov.error = None if gap == "throttled" else error_name(err)
-            if cov.scanned == 0 and gap not in (None, "access_denied"):
+            if cov.scanned == 0 and gap is not None:
                 note = gap
             log_event("source.failed", source=self.target, error=error_name(err))
         cov.pass_complete = done and cov.error is None

@@ -68,8 +68,8 @@ Detection uses [Microsoft Presidio](https://github.com/microsoft/presidio)
   The Azure scanner ([docs/AZURE.md](docs/AZURE.md)) and the Google Cloud
   scanner ([docs/GCP.md](docs/GCP.md)) discover and read their clouds' stores
   the same way, and the SaaS scanner ([docs/SAAS.md](docs/SAAS.md)) reads
-  Microsoft 365 mail, files and Teams messages from a container in the
-  customer's own environment.
+  Microsoft 365 and Google Workspace mail, files and messages from a
+  container in the customer's own environment.
 - **The findings contract:** a documented, versioned schema
   ([docs/FINDINGS.md](docs/FINDINGS.md)), so any tool can consume the
   results.

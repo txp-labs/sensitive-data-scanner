@@ -52,6 +52,25 @@ wrong setting is reported by a fixed code, never by its value.
 - `M365_CUSTOMER_KEY_ID`: the Microsoft Purview Customer Key data encryption
   policy's id, when the tenant uses one: findings then say
   `customer_managed_key`, with its hash; otherwise `service_managed`.
+
+**Google Workspace** (on when `GWS_CUSTOMER_ID` is set)
+
+- `GWS_CUSTOMER_ID`: the Workspace customer id (`C0...`), which findings name
+  only by its hash.
+- `GWS_SERVICE_ACCOUNT`: the service account whose client id holds domain-wide
+  delegation for the read-only scopes (docs/SAAS.md).
+- `GWS_ADMIN_USER`: an administrator the scanner acts as for the Directory API
+  (listing the users in scope) and to read shared drives (a member of each).
+- Who signs the delegation's JWTs, exactly one of: `GWS_CREDENTIAL` (`gcp`: the
+  job's own service account through the metadata server; `file:<path>`, `aws`
+  or `azure`: workload identity federation through `GWS_WORKLOAD_PROVIDER`,
+  `projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`),
+  or `GWS_KEY_FILE` (a service account key file, the fallback).
+- `GWS_USERS` (addresses), `GWS_GROUPS` (group addresses, expanded to their
+  members) and `GWS_ORG_UNITS` (organizational unit paths): whose Gmail and
+  My Drive are read.
+- `GWS_SHARED_DRIVES`: shared drive ids, or `all` (every shared drive, listed
+  with the administrator's domain access).
 """
 
 from __future__ import annotations
@@ -83,10 +102,15 @@ M365_KINDS: tuple[str, ...] = (
     "m365_teams_channel",
     "m365_teams_chat",
 )
+GWS_KINDS: tuple[str, ...] = ("gws_gmail", "gws_drive", "gws_shared_drive")
 OPT_IN_KINDS: frozenset[str] = frozenset({"m365_teams_channel", "m365_teams_chat"})
-KINDS: tuple[str, ...] = M365_KINDS
+KINDS: tuple[str, ...] = (*M365_KINDS, *GWS_KINDS)
 KIND_ALIASES = {
     **{k: k for k in KINDS},
+    "gmail": "gws_gmail",
+    "drive": "gws_drive",
+    "shared_drive": "gws_shared_drive",
+    "shared_drives": "gws_shared_drive",
     "mail": "m365_mail",
     "exchange": "m365_mail",
     "onedrive": "m365_onedrive",
@@ -139,6 +163,24 @@ class M365Settings:
 
 
 @dataclass(frozen=True)
+class GwsSettings:
+    customer_id: str
+    service_account: str
+    admin_user: str = field(repr=False, default="")
+    credential: str | None = None
+    provider: str | None = None
+    key_file: str | None = None
+    users: tuple[str, ...] = ()
+    groups: tuple[str, ...] = ()
+    org_units: tuple[str, ...] = ()
+    shared_drives: tuple[str, ...] = ()
+    all_shared_drives: bool = False
+
+    def __repr__(self) -> str:
+        return f"GwsSettings(users={len(self.users)}, groups={len(self.groups)})"
+
+
+@dataclass(frozen=True)
 class Settings:
     site: str
     discover: tuple[str, ...] = ()
@@ -162,6 +204,7 @@ class Settings:
     hmac_key: Secret | None = field(default=None, repr=False)
     findings_file: str | None = None
     m365: M365Settings | None = None
+    gws: GwsSettings | None = None
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -293,6 +336,71 @@ def _m365(e: Mapping[str, str]) -> M365Settings | None:
     )
 
 
+_EMAIL = re.compile(r"^[^@\s,]{1,64}@[A-Za-z0-9.-]{1,255}$")
+_SA = re.compile(r"^[a-z][a-z0-9-]{4,62}@[a-z][a-z0-9.:-]{4,62}\.iam\.gserviceaccount\.com$")
+_PROVIDER = re.compile(
+    r"^projects/[0-9]{1,24}/locations/global/workloadIdentityPools/[a-z0-9-]{4,32}"
+    r"/providers/[a-z0-9-]{4,32}$"
+)
+_OU = re.compile(r"^/[^,\n]{0,400}$")
+_DRIVE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _emails(raw: str | None, name: str) -> tuple[str, ...]:
+    out: list[str] = []
+    for p in _list(raw):
+        if not _EMAIL.match(p):
+            raise ConfigError(name)
+        if p.lower() not in out:
+            out.append(p.lower())
+    return tuple(out)
+
+
+def _gws(e: Mapping[str, str]) -> GwsSettings | None:
+    customer = (e.get("GWS_CUSTOMER_ID") or "").strip()
+    if not customer:
+        return None
+    if not re.match(r"^C[0-9a-zA-Z]{6,16}$", customer):
+        raise ConfigError("gws_customer_id")
+    sa = (e.get("GWS_SERVICE_ACCOUNT") or "").strip().lower()
+    if not _SA.match(sa):
+        raise ConfigError("gws_service_account")
+    admin = (e.get("GWS_ADMIN_USER") or "").strip().lower()
+    if not _EMAIL.match(admin):
+        raise ConfigError("gws_admin_user")
+    credential = (e.get("GWS_CREDENTIAL") or "").strip() or None
+    key_file = _file(e.get("GWS_KEY_FILE"), "gws_key_file")
+    if (credential is None) == (key_file is None):
+        raise ConfigError("gws_credential")
+    provider = (e.get("GWS_WORKLOAD_PROVIDER") or "").strip() or None
+    if credential is not None:
+        if credential != "gcp" and _federated(credential) is None:
+            raise ConfigError("gws_credential")
+        if credential != "gcp" and (provider is None or not _PROVIDER.match(provider)):
+            raise ConfigError("gws_workload_provider")
+    org_units = _list(e.get("GWS_ORG_UNITS"))
+    if any(not _OU.match(o) or "'" in o for o in org_units):
+        raise ConfigError("gws_org_units")
+    drives_raw = _list(e.get("GWS_SHARED_DRIVES"))
+    all_drives = drives_raw == ("all",)
+    drives = () if all_drives else drives_raw
+    if any(not _DRIVE.match(d) for d in drives):
+        raise ConfigError("gws_shared_drives")
+    return GwsSettings(
+        customer_id=customer,
+        service_account=sa,
+        admin_user=admin,
+        credential=credential,
+        provider=provider,
+        key_file=key_file,
+        users=_emails(e.get("GWS_USERS"), "gws_users"),
+        groups=_emails(e.get("GWS_GROUPS"), "gws_groups"),
+        org_units=org_units,
+        shared_drives=drives,
+        all_shared_drives=all_drives,
+    )
+
+
 def default_kinds(configured: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(k for k in configured if k not in OPT_IN_KINDS)
 
@@ -323,7 +431,11 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     if not _SITE.match(site):
         raise ConfigError("scanner_site")
     m365 = _m365(e)
-    configured: tuple[str, ...] = M365_KINDS if m365 is not None else ()
+    gws = _gws(e)
+    configured: tuple[str, ...] = (
+        *(M365_KINDS if m365 is not None else ()),
+        *(GWS_KINDS if gws is not None else ()),
+    )
     if not configured:
         raise ConfigError("no_vendor")
     https_url: Secret | None = None
@@ -380,4 +492,5 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         hmac_key=key,
         findings_file=findings_file,
         m365=m365,
+        gws=gws,
     )
