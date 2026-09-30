@@ -10,12 +10,19 @@ from sensitive_data_core.adapter import Adapter
 
 from .base import Context
 from .bigquery import BigQueryAdapter
+from .bigtable import BigtableAdapter
 from .databases import DatabaseAdapter
+from .documents import DocumentAdapter
 from .gcs import GcsAdapter
+from .spanner import SpannerAdapter
 
 _ALL: list[Adapter[Context]] = [
     GcsAdapter(),
     BigQueryAdapter(),
+    DocumentAdapter("firestore"),
+    DocumentAdapter("datastore"),
+    SpannerAdapter(),
+    BigtableAdapter(),
     DatabaseAdapter("cloudsql_postgresql"),
     DatabaseAdapter("cloudsql_mysql"),
     DatabaseAdapter("cloudsql_sqlserver"),

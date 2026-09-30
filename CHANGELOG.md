@@ -150,6 +150,20 @@ bumps the minor version. Spec changes are listed under **Spec**.
     login, `no_read_path` for SQL Server (no IAM authentication) and for an
     instance with the IAM flag off, `driver_missing`. `atRestEncryption` from
     the instance's or cluster's Cloud KMS key.
+- **Google Cloud, step 4: Firestore and Datastore, Spanner, Bigtable** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 5),
+  each read by default with its viewer or reader role:
+  - Firestore in Native mode (`firestore`): root collections, the first
+    `DOCUMENTS_MAX_PER_COLLECTION` documents of each with one `runQuery`, by
+    field; Datastore mode (`datastore`): the default namespace's kinds (a
+    `__kind__` query), then entities per kind. Resumable by collection.
+  - Spanner (`spanner`): the core's sampled SQL pass through `executeSql`,
+    every statement in a single-use read-only transaction; GoogleSQL and
+    PostgreSQL dialects. The core gains the Spanner dialects and names a
+    table in an unnamed default schema alone.
+  - Bigtable (`bigtable`): one `readRows` per table (`BIGTABLE_MAX_ROWS`,
+    latest cell per column), by `family:qualifier`, the row key read too.
+  - `atRestEncryption` from each database's (or Bigtable cluster's) Cloud
+    KMS key.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -335,7 +349,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `schemaVersion` is now **1.7**, additive: the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and
   `resourceNameHash` (the SHA-256 of the store's full resource name) on
-  Google Cloud findings and stores, the `gcs`, `bigquery`,
+  Google Cloud findings and stores, the `gcs`, `bigquery`, `firestore`,
+  `datastore`, `spanner`, `bigtable`,
   `cloudsql_postgresql`, `cloudsql_mysql`, `cloudsql_sqlserver` and `alloydb`
   kinds, the
   `requester_pays`, `row_level_policy` and `authorized_view` reasons, the

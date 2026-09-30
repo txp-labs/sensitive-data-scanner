@@ -39,6 +39,10 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 |---|---|---|---|
 | `gcs` (`storage`, `bucket`) | A Cloud Storage bucket | `cloudasset.assets.searchAllResources` (discovery); `storage.objects.list` and `storage.objects.get` (List Objects, ranged media reads) | read |
 | `bigquery` (`bq`) | A BigQuery table, `project.dataset.table` | `bigquery.datasets.get` and `bigquery.tables.list` (discovery), `bigquery.tables.get`, `bigquery.rowAccessPolicies.list` and `bigquery.tables.getData` (`tabledata.list`): BigQuery Data Viewer's reads | read; views, external tables, tables with row-level policies are gaps |
+| `firestore` (`documents`) | A Firestore database in Native mode, `project/database` | `datastore.databases.getMetadata` (discovery, key); `datastore.entities.list`, `datastore.entities.get` (`listCollectionIds`, `runQuery`): Cloud Datastore Viewer's reads | read |
+| `datastore` | A Firestore database in Datastore mode, `project/database` | the same (a `__kind__` query, then `runQuery` per kind) | read |
+| `spanner` | A Spanner database, `instance/database` | `spanner.databases.get` (discovery, key); `spanner.databases.select`, `spanner.sessions.create`, `spanner.sessions.delete`: Cloud Spanner Database Reader | read |
+| `bigtable` | A Bigtable table, `instance/table` | `bigtable.clusters.list` (the key); `bigtable.tables.readRows`: Bigtable Reader | read |
 | `cloudsql_postgresql` (`postgresql`, `cloudsql`) | A Cloud SQL for PostgreSQL database, `instance/database` | `cloudsql.instances.get`, `cloudsql.databases.list` (discovery, TLS CA, key); `cloudsql.instances.login` and an IAM database user with read grants (below) | discovered; read with `GCP_DB_READ` |
 | `cloudsql_mysql` (`mysql`) | A Cloud SQL for MySQL database, `instance/database` | the same | discovered; read with `GCP_DB_READ` |
 | `cloudsql_sqlserver` (`sqlserver`) | A Cloud SQL for SQL Server database, `instance/database` | `cloudsql.instances.get`, `cloudsql.databases.list` | gap: `no_read_path` (no IAM database authentication; only a password could read it) |
@@ -118,6 +122,59 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 - **Encryption.** The table's own Cloud KMS key, else its dataset's default
   key, is `customer_managed_key` (hashed as above); otherwise
   `service_managed`.
+
+### Firestore and Datastore
+
+- **Discovery.** Cloud Asset Inventory lists every Firestore database; its
+  record (its mode and CMEK) comes from the Firestore API. A database in
+  Native mode is a `firestore` store; one in Datastore mode a `datastore`
+  store.
+- **Firestore** (Native mode): the root collections (`listCollectionIds`),
+  then the first `DOCUMENTS_MAX_PER_COLLECTION` (500) documents of each with
+  one `runQuery` (`limit n`), read by top-level field, as columns: a map is
+  read inside its field. Subcollections are not listed.
+- **Datastore** (Datastore mode): the kinds of the default namespace (a
+  `__kind__` query), then the first entities of each kind with one
+  `runQuery`, read by property.
+- Only queries are sent; a query cannot write. Bytes and blobs are not read.
+  At most `DOCUMENTS_MAX_COLLECTIONS` (200) collections or kinds per database;
+  a database the budget does not finish resumes at its next one. A finding
+  names the database as `store`, the collection or kind as `table` and the
+  field as `field`, `readBy: query`, format `json`.
+- **Encryption.** The database's CMEK is `customer_managed_key` (hashed);
+  otherwise `service_managed`.
+
+### Spanner
+
+- **Discovery.** Cloud Asset Inventory lists every database; its record (its
+  dialect, state and key) comes from the Spanner API. A database still being
+  created or restored is `paused`.
+- **Reading** is the core's sampled SQL pass (`scan/sql.py`) through one
+  session: the base tables from `information_schema.tables`, then
+  `SELECT * FROM <table> LIMIT n` with quoted identifiers, read by column.
+  **Every statement runs in a single-use read-only transaction**
+  (`readOnly: {strong: true}`), which cannot write. The session is deleted
+  after the pass. GoogleSQL and PostgreSQL-dialect databases are both read;
+  `DB_SCHEMAS` applies to GoogleSQL only. `BYTES` and `PROTO` columns are not
+  read. The service account's access is its IAM role (Database Reader), which
+  the deployment's strict test holds to reads; there is no SQL user to check.
+  A finding names the instance as `store`, the database, the table (with its
+  schema, when it has one) and the column, `readBy: sample`, format `sql`.
+- **Encryption.** The database's Cloud KMS key is `customer_managed_key`
+  (hashed); otherwise `service_managed`.
+
+### Bigtable
+
+- **Discovery.** Cloud Asset Inventory lists every table; each instance's
+  clusters say which key encrypts it.
+- **Reading** is one `readRows` per table: the first `BIGTABLE_MAX_ROWS`
+  (1000) rows, the latest cell of each column only
+  (`cellsPerColumnLimitFilter: 1`), read by column, `family:qualifier`. The
+  row key is read too, as the column `rowKey`, since a key can hold a value.
+  Cells that are not text are not read. A finding names the instance as
+  `store` and the table as `table`, `readBy: read_rows`, format `json`.
+- **Encryption.** A cluster's Cloud KMS key is `customer_managed_key`
+  (hashed); otherwise `service_managed`.
 
 ### Cloud SQL and AlloyDB
 
@@ -237,9 +294,11 @@ masked.
 | `MAX_OBJECT_BYTES`, `MAX_INFLATED_BYTES` | 20 MiB, 100 MiB | Bytes read from one object, and inflated from one compressed object |
 | `COLUMNAR_MAX_ROWS` | 10000 | Rows read from one table file |
 | `BIGQUERY_MAX_ROWS` | 1000 | Rows read from one BigQuery table (`tabledata.list`) |
+| `DOCUMENTS_MAX_PER_COLLECTION`, `DOCUMENTS_MAX_COLLECTIONS` | 500, 200 | Firestore documents (Datastore entities) read per collection (kind), and collections (kinds) per database |
+| `BIGTABLE_MAX_ROWS` | 1000 | Rows read from one Bigtable table |
 | `GCP_DB_READ` | off | The database kinds read: `all`, or `cloudsql_postgresql`, `cloudsql_mysql`, `alloydb` (or `postgresql`, `mysql`, `alloy`) |
 | `GCP_DB_PRINCIPAL` | | The service account's email; its IAM database users are logged in as. Required to read |
-| `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's |
+| `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's; Spanner too |
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `MAX_ITEMS_PER_RUN`, `MAX_BYTES_PER_RUN`, `MAX_RUN_SECONDS` | 20000, 2 GiB, 3000 | The run's budget, shared among the stores |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on objects per run |
