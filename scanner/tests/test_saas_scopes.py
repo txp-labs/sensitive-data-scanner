@@ -42,6 +42,7 @@ ALLOWED: dict[str, frozenset[str]] = {
             "Channel.ReadBasic.All",
             "ChannelMessage.Read.All",
             "Chat.Read.All",
+            "SecurityAlert.Read.All",
         }
     ),
     "google_workspace": frozenset(
@@ -50,6 +51,7 @@ ALLOWED: dict[str, frozenset[str]] = {
             "https://www.googleapis.com/auth/drive.readonly",
             "https://www.googleapis.com/auth/admin.directory.user.readonly",
             "https://www.googleapis.com/auth/admin.directory.group.member.readonly",
+            "https://www.googleapis.com/auth/apps.alerts",
         }
     ),
     "google_signer": frozenset({"https://www.googleapis.com/auth/iam"}),
@@ -61,6 +63,7 @@ ALLOWED: dict[str, frozenset[str]] = {
             "groups:history",
             "files:read",
             "discovery:read",
+            "auditlogs:read",
         }
     ),
     "atlassian": frozenset(
@@ -96,6 +99,14 @@ SHAPES = {
         r"\b(?:channels|groups|im|mpim|files|chat|users|discovery|admin|team):[a-z.]+\b"
     ),
     "atlassian": re.compile(r"\b(?:read|write|readonly|manage|delete):[a-z]+(?:[-.:][a-z]+)*\b"),
+}
+# Scopes allowed although their name does not say they only read, each with its reason.
+NAMED_EXCEPTIONS = {
+    "https://www.googleapis.com/auth/apps.alerts": (
+        "the Alert Center has no read-only scope; the scanner only lists alerts, and the "
+        "delegated administrator's role holds Alert Center View only, so Google refuses any "
+        "change (docs/SAAS.md)"
+    ),
 }
 # Scopes named only to say the scanner never holds them: `channels:join` (it never joins a
 # Slack channel), and `Sites.FullControl.All`, which the docs name as what the *admin's own*
@@ -137,11 +148,17 @@ def test_every_requested_scope_reads() -> None:
     for vendor, requested in scopes.REQUESTED.items():
         for scope in requested:
             assert scope in ALLOWED[vendor], (vendor, scope)
+            if scope in NAMED_EXCEPTIONS:
+                continue
             assert READS[vendor].match(scope), (vendor, scope)
             assert not WRITES.search(scope), (vendor, scope)
     for vendor, allowed in ALLOWED.items():
         for scope in allowed:
+            if scope in NAMED_EXCEPTIONS:
+                continue
             assert READS[vendor].match(scope) and not WRITES.search(scope), (vendor, scope)
+    # The one exception is requested only for the importer, as the administrator.
+    assert tuple(NAMED_EXCEPTIONS) == scopes.GWS_ALERTS
 
 
 def _texts() -> dict[str, str]:

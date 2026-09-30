@@ -444,6 +444,18 @@ bumps the minor version. Spec changes are listed under **Spec**.
   and Cloud Storage, `vendor_not_covered` for the rest). A vendor finding's
   id now includes its `vendorType`, so two `other` types at one place stay
   two findings.
+- **SaaS vendor detection: Purview DLP, the Workspace Alert Center, Slack DLP** ([#55](https://github.com/txp-labs/sensitive-data-scanner/issues/55)):
+  `SCAN_MODE_M365`, `SCAN_MODE_GOOGLE_WORKSPACE` and `SCAN_MODE_SLACK` (each
+  defaulting to `SCAN_MODE`) choose per vendor; Atlassian is `scanner` only.
+  Purview DLP's Graph security alerts (`SecurityAlert.Read.All`; imported in
+  the SaaS package, which holds the Microsoft 365 sign-in and Graph client),
+  the Alert Center's `DlpRuleViolation` alerts (`apps.alerts` as a View-only
+  administrator; a Drive document links to the scanner's finding for it) and
+  Slack's DLP audit events (`auditlogs:read`, an org token from a file) become
+  findings with their source; titles, descriptions, subjects, file names,
+  addresses, rule names and matched text are never read into them. A vendor
+  that names no kind of data gives class `other`, never linked
+  (`no_data_class`).
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -473,6 +485,11 @@ bumps the minor version. Spec changes are listed under **Spec**.
   that were skipped before.
 
 ### Security
+- (#55) The SaaS importers add `SecurityAlert.Read.All`, `auditlogs:read` and
+  the Alert Center's `apps.alerts`, each only in `vendor` or `both`. The
+  Alert Center has no read-only scope: the strict test names it as its one
+  exception, with its reason (the scanner only lists, and the delegated
+  administrator's role holds Alert Center View only).
 - (#55) The Google Cloud module lists SDP's data profiles with a role of its
   own, made only when `scan_mode` is not `scanner`, holding
   `dlp.columnDataProfiles.list` and `dlp.fileStoreProfiles.list` only; the

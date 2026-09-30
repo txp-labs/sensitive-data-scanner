@@ -27,7 +27,7 @@ from sensitive_data_core.safety import Secret
 from .http import Http, SaasError
 
 API = "https://slack.com/api"
-HOSTS = frozenset({"slack.com", "files.slack.com"})
+HOSTS = frozenset({"slack.com", "files.slack.com", "api.slack.com"})
 MAX_PAGES = 10_000
 
 
@@ -84,6 +84,27 @@ class Slack:
             meta = page.get("response_metadata") or {}
             cursor = str(meta.get("next_cursor") or "") or None
             yield [i for i in page.get(items) or [] if isinstance(i, dict)], cursor, page
+            if cursor is None:
+                return
+
+    def audit_pages(
+        self, url: str, params: dict[str, Any]
+    ) -> Iterator[tuple[list[dict[str, Any]], str | None, dict[str, Any]]]:
+        """The Audit Logs API's pages (`entries`, `response_metadata.next_cursor`): no `ok`."""
+        cursor: str | None = None
+        for _ in range(MAX_PAGES):
+            query = {**params, **({"cursor": cursor} if cursor else {})}
+            resp = self.http.call(
+                "GET", url, params=query, headers=self._head(url), error_of=slack_error
+            )
+            page = resp.json() if resp.content else {}
+            if not isinstance(page, dict) or page.get("ok") is False:
+                failed = slack_error(resp)
+                raise failed
+            meta = page.get("response_metadata") or {}
+            cursor = str(meta.get("next_cursor") or "") or None
+            entries = [e for e in page.get("entries") or [] if isinstance(e, dict)]
+            yield entries, cursor, page
             if cursor is None:
                 return
 

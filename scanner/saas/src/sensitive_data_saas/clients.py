@@ -51,6 +51,7 @@ class Clients:
         self._delegation: Delegation | None = None
         self._slack: Slack | None = None
         self._atlassian: Atlassian | None = None
+        self._slack_audit: Slack | None = None
 
     def __repr__(self) -> str:
         return "Clients()"
@@ -155,3 +156,13 @@ class Clients:
                 raise RuntimeError("no atlassian credential")
             self._atlassian = Atlassian(self.http, a.site, auth)
         return self._atlassian
+
+    @property
+    def slack_audit(self) -> Slack:
+        """Slack's Audit Logs API, with the org token (#55)."""
+        if self._slack_audit is None:
+            sl = self.settings.slack
+            if sl is None or sl.audit_token is None:
+                raise RuntimeError("slack audit is not configured")
+            self._slack_audit = Slack(self.http, sl.audit_token)
+        return self._slack_audit

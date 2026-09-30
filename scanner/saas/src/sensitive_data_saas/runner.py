@@ -34,6 +34,7 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
+from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
 from sensitive_data_core.state import StateStore, state_location
@@ -137,6 +138,33 @@ def rotate(sources: list[Any], start: str | None) -> list[Any]:
     return sources
 
 
+# Each vendor's kinds: what `vendor` mode leaves unread.
+VENDOR_KINDS: dict[str, tuple[str, ...]] = {
+    "m365": ("m365_",),
+    "google_workspace": ("gws_",),
+    "slack": ("slack_",),
+    "atlassian": ("jira_", "confluence_"),
+}
+
+
+def importers(ctx: Context) -> list[Any]:
+    """The importer of each vendor whose mode is not `scanner` (#55)."""
+    from .sources.gws_alerts import WorkspaceAlertsImporter  # noqa: PLC0415
+    from .sources.purview import PurviewImporter  # noqa: PLC0415
+    from .sources.slack_audit import SlackAuditImporter  # noqa: PLC0415
+
+    made = {
+        "m365": PurviewImporter,
+        "google_workspace": WorkspaceAlertsImporter,
+        "slack": SlackAuditImporter,
+    }
+    return [
+        made[vendor](ctx, mode)
+        for vendor, mode in ctx.settings.modes
+        if mode != SCANNER and vendor in made
+    ]
+
+
 def _load(state: StateStore | None, site: str) -> dict[str, Any]:
     if state is None:
         return {}
@@ -219,12 +247,32 @@ def _scan(
     saved = _load(state, settings.site)
     cursors: dict[str, Any] = dict(saved.get("cursors") or {})
     sources = rotate(sources, saved.get("rotation"))
-    in_scope = {s.id for s in sources}
+    modes = dict(settings.modes)
+    # #55: a vendor in `vendor` mode is read by its importer only: its stores are the
+    # importer's (`vendor_mode`) or what it does not cover (`vendor_not_covered`).
+    running = importers(ctx)
+    covered = {k for imp in running for k in imp.covers}
+    vendor_only = {v for v, m in modes.items() if m == VENDOR}
+    for st in stores:
+        vendor = next((v for v, prefix in VENDOR_KINDS.items() if st.kind.startswith(prefix)), None)
+        if vendor in vendor_only and st.status == "pending":
+            st.skip("vendor_mode" if st.kind in covered else "vendor_not_covered")
+    sources = [
+        s
+        for s in sources
+        if next((v for v, p in VENDOR_KINDS.items() if s.kind.startswith(p)), None)
+        not in vendor_only
+    ]
+    in_scope = {s.id for s in sources} | {imp.id for imp in running}
     findings = FindingStore(started.isoformat())
     for f in saved.get("findings") or []:
         if isinstance(f, dict) and str(f.get("_location", "")).split("\n", 1)[0] in in_scope:
             findings.items[f["id"]] = f
     budget = Budget(settings.max_items_per_run, settings.max_bytes_per_run, deadline, clock)
+    vendor_coverage: list[VendorCoverage] = []
+    for imp in running:
+        imported, cursors[imp.id] = imp.run(cursors.get(imp.id) or {}, budget, findings, started)
+        vendor_coverage.append(imported)
     coverage: list[Coverage] = []
     by_source: dict[str, Coverage] = {}
     notes: dict[str, str | None] = {}
@@ -265,6 +313,9 @@ def _scan(
             settle(st, covs, [notes.get(i) for i in st.source_ids], extra)
         elif st.status == "pending" and st.source_ids:
             st.status, st.reason = "deferred", "budget"
+    public = findings.public()
+    if BOTH in modes.values():
+        link_duplicates(public)
     doc = findings_document(
         run_id=run_id,
         account=None,
@@ -275,9 +326,11 @@ def _scan(
         finished_at=now().isoformat(),
         classes=list(load_spec().class_order),
         coverage=coverage,
-        findings=findings.public(),
+        findings=public,
         discovery=summary(stores, found.list_errors),
         scanner_version=__version__,
+        scan_mode=modes,
+        vendor_coverage=[v.as_json() for v in vendor_coverage] if running else None,
     )
     if state is not None:
         try:

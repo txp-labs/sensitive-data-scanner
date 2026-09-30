@@ -146,6 +146,8 @@ class M365:
         self.calls: list[tuple[str, str, Any, dict[str, str]]] = []
         self.token_forms: list[dict[str, str]] = []
         self.token_error: Resp | None = None
+        # #55: Purview DLP's alerts, as Graph's security API returns them.
+        self.alerts: list[dict[str, Any]] = []
 
     def __repr__(self) -> str:
         return "M365()"
@@ -248,6 +250,16 @@ class M365:
         return self._page(items, base, query, box.version)
 
     def _route(self, path: str, query: dict[str, str], headers: dict[str, str]) -> Resp:
+        if path == "/security/alerts_v2":
+            flt = query.get("$filter", "")
+            assert "serviceSource eq 'microsoftDataLossPrevention'" in flt
+            since_alert = re.search(r"lastUpdateDateTime ge (\S+)", flt)
+            rows = [
+                a
+                for a in self.alerts
+                if not since_alert or a["lastUpdateDateTime"] >= since_alert[1]
+            ]
+            return self._page(rows, path, query, None)
         m = re.fullmatch(r"/users/([^/]+)", path)
         if m:
             key = urllib.parse.unquote(m[1])

@@ -64,6 +64,9 @@ LIMITS = frozenset(
         "counts_not_distinct",
         # Slack's audit logs and DLP: Enterprise Grid only.
         "enterprise_grid_only",
+        # The vendor names the rule that matched, not the kind of data (class `other`): its
+        # findings are never linked, since a link needs the same class.
+        "no_data_class",
     }
 )
 

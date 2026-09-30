@@ -75,7 +75,7 @@
               "enum": [
                 "s3_only", "profiled_stores_only", "sampled_by_vendor", "profiles_not_items",
                 "policy_matches_only", "alerts_only", "item_not_linkable", "counts_not_distinct",
-                "enterprise_grid_only"
+                "enterprise_grid_only", "no_data_class"
               ]
             }
           }
