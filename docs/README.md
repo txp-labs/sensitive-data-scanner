@@ -30,6 +30,7 @@ detects, how it stays safe, and how proven each path is.
 | [vectors/README.md](../vectors/README.md) | The synthetic test vectors every implementation passes |
 | [packages/spec-ts/README.md](../packages/spec-ts/README.md) | The TypeScript package for redacting a live call in memory |
 | [scanner/README.md](../scanner/README.md) | The Python packages, the Presidio recognizers, and development |
+| [BENCHMARK.md](BENCHMARK.md) | The accuracy benchmark: a made-up, labeled corpus, precision and recall per class and confidence, the baseline CI holds, and the false-positive sources it found |
 
 ## Contributing and security
 
