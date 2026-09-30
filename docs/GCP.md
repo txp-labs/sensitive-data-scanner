@@ -43,6 +43,10 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 | `datastore` | A Firestore database in Datastore mode, `project/database` | the same (a `__kind__` query, then `runQuery` per kind) | read |
 | `spanner` | A Spanner database, `instance/database` | `spanner.databases.get` (discovery, key); `spanner.databases.select`, `spanner.sessions.create`, `spanner.sessions.delete`: Cloud Spanner Database Reader | read |
 | `bigtable` | A Bigtable table, `instance/table` | `bigtable.clusters.list` (the key); `bigtable.tables.readRows`: Bigtable Reader | read |
+| `cloud_logging` (`logging`, `logs`) | A project's logs (the project id) | `logging.buckets.list` (the key); `logging.logs.list`, `logging.logEntries.list`: Logs Viewer | read; Data Access audit logs with `LOGGING_PRIVATE_READ` (Private Logs Viewer) |
+| `pubsub` (`topics`) | A Pub/Sub topic, `project/topic` | `pubsub.subscriptions.list` (which topics are dead-letter topics) | gap: `needs_subscription` (dead-letter topics) or `live_queue`: reading needs a subscription, a write |
+| `gce_snapshot` (`snapshots`) | A persistent disk's snapshots (the disk's name) | `compute.snapshots.list` | gap: `needs_disk_restore` (reading needs a disk made from it, a write) |
+| `secret_manager` (`secrets`) | A project's secrets (the project id) | discovery only; with `SECRET_MANAGER_READ`, `secretmanager.versions.access` (Secret Accessor) and `secretmanager.secrets.get` | **off**: `read_not_configured`; `SECRET_MANAGER_READ=on` reads, counts only |
 | `cloudsql_postgresql` (`postgresql`, `cloudsql`) | A Cloud SQL for PostgreSQL database, `instance/database` | `cloudsql.instances.get`, `cloudsql.databases.list` (discovery, TLS CA, key); `cloudsql.instances.login` and an IAM database user with read grants (below) | discovered; read with `GCP_DB_READ` |
 | `cloudsql_mysql` (`mysql`) | A Cloud SQL for MySQL database, `instance/database` | the same | discovered; read with `GCP_DB_READ` |
 | `cloudsql_sqlserver` (`sqlserver`) | A Cloud SQL for SQL Server database, `instance/database` | `cloudsql.instances.get`, `cloudsql.databases.list` | gap: `no_read_path` (no IAM database authentication; only a password could read it) |
@@ -176,6 +180,93 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 - **Encryption.** A cluster's Cloud KMS key is `customer_managed_key`
   (hashed); otherwise `service_managed`.
 
+### Cloud Logging
+
+- Every project in scope is one store. Its logs are listed (`logs.list`, at
+  most `LOGGING_MAX_LOGS`, 200), and each is sampled with **one
+  `entries.list`**: that log, the lookback window (`LOGGING_LOOKBACK_DAYS`,
+  1), newest first, at most `LOGGING_MAX_ENTRIES_PER_LOG` (500). The log's
+  name is quoted in the filter, so nothing in it is filter syntax. An entry
+  is read by column: `textPayload`, the top-level fields of `jsonPayload` and
+  `protoPayload` (`jsonPayload.<field>`, read inside), and `labels`. A
+  finding names the project as `store`, the log as `table` and the column as
+  `field`, `readBy: entries_list`, format `json`.
+- **Data Access audit logs** (and Access Transparency's) are private: reading
+  them needs Private Logs Viewer (`logging.privateLogEntries.list`), which is
+  **opt-in** (`LOGGING_PRIVATE_READ=on`, and the deployment's
+  `read_private_logs`). Without it, each is counted as skipped
+  `private_log`.
+- `entries.list` bills nothing, but a project allows 60 calls a minute. A pass
+  that meets the quota stops there and resumes at that log on the next run.
+  Logs routed to a Cloud Storage bucket or BigQuery dataset are read there.
+- **Encryption.** The project's `_Default` log bucket's Cloud KMS key is
+  `customer_managed_key` (hashed); otherwise `service_managed`.
+
+### Pub/Sub (coverage only)
+
+- Every topic is a store. Each project's subscriptions say which topics are
+  **dead-letter topics** (a subscription's `deadLetterPolicy`), where failed
+  messages and their payloads pile up.
+- **Nothing is read.** A topic's messages can be read only through a
+  subscription. Pulling from a subscription that exists changes what its own
+  consumer receives: a message pulled and not acknowledged is redelivered
+  with its delivery attempt counted, and one acknowledged is gone. Creating a
+  subscription is a write. So a dead-letter topic is `needs_subscription`
+  (with `deadLetterQueue: true`), and any other topic is `live_queue`. When a
+  project's subscriptions cannot be listed, its topics are
+  `needs_subscription`.
+
+#### The opt-in dead-letter reader (design, not built)
+
+For a customer who wants dead-letter topics read:
+
+1. **The deployment creates the subscription**, not the scanner: one
+   subscription of the scanner's own (`sds-<topic>`) on each dead-letter
+   topic named in `read_dead_letter_topics`. It has no push endpoint, a
+   one-day message retention, a 10-second acknowledgement deadline, and
+   expires after 31 days without a pull. It sees only messages published
+   after it exists (or, with the topic's own retention, it can be sought
+   back to a time by the deployment, once).
+2. **The scanner gets Pub/Sub Subscriber on those subscriptions only**, never
+   on a topic and never project-wide. The strict test would allow
+   `pubsub.subscriptions.consume` only on resources the deployment itself
+   creates, and never `pubsub.subscriptions.create`.
+3. **Per run**, one synchronous `pull` (`maxMessages`, 100) per subscription.
+   The messages are read like SQS messages (`field: messages`,
+   `readBy: pull`) and then acknowledged, on that subscription only: the
+   topic, its publishers and every other subscription are untouched.
+4. **Open questions:** whether a subscription made by the deployment is an
+   acceptable change to a customer's topic (it adds a delivery target and its
+   storage cost), and whether seeking it back into the topic's retention is.
+
+### Persistent disk snapshots (coverage only)
+
+- Cloud Asset Inventory says which projects hold snapshots; each project's
+  snapshots come from the Compute Engine API, grouped by the disk they were
+  taken of, as the AWS scanner groups EBS snapshots. There is one store per
+  disk (or per snapshot whose disk is gone) with the latest snapshot's
+  `snapshotTime`, `sizeBytes`, `olderSnapshots` and encryption.
+- **It is not read.** Compute Engine has no API that reads a snapshot's
+  blocks: the only way is to create a disk from it and attach that disk to a
+  VM, both writes. Every snapshot is the gap `needs_disk_restore`.
+- **Encryption.** A snapshot under a Cloud KMS key is `customer_managed_key`
+  (hashed); under a customer-supplied key, `customer_managed_key` with no
+  hash; otherwise `service_managed`.
+
+### Secret Manager (off by default)
+
+- Every project's secrets are one store, with `items`. With
+  `SECRET_MANAGER_READ` off (the default), it is `read_not_configured`, and
+  the deployment grants no accessor role.
+- With it on (and the deployment's `read_secrets`), the latest version of
+  each secret is read (`versions/latest:access`) and reported like Secrets
+  Manager on AWS: **counts only**, `field: value`, no offsets, and never the
+  value. A secret whose latest version is disabled or destroyed is counted
+  (`itemTypes: Disabled`), not read.
+- **Encryption.** A secret replicated under Cloud KMS keys is
+  `customer_managed_key` (hashed from its first key); otherwise
+  `service_managed`.
+
 ### Cloud SQL and AlloyDB
 
 - **Discovery** is on by default. Cloud Asset Inventory lists every Cloud SQL
@@ -296,6 +387,9 @@ masked.
 | `BIGQUERY_MAX_ROWS` | 1000 | Rows read from one BigQuery table (`tabledata.list`) |
 | `DOCUMENTS_MAX_PER_COLLECTION`, `DOCUMENTS_MAX_COLLECTIONS` | 500, 200 | Firestore documents (Datastore entities) read per collection (kind), and collections (kinds) per database |
 | `BIGTABLE_MAX_ROWS` | 1000 | Rows read from one Bigtable table |
+| `LOGGING_LOOKBACK_DAYS`, `LOGGING_MAX_ENTRIES_PER_LOG`, `LOGGING_MAX_LOGS` | 1, 500, 200 | Cloud Logging: the window sampled, entries per log, logs per project |
+| `LOGGING_PRIVATE_READ` | off | `on` also reads Data Access audit logs (needs Private Logs Viewer) |
+| `SECRET_MANAGER_READ` | off | `on` reads Secret Manager secrets' latest versions, reported as counts only |
 | `GCP_DB_READ` | off | The database kinds read: `all`, or `cloudsql_postgresql`, `cloudsql_mysql`, `alloydb` (or `postgresql`, `mysql`, `alloy`) |
 | `GCP_DB_PRINCIPAL` | | The service account's email; its IAM database users are logged in as. Required to read |
 | `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's; Spanner too |

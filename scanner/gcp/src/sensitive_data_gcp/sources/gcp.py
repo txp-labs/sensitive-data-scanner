@@ -14,6 +14,10 @@ from .bigtable import BigtableAdapter
 from .databases import DatabaseAdapter
 from .documents import DocumentAdapter
 from .gcs import GcsAdapter
+from .logging import LoggingAdapter
+from .pubsub import PubSubAdapter
+from .secrets import SecretManagerAdapter
+from .snapshots import SnapshotAdapter
 from .spanner import SpannerAdapter
 
 _ALL: list[Adapter[Context]] = [
@@ -23,6 +27,10 @@ _ALL: list[Adapter[Context]] = [
     DocumentAdapter("datastore"),
     SpannerAdapter(),
     BigtableAdapter(),
+    LoggingAdapter(),
+    PubSubAdapter(),
+    SnapshotAdapter(),
+    SecretManagerAdapter(),
     DatabaseAdapter("cloudsql_postgresql"),
     DatabaseAdapter("cloudsql_mysql"),
     DatabaseAdapter("cloudsql_sqlserver"),

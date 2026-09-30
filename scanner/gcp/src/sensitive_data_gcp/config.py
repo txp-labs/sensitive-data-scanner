@@ -19,6 +19,12 @@ its value.
   documents (Datastore entities) sampled per collection (kind), and the
   collections (kinds) read per database.
 - `BIGTABLE_MAX_ROWS`: rows sampled per Bigtable table.
+- `LOGGING_LOOKBACK_DAYS`, `LOGGING_MAX_ENTRIES_PER_LOG`, `LOGGING_MAX_LOGS`:
+  Cloud Logging's window, and the entries and logs sampled per project;
+  `LOGGING_PRIVATE_READ`: `on` also reads Data Access audit logs (Private Logs
+  Viewer); off by default.
+- `SECRET_MANAGER_READ`: `on` reads Secret Manager secrets' latest versions
+  (counts only); off by default.
 - `GCP_DB_READ`: the database kinds that are read (`cloudsql_postgresql`,
   `cloudsql_mysql`, `alloydb`, or `all`); off by default, since each database
   needs an IAM database user for the service account.
@@ -77,6 +83,10 @@ KINDS: tuple[str, ...] = (
     "datastore",
     "spanner",
     "bigtable",
+    "cloud_logging",
+    "pubsub",
+    "gce_snapshot",
+    "secret_manager",
     *DATABASE_KINDS,
 )
 DEFAULT_KINDS: tuple[str, ...] = KINDS
@@ -94,6 +104,13 @@ KIND_ALIASES = {
     "sqlserver": "cloudsql_sqlserver",
     "alloy": "alloydb",
     "documents": "firestore",
+    "logging": "cloud_logging",
+    "logs": "cloud_logging",
+    "topics": "pubsub",
+    "snapshots": "gce_snapshot",
+    "snapshot": "gce_snapshot",
+    "secrets": "secret_manager",
+    "secretmanager": "secret_manager",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -150,6 +167,14 @@ class Settings:
     documents_max: int = 500
     documents_max_collections: int = 200
     bigtable_max_rows: int = 1000
+    # Cloud Logging: the window sampled, entries per log, logs per project, and whether
+    # private (Data Access) logs are read.
+    logging_lookback_days: int = 1
+    logging_max_entries: int = 500
+    logging_max_logs: int = 200
+    logging_private_read: bool = False
+    # Secret Manager's values: off by default, counts only when on.
+    secret_manager_read: bool = False
     # Cloud SQL and AlloyDB (opt-in): which kinds are read, as whom, and how much.
     db_read: tuple[str, ...] = ()
     db_principal: str | None = None
@@ -281,6 +306,12 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     state = _state(e.get("STATE_BUCKET"))
     if state is None and https_url is None and topic is None and findings_file is None:
         raise ConfigError("no_findings_destination")
+    private = _on(e.get("LOGGING_PRIVATE_READ"))
+    if private is None:
+        raise ConfigError("logging_private_read")
+    secrets = _on(e.get("SECRET_MANAGER_READ"))
+    if secrets is None:
+        raise ConfigError("secret_manager_read")
     try:
         db_read = _kinds(e.get("GCP_DB_READ"), (), DATABASE_KINDS)
     except ConfigError:
@@ -321,6 +352,11 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         documents_max=_int(e.get("DOCUMENTS_MAX_PER_COLLECTION"), 500, 1, 10_000),
         documents_max_collections=_int(e.get("DOCUMENTS_MAX_COLLECTIONS"), 200, 1, 5000),
         bigtable_max_rows=_int(e.get("BIGTABLE_MAX_ROWS"), 1000, 1, 100_000),
+        logging_lookback_days=_int(e.get("LOGGING_LOOKBACK_DAYS"), 1, 1, 400),
+        logging_max_entries=_int(e.get("LOGGING_MAX_ENTRIES_PER_LOG"), 500, 1, 1000),
+        logging_max_logs=_int(e.get("LOGGING_MAX_LOGS"), 200, 1, 5000),
+        logging_private_read=private,
+        secret_manager_read=secrets,
         db_read=db_read,
         db_principal=principal,
         db_schemas=_list(e.get("DB_SCHEMAS")),
