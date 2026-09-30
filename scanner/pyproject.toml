@@ -30,6 +30,8 @@ dev = [
   "fastavro>=1.12",
   "jsonschema>=4.26.0",
   "moto[events,glue,logs,s3]>=5.2.3",
+  # Parses deploy/gcp's Terraform for its strict read-only test.
+  "python-hcl2>=7.0",
   "mypy>=1.18",
   "pytest>=8.4",
   "ruff>=0.13",

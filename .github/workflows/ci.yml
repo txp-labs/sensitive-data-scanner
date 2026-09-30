@@ -170,6 +170,41 @@ jobs:
             exit 1
           fi
 
+  gcp-template:
+    # deploy/gcp is Terraform; the strict role test (scanner/tests/test_gcp_template.py)
+    # reads it. Terraform is a pinned, checksum-verified binary, and the Google
+    # provider is pinned by deploy/gcp/.terraform.lock.hcl. `terraform test` plans
+    # and applies against a mock provider: offline, no credentials, no cloud.
+    name: GCP template (terraform fmt, validate, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TERRAFORM_VERSION: 1.16.3
+      TERRAFORM_SHA256: 093b6ae9a2228af5029c41606bc96eb583553528aad1bfe7e0b4d62fc91e25d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform
+        run: |
+          set -euo pipefail
+          url="https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+          curl -fsSL --retry 3 -o /tmp/terraform.zip "$url"
+          echo "${TERRAFORM_SHA256}  /tmp/terraform.zip" | sha256sum -c -
+          unzip -q /tmp/terraform.zip -d /tmp/terraform
+          sudo install -m 0755 /tmp/terraform/terraform /usr/local/bin/terraform
+          terraform version
+
+      - name: Format, validate and test
+        working-directory: deploy/gcp
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+          terraform test
+
   package:
     name: Package (Lambda image and zip)
     runs-on: ubuntu-latest
