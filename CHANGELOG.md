@@ -824,6 +824,31 @@ bumps the minor version. Spec changes are listed under **Spec**.
   dependency. The no-leak suite covers all three.
 
 ### Security
+- **The readers hold up against damaged and hostile files** ([#77](https://github.com/txp-labs/sensitive-data-scanner/issues/77), found by the new
+  reader fuzz):
+  - A deeply nested JSON document (or a JSON line, a CloudWatch Logs event,
+    a DynamoDB export line, an EventBridge replay, an Avro schema) raised
+    `RecursionError`, which is not a `ValueError`. The object was unreadable
+    instead of read as text. It is now read as text.
+  - An Office file with a part whose deflate stream will not inflate raised
+    `zlib.error`, and one whose offsets point before its start raised
+    `ValueError`. Both escaped `read_object`, which now counts them as
+    `document`.
+  - A PDF's document information was added past `max_chars`; it now counts
+    against the same cap as the pages.
+  - `ItemResult` and `Offset` reprs showed an offset's JSON Pointer, built from
+    the item's own keys, where a key could hold a value. The reprs now show
+    counts and masked pointers only. Findings always masked the pointer.
+  - A large text with many values took time quadratic in its findings: a
+    5.6 MB log with 14,000 values took 33 s, and a 20 MiB object would pass
+    the run's time limit. Two causes are fixed:
+    - `utf16_index` counted in Python over the whole prefix for every
+      offset;
+    - Presidio's de-duplication compares every result with every other.
+
+    Stored text over 64 KiB is now read in chunks at line breaks, each with
+    its context window, and finds exactly what one pass does. Measured: 2 to
+    6 MB/s per core, linear.
 - (#55) The SaaS importers add `SecurityAlert.Read.All`, `auditlogs:read` and
   the Alert Center's `apps.alerts`, each only in `vendor` or `both`. The
   Alert Center has no read-only scope: the strict test names it as its one
@@ -982,6 +1007,24 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- What has run on a real account, corrected: the v0.2.0 run of 29 Sep read
+  one DynamoDB table only (S3 and CloudWatch Logs did not run), and one
+  SharePoint site was read in a test Microsoft 365 tenant on 30 Sep. The
+  `README.md` status table and `docs/release-notes/v0.3.0.md` had claimed S3
+  and CloudWatch Logs too; everything else is tested against simulated
+  services.
+- **`docs/THREAT-MODEL.md`** ([#76](https://github.com/txp-labs/sensitive-data-scanner/issues/76)). It covers:
+  - the assets;
+  - four trust boundaries: the object and the runner, the runner and the
+    customer's account, Mermera's ingest, and GitHub releases;
+  - four attackers: a malicious file, a compromised release, a curious
+    operator and a tenant-crossing attacker;
+  - STRIDE per boundary, each mitigation named by the code that does it and
+    the test that holds it;
+  - the rules Mermera's ingest must keep: the tenant comes from the key or
+    the EventBridge envelope, never from the body;
+  - the residual risks: unsigned releases, GHCR hosting, no replay nonce, the
+    ingest's rules outside this repository, and findings as a map.
 - Rescans ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 1, 7 and 8): `docs/ARCHITECTURE.md` says
   why the one-time `unindexed` read after an upgrade is kept (within 25% of
   the budget; it is how objects read before the index get the improved
@@ -1036,6 +1079,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- **Reader fuzzing** ([#77](https://github.com/txp-labs/sensitive-data-scanner/issues/77)): `tests/test_fuzz_readers.py` holds Hypothesis
+  property tests (`hypothesis` joins the dev dependencies).
+  - What is fuzzed: `sniff`, `csv_cells`, `scan_item_text` over any text and
+    any JSON shape, `office_text`, `pdf_text`, `redact_digits`, and
+    `read_object` over damaged files of every kind (text, CSV, JSON, a
+    transcript, zip, tar.gz, gzip, bzip2, xz, Word, Excel, PowerPoint, PDF,
+    Parquet, ORC, Avro, RDB) and over arbitrary bytes.
+  - What must hold: only the declared exceptions, the caps held, and no
+    planted value in any exception, log line, warning, stdout write, repr or
+    finding.
+  - How it runs: derandomized in every `pytest` run, randomized in a
+    time-capped CI step (`--hypothesis-profile=fuzz`), and longer locally
+    (`fuzz-long`). Every case found is pinned with `@example`.
 - **An accuracy benchmark** ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75),
   [docs/BENCHMARK.md](docs/BENCHMARK.md)): 367 realistic, made-up documents
   from a seeded generator (`scanner/tests/bench_corpus.py`), with ground
@@ -1332,7 +1388,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ### Fixed
 From the first run in a real account (stugum-dev,
-[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)):
+[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)), which read
+one DynamoDB table only; S3 and CloudWatch Logs did not run:
 - **A missing state file on the first run.** Without `s3:ListBucket`, S3
   answers a missing object with 403, not 404, and the first run failed.
   - The runner now counts a 403 on the state file as "no state yet" when the

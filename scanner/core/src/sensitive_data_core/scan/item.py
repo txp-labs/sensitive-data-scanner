@@ -74,6 +74,11 @@ class ItemResult:
     def total(self) -> int:
         return sum(f.count for f in self.findings.values())
 
+    def __repr__(self) -> str:
+        # Counts by class only: an offset's pointer comes from the item's keys (#77).
+        counts = {c: f.occurrences for c, f in sorted(self.findings.items())}
+        return f"ItemResult(format={self.format!r}, findings={counts!r})"
+
 
 class _Collector:
     def __init__(self, fmt: str) -> None:
@@ -209,7 +214,7 @@ def _parse_json(text: str) -> Any:
         return None
     try:
         return json.loads(t)
-    except ValueError:
+    except (ValueError, RecursionError):  # not JSON, or nested past the parser's stack (#77)
         return None
 
 

@@ -30,6 +30,8 @@ dev = [
   "boto3-stubs[dynamodb,events,glue,logs,rds,rds-data,s3]>=1.43.103",
   "cfn-lint>=1.40",
   "fastavro>=1.12",
+  # Property-based fuzzing of the readers (tests/test_fuzz_readers.py, #77).
+  "hypothesis>=6.140",
   "jsonschema>=4.26.0",
   "moto[events,glue,logs,s3]>=5.2.3",
   # Parses deploy/gcp's Terraform for its strict read-only test.
