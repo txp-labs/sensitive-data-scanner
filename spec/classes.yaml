@@ -8,7 +8,7 @@
 #
 # Synthetic and public values only. Never put a real card number, SSN or any
 # other personal value in this file.
-specVersion: "0.4"
+specVersion: "0.5"
 
 classes:
   us_ssn:
@@ -35,9 +35,11 @@ classes:
     standalone: formatted
     contextWords: ["social", "ssn", "social security"]
     # Removed from the context before contextWords are looked for: the last
-    # four of a social is not an SSN.
+    # four of a social is not an SSN, and "social media" is not "social".
     contextExclusions:
       - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)"
+      # "social media" is not an SSN word (0.5), as it arms no SSN prompt (0.4).
+      - "social[- ]media"
     # Published sample numbers. Excluded from shape and context detection
     # (counted apart as test data); a prompted answer is classed regardless.
     dummyValues: ["078051120", "219099999", "123456789", "111111111"]
@@ -70,6 +72,7 @@ classes:
       - "social security"
     contextExclusions:
       - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn|itin)"
+      - "social[- ]media"
     # The range the IRS publishes for use in advertising: 987-65-4320 to
     # 987-65-4329. Excluded from shape and context detection (counted apart
     # as test data); a prompted answer is classed regardless.
