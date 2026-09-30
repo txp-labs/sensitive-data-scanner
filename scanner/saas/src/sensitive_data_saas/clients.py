@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .atlassian import ApiToken, Atlassian, OAuth
 from .config import GwsSettings, M365Settings, Settings
 from .entra import Certificate, EntraApp
 from .federation import workload_token
@@ -26,7 +27,8 @@ def _session() -> Any:
 
 
 class Clients:
-    """The session, Graph as the app, Google Workspace's delegation, and Slack's token."""
+    """The session, and each vendor's API: Graph as the app, Google Workspace's delegation,
+    Slack's token, Atlassian's sign-in."""
 
     def __init__(
         self,
@@ -48,6 +50,7 @@ class Clients:
         self._graph: Graph | None = None
         self._delegation: Delegation | None = None
         self._slack: Slack | None = None
+        self._atlassian: Atlassian | None = None
 
     def __repr__(self) -> str:
         return "Clients()"
@@ -130,3 +133,25 @@ class Clients:
                 raise RuntimeError("slack is not configured")
             self._slack = Slack(self.http, sl.token)
         return self._slack
+
+    @property
+    def atlassian(self) -> Atlassian:
+        if self._atlassian is None:
+            a = self.settings.atlassian
+            if a is None:
+                raise RuntimeError("atlassian is not configured")
+            auth: ApiToken | OAuth
+            if a.api_token is not None and a.email is not None:
+                auth = ApiToken(a.email, a.api_token)
+            elif a.oauth_client_id and a.oauth_secret is not None and a.oauth_refresh_file:
+                auth = OAuth(
+                    self.http,
+                    a.oauth_client_id,
+                    a.oauth_secret,
+                    a.oauth_refresh_file,
+                    clock=self._wall,
+                )
+            else:  # pragma: no cover - the settings allow no other
+                raise RuntimeError("no atlassian credential")
+            self._atlassian = Atlassian(self.http, a.site, auth)
+        return self._atlassian

@@ -424,7 +424,7 @@ jobs:
           assert pyarrow_available()
           import sensitive_data_saas.runner
           from sensitive_data_saas.sources.saas import ADAPTERS
-          assert {"m365_mail", "gws_gmail", "gws_drive", "slack_channel"} <= set(ADAPTERS)
+          assert {"m365_mail", "gws_gmail", "slack_channel", "jira_project"} <= set(ADAPTERS)
           # No vendor SDK and no other cloud in the image.
           import importlib.util
           for mod in ("msal", "msgraph", "azure", "google", "grpc", "slack_sdk"):

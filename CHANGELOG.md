@@ -397,6 +397,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
   EKM) makes findings `customer_managed_key`, hashed. An opt-in kind of a
   configured vendor left out of `DISCOVER` is now reported
   `read_not_configured` (one store, `*`), not left silent.
+- **SaaS, step 4: Atlassian** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
+  Jira issues (`jira_project`: summary, description, comments, attachments)
+  and Confluence pages and blog posts (`confluence_space`: title, body, footer
+  comments, attachments), read with a read-only account's API token (from a
+  file) or OAuth 2.0 (3LO) with `read:jira-work`,
+  `read:confluence-content.all`, `read:confluence-space.summary`,
+  `readonly:content.attachment:confluence` and `offline_access` only; the
+  rotating refresh token is written back to its own file, and a token that
+  cannot be saved stops the run. JQL and CQL in update order; the first run
+  reads everything, later runs only what changed (skipping what was read);
+  gone items drop their findings; capped per project and space. Links to
+  issues by key and pages by id. `ATLASSIAN_BYOK_KEY_ID` (Atlassian Cloud BYOK)
+  makes findings `customer_managed_key`, hashed.
 - **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
   `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
   (`scan/office.py`, the standard library only), through ranged reads of the
@@ -497,12 +510,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `part`, `name`, `column`), `vendor`, `tenantHash` and `ownerHash` on a
   store, the `m365_mail`, `m365_onedrive`, `m365_sharepoint`,
   `m365_teams_channel`, `m365_teams_chat`, `gws_gmail`, `gws_drive`,
-  `gws_shared_drive`, `slack_channel` and `slack_dm` kinds, the
-  `google_workspace` and `slack` vendors, the `docx`, `xlsx`
+  `gws_shared_drive`, `slack_channel`, `slack_dm`, `jira_project` and
+  `confluence_space` kinds, the `google_workspace`, `slack` and `atlassian`
+  vendors, the `issue` and `page` parts, the `docx`, `xlsx`
   and `pptx` formats, the `encrypted`, `too_large` and `linked_item` skip kinds,
   the `scope_unverified`, `unscoped_grant`, `protected_api`,
   `not_provisioned`, `throttled` and `not_a_member` reasons, and Outlook on the web,
-  SharePoint, Teams, Google Drive and Slack links.
+  SharePoint, Teams, Google Drive, Slack, Jira and Confluence links.
 - `schemaVersion` is now **1.7**, additive: Azure Files' `azure_files` kind
   and `azure_file` resource, and the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and

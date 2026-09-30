@@ -83,6 +83,21 @@ wrong setting is reported by a fixed code, never by its value.
   organization uses EKM: findings then say `customer_managed_key`, hashed.
 - `slack_dm` (direct and group messages, through the Discovery API on
   Enterprise Grid) is opt-in: name it in `DISCOVER`.
+
+**Atlassian** (on when `ATLASSIAN_SITE` is set)
+
+- `ATLASSIAN_SITE`: the Cloud site, `acme.atlassian.net`.
+- The sign-in, one of: `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN_FILE` (a
+  read-only service account's API token), or `ATLASSIAN_OAUTH_CLIENT_ID`,
+  `ATLASSIAN_OAUTH_CLIENT_SECRET_FILE` and `ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE`
+  (OAuth 2.0 3LO; the refresh token file must be writable: Atlassian rotates
+  it).
+- `JIRA_PROJECTS`, `CONFLUENCE_SPACES`: project and space keys (default: every
+  one the sign-in can browse).
+- `ISSUES_MAX_PER_PROJECT`, `PAGES_MAX_PER_SPACE`: the most issues or pages
+  read per project or space in one run.
+- `ATLASSIAN_BYOK_KEY_ID`: the Atlassian Cloud BYOK key's id, when the site
+  uses one: findings then say `customer_managed_key`, hashed.
 """
 
 from __future__ import annotations
@@ -116,8 +131,9 @@ M365_KINDS: tuple[str, ...] = (
 )
 GWS_KINDS: tuple[str, ...] = ("gws_gmail", "gws_drive", "gws_shared_drive")
 SLACK_KINDS: tuple[str, ...] = ("slack_channel", "slack_dm")
+ATLASSIAN_KINDS: tuple[str, ...] = ("jira_project", "confluence_space")
 OPT_IN_KINDS: frozenset[str] = frozenset({"m365_teams_channel", "m365_teams_chat", "slack_dm"})
-KINDS: tuple[str, ...] = (*M365_KINDS, *GWS_KINDS, *SLACK_KINDS)
+KINDS: tuple[str, ...] = (*M365_KINDS, *GWS_KINDS, *SLACK_KINDS, *ATLASSIAN_KINDS)
 KIND_ALIASES = {
     **{k: k for k in KINDS},
     "gmail": "gws_gmail",
@@ -126,6 +142,8 @@ KIND_ALIASES = {
     "shared_drives": "gws_shared_drive",
     "slack": "slack_channel",
     "dms": "slack_dm",
+    "jira": "jira_project",
+    "confluence": "confluence_space",
     "mail": "m365_mail",
     "exchange": "m365_mail",
     "onedrive": "m365_onedrive",
@@ -206,6 +224,24 @@ class SlackSettings:
 
 
 @dataclass(frozen=True)
+class AtlassianSettings:
+    site: str
+    email: Secret | None = field(default=None, repr=False)
+    api_token: Secret | None = field(default=None, repr=False)
+    oauth_client_id: str | None = None
+    oauth_secret: Secret | None = field(default=None, repr=False)
+    oauth_refresh_file: str | None = None
+    projects: tuple[str, ...] = ()
+    spaces: tuple[str, ...] = ()
+    issues_max: int = 500
+    pages_max: int = 500
+    byok_key_id: str | None = field(default=None, repr=False)
+
+    def __repr__(self) -> str:
+        return f"AtlassianSettings(projects={len(self.projects)}, spaces={len(self.spaces)})"
+
+
+@dataclass(frozen=True)
 class Settings:
     site: str
     discover: tuple[str, ...] = ()
@@ -231,6 +267,7 @@ class Settings:
     m365: M365Settings | None = None
     gws: GwsSettings | None = None
     slack: SlackSettings | None = None
+    atlassian: AtlassianSettings | None = None
     # Every kind the configured vendors have (an opt-in kind left out of `discover` is
     # reported `read_not_configured`).
     configured: tuple[str, ...] = ()
@@ -448,6 +485,63 @@ def _slack(e: Mapping[str, str]) -> SlackSettings | None:
     return SlackSettings(Secret(token), channels, ekm)
 
 
+def _atlassian(e: Mapping[str, str]) -> AtlassianSettings | None:
+    site = (e.get("ATLASSIAN_SITE") or "").strip().lower().removeprefix("https://").rstrip("/")
+    if not site:
+        return None
+    if not re.match(r"^[a-z0-9][a-z0-9-]{0,62}\.atlassian\.net$", site):
+        raise ConfigError("atlassian_site")
+    if e.get("ATLASSIAN_API_TOKEN") or e.get("ATLASSIAN_OAUTH_CLIENT_SECRET"):
+        raise ConfigError("atlassian_secret_in_env")
+    token_file = _file(e.get("ATLASSIAN_API_TOKEN_FILE"), "atlassian_api_token_file")
+    client = (e.get("ATLASSIAN_OAUTH_CLIENT_ID") or "").strip() or None
+    if (token_file is None) == (client is None):
+        raise ConfigError("atlassian_credential")
+    email = token = secret = None
+    refresh = None
+    if token_file is not None:
+        raw_email = (e.get("ATLASSIAN_EMAIL") or "").strip()
+        if not _EMAIL.match(raw_email):
+            raise ConfigError("atlassian_email")
+        email = Secret(raw_email)
+        token = Secret(read_secret(Path(token_file)))
+    else:
+        if not re.match(r"^[A-Za-z0-9_-]{8,128}$", client or ""):
+            raise ConfigError("atlassian_oauth_client_id")
+        secret_file = _file(
+            e.get("ATLASSIAN_OAUTH_CLIENT_SECRET_FILE"), "atlassian_oauth_client_secret_file"
+        )
+        refresh = _file(
+            e.get("ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE"), "atlassian_oauth_refresh_token_file"
+        )
+        if secret_file is None or refresh is None:
+            raise ConfigError("atlassian_credential")
+        secret = Secret(read_secret(Path(secret_file)))
+    keys = r"^[A-Za-z][A-Za-z0-9_~-]{0,254}$"
+    projects = _list(e.get("JIRA_PROJECTS"))
+    if any(not re.match(keys, p) for p in projects):
+        raise ConfigError("jira_projects")
+    spaces = _list(e.get("CONFLUENCE_SPACES"))
+    if any(not re.match(keys, p) for p in spaces):
+        raise ConfigError("confluence_spaces")
+    byok = (e.get("ATLASSIAN_BYOK_KEY_ID") or "").strip() or None
+    if byok is not None and not re.match(r"^[A-Za-z0-9._:/-]{1,300}$", byok):
+        raise ConfigError("atlassian_byok_key_id")
+    return AtlassianSettings(
+        site=site,
+        email=email,
+        api_token=token,
+        oauth_client_id=client,
+        oauth_secret=secret,
+        oauth_refresh_file=refresh,
+        projects=projects,
+        spaces=spaces,
+        issues_max=_int(e.get("ISSUES_MAX_PER_PROJECT"), 500, 1, 100_000),
+        pages_max=_int(e.get("PAGES_MAX_PER_SPACE"), 500, 1, 100_000),
+        byok_key_id=byok,
+    )
+
+
 def default_kinds(configured: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(k for k in configured if k not in OPT_IN_KINDS)
 
@@ -480,10 +574,12 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     m365 = _m365(e)
     gws = _gws(e)
     slack = _slack(e)
+    atlassian = _atlassian(e)
     configured: tuple[str, ...] = (
         *(M365_KINDS if m365 is not None else ()),
         *(GWS_KINDS if gws is not None else ()),
         *(SLACK_KINDS if slack is not None else ()),
+        *(ATLASSIAN_KINDS if atlassian is not None else ()),
     )
     if not configured:
         raise ConfigError("no_vendor")
@@ -543,5 +639,6 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         m365=m365,
         gws=gws,
         slack=slack,
+        atlassian=atlassian,
         configured=configured,
     )
