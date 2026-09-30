@@ -16,9 +16,11 @@ leave it**: where, what kind, how many and how sure. Never a value.
   Confluence).
 
 > **Status: early.** Released: **v0.2.0** (29 Sep 2026). v0.3.0 is prepared
-> and not yet tagged; everything after it is on `main`, unreleased. Only the
-> AWS S3, CloudWatch Logs and DynamoDB paths have run against a real account.
-> Everything else is tested against stubs and fakes in CI.
+> and not yet tagged; everything after it is on `main`, unreleased. Proven on
+> a real account so far: one DynamoDB table in a development AWS account, and
+> one SharePoint site in a test Microsoft 365 tenant. PostgreSQL and MySQL run
+> against real engines in containers in CI. Everything else, S3 and CloudWatch
+> Logs included, is tested against simulated services only.
 > [Status and maturity](#status-and-maturity) says exactly what is proven.
 
 ## What it reads
@@ -166,12 +168,13 @@ All the documentation: [docs/README.md](docs/README.md).
 
 | Path | Proven how |
 |---|---|
-| AWS: S3, CloudWatch Logs, DynamoDB | **Run in a real AWS account** (a development account, v0.2.0, 29 Sep 2026); the four problems it found are fixed |
+| AWS: DynamoDB | **Proven on a real account**, one table only: the v0.2.0 run of 29 Sep 2026 in a development AWS account read one DynamoDB table named in an explicit configuration (37 findings on the positive control, 0 on the negative); the four problems it found are fixed |
+| Microsoft 365: SharePoint | **Proven on a real account**, one site only: a run from `main` on 30 Sep 2026, locally, against one SharePoint site in a test tenant, with a certificate app and `Sites.Selected`. 72 files read; both planted findings found (a card in a `.docx` renamed `.png`, an SSN inside a zip); no values in the output. It found a site-naming bug ([#83](https://github.com/txp-labs/sensitive-data-scanner/issues/83)) |
 | Databases: PostgreSQL 16, MySQL 8.4 | Real engines in containers in CI: read-only users read, users that can write refused, data unchanged |
-| Every other AWS store, the StackSet rollout | Tested against stubbed AWS APIs (moto, botocore's Stubber); the template linted and checked against the code's calls. Not yet run in a real account |
-| Azure, Google Cloud | Tested against fakes; the Bicep and Terraform linted and tested offline. Not yet run in a real tenant or organization |
-| SaaS | Tested against fakes of each vendor's API. Not yet run against a real tenant |
-| SQL Server, Oracle, MongoDB, Snowflake, Databricks | Tested against stubbed drivers only |
+| AWS: S3, CloudWatch Logs, every other AWS store, the StackSet rollout | Tested against simulated services (moto, botocore's Stubber); the template linted and checked against the code's calls. Not yet run in a real account. Whole-account runs are in progress and not yet complete |
+| Azure, Google Cloud | Tested against simulated services; the Bicep and Terraform linted and tested offline. Not yet run in a real tenant or organization |
+| SaaS other than SharePoint (Microsoft 365 mail, OneDrive and Teams; Google Workspace; Slack; Jira; Confluence) | Tested against simulated vendor APIs. Not yet run against a real tenant |
+| SQL Server, Oracle, MongoDB, Snowflake, Databricks | Tested against simulated drivers only |
 | Detection | Every vector in `vectors/`, through the spec engine, through Presidio, and through the TypeScript package, which must agree |
 
 Not yet measured: throughput and cold start at scale. Not yet built: the
