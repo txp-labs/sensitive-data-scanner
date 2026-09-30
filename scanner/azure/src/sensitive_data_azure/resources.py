@@ -71,8 +71,9 @@ def azure_fields(rid: ResourceId) -> dict[str, Any]:
 
 
 def portal_link(rid: ResourceId, page: str = "overview") -> Link:
-    """The resource's page in the Azure portal; it names the subscription, group and resource."""
-    return Link(f"{PORTAL}{rid.value}/{page}", (rid.subscription, rid.resource_group, rid.name))
+    """The resource's page in the Azure portal. It carries every part of the resource ID (the
+    subscription, the group, the server and the database, ...), so masking any drops it."""
+    return Link(f"{PORTAL}{rid.value}/{page}", tuple(p for p in rid.value.split("/") if p))
 
 
 @dataclass

@@ -33,6 +33,24 @@ bumps the minor version. Spec changes are listed under **Spec**.
     the core's signed HTTPS sink, Event Grid as the managed identity
     (optional), or a file. `python -m sensitive_data_azure check` lists
     without reading or sending.
+- **Azure, step 2: Azure SQL, SQL Managed Instance, PostgreSQL and MySQL
+  flexible servers, Synapse dedicated SQL pools** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
+  - Discovered by default (Resource Graph, and Resource Manager for a flexible
+    server's databases and a SQL server's TDE protector); paused databases,
+    pools and stopped servers are `paused`; system databases are not stores.
+  - Read when opted in (`AZURE_DB_READ`) as the managed identity with an Entra
+    token: `mssql-python` for SQL (`ApplicationIntent=ReadOnly`, encrypted,
+    certificate verified), psycopg and PyMySQL with the token as the password
+    over verified TLS (`AZURE_DB_PRINCIPAL`). The customer creates the
+    identity's read-only user; docs/AZURE.md has the T-SQL and SQL.
+  - The core's user check first (`db_user_can_write` with `writeGrants`,
+    `grants_unverifiable`), then the core's sampled pass (`scan/sql.py`) in a
+    read-only transaction, resumable by table.
+  - `network` for a database the job cannot reach, `access_denied` for a
+    refused login, `no_read_path` for PostgreSQL with Entra authentication
+    off, `driver_missing`.
+  - `atRestEncryption` from the TDE protector, a flexible server's
+    `dataEncryption`, or a Synapse workspace's key.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -212,8 +230,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - `schemaVersion` is now **1.6**, additive: the Azure scanner's
   `platform: azure`, the `blob_object` resource, `subscription`,
   `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
-  resource ID) on Azure findings and stores, the `azure_blob` kind, the
-  `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
+  resource ID) on Azure findings and stores, the `azure_blob`, `azure_sql`,
+  `azure_sql_mi`, `azure_postgresql`, `azure_mysql` and `synapse_sql` kinds,
+  the `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
   `archive_tier` skip kind and Azure portal links.
 - Version **1.5**, additive: `atRestEncryption`,
   `atRestKeyHash` and `pciNote` on a finding, and `atRestEncryption` and

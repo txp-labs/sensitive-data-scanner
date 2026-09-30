@@ -71,7 +71,8 @@
         "postgresql", "mysql", "sqlserver", "oracle", "mongodb", "snowflake", "databricks",
         "stepfunctions", "lambda", "xray", "codecommit", "s3_directory", "msk", "mq",
         "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
-        "azure_blob"
+        "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
+        "synapse_sql"
       ]
     },
     "azureSubscription": {

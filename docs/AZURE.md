@@ -32,6 +32,11 @@ and its own image (`docker build --target azure`).
 | Kind (`DISCOVER`) | Store | Read with | Default |
 |---|---|---|---|
 | `azure_blob` (`blob`, `adls`) | A Blob Storage or ADLS Gen2 container, `account/container` | Reader (the account's containers and encryption scopes) and Storage Blob Data Reader (List Blobs, ranged Get Blob) | read |
+| `azure_sql` (`sql`) | An Azure SQL database, `server/database` | Reader (discovery, TDE); a contained user for the identity with `db_datareader` (below) | discovered; read with `AZURE_DB_READ` |
+| `azure_sql_mi` (`sqlmi`) | A SQL Managed Instance database, `instance/database` | the same | discovered; read with `AZURE_DB_READ` |
+| `azure_postgresql` (`postgresql`) | A PostgreSQL flexible server's database, `server/database` | Reader (discovery, `dataEncryption`); an Entra role for the identity with SELECT (below) | discovered; read with `AZURE_DB_READ` |
+| `azure_mysql` (`mysql`) | A MySQL flexible server's database, `server/database` | Reader; an Entra user for the identity with SELECT (below) | discovered; read with `AZURE_DB_READ` |
+| `synapse_sql` (`synapse`) | A Synapse dedicated SQL pool, `workspace/pool` | Reader; a user for the identity with `db_datareader` (below) | discovered; read with `AZURE_DB_READ` |
 
 ### Blob Storage and ADLS Gen2
 
@@ -66,6 +71,95 @@ and its own image (`docker build --target azure`).
   ```sh
   printf %s https://<vault>.vault.azure.net/keys/<key-name> | tr A-Z a-z | shasum -a 256
   ```
+
+### Azure SQL, SQL Managed Instance, PostgreSQL and MySQL flexible servers, Synapse SQL pools
+
+- **Discovery** is on by default. Resource Graph lists every database, and
+  Resource Manager (Reader) supplies what it does not have: a flexible
+  server's databases, and a SQL server's or Managed Instance's TDE protector.
+  System databases are not stores. A paused serverless database or pool, or
+  a stopped server, is `paused`: connecting would resume it and bill for it.
+- **Reading is opt-in** (`AZURE_DB_READ`: `all`, or kinds such as
+  `sql,postgresql`). Each database needs a user for the job's identity first,
+  created by you. Until then every run would add a failed Entra login to your
+  audit logs, and possibly a Defender alert.
+- **As the managed identity, with an Entra token.** No password exists.
+  - SQL connections pass the identity to `mssql-python` as its token provider,
+    with `Encrypt=yes`, `TrustServerCertificate=no` and
+    `ApplicationIntent=ReadOnly`, which routes to a readable secondary where
+    the tier has one.
+  - PostgreSQL and MySQL take the token (audience
+    `https://ossrdbms-aad.database.windows.net`) as the password, over TLS
+    with the server's certificate verified, as the user
+    `AZURE_DB_PRINCIPAL`: the identity's name.
+- **The user is checked first**, with the core's allow list of reads, as the
+  databases runner does ([DATABASES.md](DATABASES.md)). A user that can write
+  is refused as `db_user_can_write` with its privileges by name
+  (`writeGrants`). One whose privileges cannot be read is
+  `grants_unverifiable`. Nothing is read from either.
+- **The sample** is the core's: the base tables, then `SELECT TOP (n) *`
+  (SQL) or `SELECT * ... LIMIT n` with quoted identifiers, in a read-only
+  transaction where the engine has one, always rolled back. It resumes by
+  table when the budget cuts it short. A finding is a `store_field` with the
+  kind as `service`, the server as `store`, then `database`, `schema.table`
+  and the column.
+- **Gaps:**
+  - `network`: public access is off with no private path from the job, or a
+    firewall does not admit it. The job's egress must reach the server, for
+    example through a private endpoint in the job's virtual network.
+  - `access_denied`: no user for the identity yet, or a login the database
+    refused.
+  - `no_read_path`: a PostgreSQL server with Entra authentication off.
+  - `driver_missing`: an image without the driver.
+  - `no_grant`: a user that can see no table.
+- **Encryption.** A SQL server's or Managed Instance's TDE protector is
+  `service_managed` for `ServiceManaged`, and `customer_managed_key` for an
+  `AzureKeyVault` key (hashed). A database-level customer key takes
+  precedence. TDE off is `unknown`. A flexible server's `dataEncryption` is
+  `SystemManaged` or `AzureKeyVault`. A Synapse workspace's customer key is
+  `customer_managed_key`; without one, the pool's TDE decides.
+
+#### Creating the identity's user
+
+The identity's name is the Container Apps job's name, for a system-assigned
+identity. Run these as the server's Entra administrator.
+
+Azure SQL database and Synapse dedicated SQL pool, in each database or pool:
+
+```sql
+CREATE USER [sds-scanner-job] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [sds-scanner-job];  -- Synapse: EXEC sp_addrolemember 'db_datareader', 'sds-scanner-job';
+```
+
+SQL Managed Instance, in each database (or `CREATE LOGIN ... FROM EXTERNAL
+PROVIDER` once, then `CREATE USER ... FROM LOGIN`):
+
+```sql
+CREATE USER [sds-scanner-job] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [sds-scanner-job];
+```
+
+PostgreSQL flexible server (Entra authentication on), in the `postgres`
+database, then in each database to read:
+
+```sql
+SELECT * FROM pgaadauth_create_principal('sds-scanner-job', false, false);
+GRANT pg_read_all_data TO "sds-scanner-job";  -- or SELECT on the schemas to read
+-- Before PostgreSQL 15, PUBLIC may create in `public`, which the check refuses:
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+MySQL flexible server (with an Entra administrator):
+
+```sql
+CREATE AADUSER 'sds-scanner-job';
+GRANT SELECT ON `shop`.* TO 'sds-scanner-job'@'%';
+```
+
+Grant nothing else: `db_owner`, `db_datawriter`, `db_ddladmin`, any database
+permission but `CONNECT`, `SELECT`, `SHOWPLAN`, `REFERENCES` and `VIEW ...`,
+and any privilege but reads on PostgreSQL and MySQL are refused. A role you
+cannot narrow is refused rather than read.
 
 ## Findings
 
@@ -105,6 +199,10 @@ to be masked.
 | `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters |
 | `FINDINGS_EVENT_GRID_ENDPOINT` | | Also push each part as a CloudEvent (`source` `sensitive-data-scanner`, `type` `Findings v1`) to an Event Grid topic, as the job's identity; the topic's owner grants it `EventGrid Data Sender` on that topic |
 | `FINDINGS_FILE` | | Also write the document to a file |
+| `AZURE_DB_READ` | off | The database kinds read: `all`, or `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql` (or `sql`, `sqlmi`, `postgresql`, `mysql`, `synapse`) |
+| `AZURE_DB_PRINCIPAL` | | The identity's name as a PostgreSQL or MySQL user; required to read them |
+| `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's |
+| `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
 `FINDINGS_EVENT_GRID_ENDPOINT` and `FINDINGS_FILE` is required.

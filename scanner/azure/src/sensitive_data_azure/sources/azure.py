@@ -10,8 +10,14 @@ from sensitive_data_core.adapter import Adapter
 
 from .base import Context
 from .blob import BlobAdapter
+from .databases import DatabaseAdapter
 
 _ALL: list[Adapter[Context]] = [
     BlobAdapter(),
+    DatabaseAdapter("azure_sql"),
+    DatabaseAdapter("azure_sql_mi"),
+    DatabaseAdapter("azure_postgresql"),
+    DatabaseAdapter("azure_mysql"),
+    DatabaseAdapter("synapse_sql"),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}

@@ -1796,3 +1796,58 @@ def test_no_value_leaves_the_azure_scanner(capsys: pytest.CaptureFixture[str]) -
     for where, blob in blobs.items():
         assert leaks(blob) == [], where
         assert CARDS["amex"] not in blob and SSN_B not in blob, where
+
+
+def test_no_value_leaves_azure_databases(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values in cells, and in server, database, schema, table, column and resource group
+    names; the Entra token; a driver's error quoting the host: none of them leave."""
+    from azure_fakes import NOW, SUB_A, Arm, Graph, Tenant, settings
+    from db_fakes import Db, Driver
+    from sensitive_data_azure.runner import run_scan
+
+    server = f"sql-{CARDS['visa']}"
+    group = f"rg-{SSN_A}"
+    db_name = f"hr_{dashed(SSN_B)}"
+    sql_id = (
+        f"/subscriptions/{SUB_A}/resourceGroups/{group}/providers/Microsoft.Sql/servers/{server}"
+    )
+    pg_id = sql_id.replace("Microsoft.Sql/servers", "Microsoft.DBforPostgreSQL/flexibleServers")
+    rows = [{f"card_{CARDS['amex']}": CARDS["discover"], "note": f"ssn {dashed(SSN_A)}"}]
+    db = Db(tables={(f"s_{SSN_B}", f"t_{CARDS['mir']}"): rows})
+    db.on(
+        r"IS_SRVROLEMEMBER", [{"sysadmin": 0, "db_owner": 0, "db_datawriter": 0, "db_ddladmin": 0}]
+    )
+    db.on(r"fn_my_permissions", [{"permission_name": "SELECT"}])
+    db.on(r"HAS_PERMS_BY_NAME", [{"objects": 0}])
+
+    class Down:
+        def connect(self, **kwargs: Any) -> None:
+            raise ConnectionError(f"timeout reaching {kwargs['host']} as {kwargs['password']}")
+
+    t = Tenant(
+        Graph(
+            {
+                "microsoft.sql/servers'": [{"id": sql_id, "name": server, "fqdn": f"{server}.x"}],
+                "microsoft.sql/servers/databases": [
+                    {"id": f"{sql_id}/databases/{db_name}", "name": db_name, "status": "Online"}
+                ],
+                "microsoft.dbforpostgresql/flexibleservers": [
+                    {"id": pg_id, "name": server, "fqdn": f"{server}.pg", "entraAuth": "Enabled"}
+                ],
+            }
+        ),
+        Arm(paths={f"{pg_id}/databases": [{"name": db_name}]}),
+        drivers={"mssql_python": Driver(db), "psycopg": Down()},
+    )
+    s = settings(DISCOVER="sql,postgresql", AZURE_DB_READ="all", AZURE_DB_PRINCIPAL="sds-job")
+    clients = t.clients()
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    doc, failed = run_scan(s, clients, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    assert any(x.get("reason") == "network" for x in doc["discovery"]["stores"])
+    for where, blob in {"document": json.dumps(doc), "logs": out, "reprs": repr(s)}.items():
+        assert leaks(blob) == [], where
+        assert "made-up-token" not in blob and SSN_B not in blob, where

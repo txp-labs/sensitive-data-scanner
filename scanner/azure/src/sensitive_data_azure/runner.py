@@ -220,6 +220,7 @@ def _scan(
     coverage: list[Coverage] = []
     by_source: dict[str, Coverage] = {}
     notes: dict[str, str | None] = {}
+    extras: dict[str, dict[str, Any]] = {}
     deferred: str | None = None
     for i, source in enumerate(sources):
         capped = objects if source.kind in OBJECT_KINDS else None
@@ -245,6 +246,7 @@ def _scan(
         coverage.append(result.coverage)
         by_source[source.id] = result.coverage
         notes[source.id] = result.note
+        extras[source.id] = result.extra
         log_event(
             "source.done",
             source=source.target,
@@ -255,7 +257,10 @@ def _scan(
     for st in stores:
         covs = [by_source[i] for i in st.source_ids if i in by_source]
         if covs:
-            settle(st, covs, [notes.get(i) for i in st.source_ids])
+            extra: dict[str, Any] = {}
+            for sid in st.source_ids:
+                extra.update(extras.get(sid) or {})
+            settle(st, covs, [notes.get(i) for i in st.source_ids], extra)
         elif st.status == "pending" and st.source_ids:
             st.status, st.reason = "deferred", "budget"
     doc = findings_document(

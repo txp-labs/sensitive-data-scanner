@@ -51,6 +51,10 @@ _INTERNAL = frozenset(
 )
 
 
+# Store fields that are SHA-256 hex digests, never masked.
+_HASHES = frozenset({"resourceIdHash"})
+
+
 @dataclass
 class Store:
     """One data store, listed by discovery or named in the configuration."""
@@ -108,7 +112,8 @@ class Store:
         for k, v in self.extra.items():
             if k in _INTERNAL:
                 continue
-            out[k] = redact_digits(v) if isinstance(v, str) else v
+            # A hash (1.6: `resourceIdHash`) is hex that holds no value; masking would break it.
+            out[k] = redact_digits(v) if isinstance(v, str) and k not in _HASHES else v
         for k in ("atRestEncryption", "atRestKeyHash"):
             if self.facts.get(k):
                 out[k] = self.facts[k]
@@ -165,6 +170,10 @@ NOTES = {
     "grants_unverifiable": ("skipped", "grants_unverifiable"),
     # (1.6) The store's network rules keep the scanner out (a firewall, private access only).
     "network": ("skipped", "network"),
+    # (1.6) A login or a role the store refused, named by a source that cannot say it by an
+    # error name (a database driver's exception class says nothing about why).
+    "access_denied": ("error", "access_denied"),
+    "driver_missing": ("skipped", "driver_missing"),
 }
 
 

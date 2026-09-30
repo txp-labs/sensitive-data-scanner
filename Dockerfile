@@ -86,7 +86,8 @@ CMD ["scan"]
 # ---------------------------------------------------------------------------
 # The Azure scanner (docs/AZURE.md): a Container Apps job's image, a separate
 # target, never the default. It carries the core, the Azure SDKs it reads with,
-# pyarrow for the columnar formats and Event Grid for the optional push.
+# pyarrow for the columnar formats, Event Grid for the optional push, and the
+# drivers for Azure's databases (mssql-python, psycopg, PyMySQL).
 #
 #   docker build --target azure -t sensitive-data-scanner-azure .
 FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS azure-build
@@ -106,6 +107,7 @@ RUN cd scanner \
  && uv export --frozen --package sensitive-data-scanner-azure --no-default-groups --extra all --no-emit-workspace -o /tmp/requirements.txt \
  && uv pip install --python /usr/local/bin/python --target /opt/app --require-hashes -r /tmp/requirements.txt \
  && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
+ && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-azure --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
  && /src/scripts/slim-site-packages.sh /opt/app \
@@ -114,6 +116,11 @@ RUN cd scanner \
  && cp -r /src/third_party /opt/app/licenses/
 
 FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS azure
+# mssql-python's own ODBC driver links Kerberos and GSSAPI (it never uses them for an
+# Entra token, but the library must load).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libkrb5-3 libgssapi-krb5-2 \
+ && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.source="https://github.com/txp-labs/sensitive-data-scanner" \
       org.opencontainers.image.description="Sensitive data scanner for Azure: a Container Apps job, read-only, findings only, never values" \
       org.opencontainers.image.licenses="Apache-2.0"

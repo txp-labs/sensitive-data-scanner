@@ -58,7 +58,8 @@ value shows up in findings, events, logs, exception messages or object reprs.
   azure` (the document names its `site`), the `blob_object` resource (a blob
   of a Blob Storage or ADLS Gen2 container), `subscription`, `resourceGroup`
   and `resourceIdHash` on a `blob_object` or `store_field` resource and on a
-  store in the run summary, the `azure_blob` kind, the store reason `network`
+  store in the run summary, the `azure_blob`, `azure_sql`, `azure_sql_mi`,
+  `azure_postgresql`, `azure_mysql` and `synapse_sql` kinds, the store reason `network`
   (the store's firewall or private endpoint keeps the scanner out), the store
   fields `hierarchicalNamespace` and `networkRestricted`, the skip kind
   `archive_tier`, and Azure portal links. All additive: an AWS document is
@@ -274,6 +275,13 @@ one field of one store as `store_field`. A Redshift column:
 | `snapshotTime` | For EBS: when the snapshot read was taken. Not part of the id |
 | `offsets` | Empty: a sampled row is not addressable later. `count` is distinct values in the sample |
 
+Azure's databases (1.6) report the same way: `service` is the kind
+(`azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql`,
+`synapse_sql`), `store` the server, instance or workspace, `database` the
+database or SQL pool, `table` as `schema.table`, `readBy: sample`, format
+`sql`, with `subscription`, `resourceGroup` and `resourceIdHash` (of the
+database's resource) and a portal `link` to the database.
+
 The shape names no cloud, so a store elsewhere reports the same way. The
 databases runner (1.4) reports every engine's columns, and MongoDB's
 top-level fields, as `store_field` with `service` the engine
@@ -422,6 +430,7 @@ Where each store's value comes from:
 | Secrets Manager | Per secret: its `KmsKeyId`, else `aws/secretsmanager` (`service_managed`) |
 | Timestream, Keyspaces | The database's `KmsKeyId`; the table's `encryptionSpecification` |
 | Azure Blob Storage and ADLS Gen2 (1.6) | The blob's encryption scope (from the listing), else its container's default scope, else the account's encryption: `Microsoft.Storage` is `service_managed`; `Microsoft.Keyvault` is `customer_managed_key`, hashed from the key's versionless identifier in lower case (`https://<vault>.vault.azure.net/keys/<name>`). Azure Storage always encrypts, so never `none`. The run summary gives the container's default |
+| Azure's databases (1.6) | From Resource Manager: an Azure SQL server's or Managed Instance's TDE protector (`ServiceManaged` is `service_managed`; an `AzureKeyVault` key `customer_managed_key`, hashed as above), a database-level key first, TDE off `unknown`; a flexible server's `dataEncryption` (`SystemManaged` or `AzureKeyVault`); a Synapse workspace's customer key, else the pool's TDE |
 | The databases runner | SQL Server: TDE on (`sys.databases.is_encrypted`) is `customer_managed_key` (a certificate in the customer's own master database, or an asymmetric key in Key Vault or an EKM provider), except Azure SQL's service-managed certificate (`service_managed`). MySQL and MariaDB: every base table created encrypted is `customer_managed_key`. Snowflake and MongoDB Atlas: `service_managed`. Everything else, TDE off included, is `unknown`: a database cannot see the disk under it. A database names no key, so no hash |
 
 A KMS key named by its id or ARN is told apart with one `kms:ListAliases`
@@ -487,7 +496,7 @@ coverage gap is visible rather than silent.
 
 | Field | Meaning |
 |---|---|
-| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database), or (1.5) `stepfunctions`, `lambda`, `xray` (one store, `xray-traces`), `codecommit`, `s3_directory`, `msk`, `mq`, `ecr`, `sagemaker` (`feature-group/<name>` or `notebook-instance/<name>`), `neptune_analytics`, `eventbridge_archive`, `glacier`, or (1.6) Azure's `azure_blob` (`account/container`; `account/*` when the account's containers could not be listed); and the store's name, masked like a key (`nameMasked: true`) |
+| `kind`, `name` | `s3`, `cloudwatch_logs`, `dynamodb`, `glue_table` (`database.table`, or `database.*` for a database whose tables could not be listed), `rds`, or (1.3) `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`, `elasticache`, `memorydb`, `timestream`, `keyspaces`, or (1.4) `postgresql`, `mysql`, `sqlserver`, `oracle`, `mongodb`, `snowflake`, `databricks` (the databases runner: the name is the one the customer gave the database), or (1.5) `stepfunctions`, `lambda`, `xray` (one store, `xray-traces`), `codecommit`, `s3_directory`, `msk`, `mq`, `ecr`, `sagemaker` (`feature-group/<name>` or `notebook-instance/<name>`), `neptune_analytics`, `eventbridge_archive`, `glacier`, or (1.6) Azure's `azure_blob` (`account/container`; `account/*` when the account's containers could not be listed), `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql` (`server/database`; `server/*` when a flexible server's databases could not be listed) and `synapse_sql` (`workspace/pool`); and the store's name, masked like a key (`nameMasked: true`) |
 | `origin` | `discovery`, or `config` for a store named in the configuration |
 | `status` | `scanned`, `deferred` (the budget did not reach it; the next run starts with it), `skipped` or `error` |
 | `reason` | Why it was not read, or read with nothing readable: `denied`, `not_allowed`, `self`, `too_large`, `unsupported`, `unsupported_format`, `kms_access`, `access_denied`, `lake_formation`, `tags_unreadable`, `budget`, `error`; for exports, `export_not_configured`, `export_pending` (status `deferred`), `export_failed`, `no_snapshot` and `pitr_off` (a large DynamoDB table without point-in-time recovery); (1.3) `read_not_configured` (reading the kind is opt-in and off), `paused` (a paused Redshift cluster), `no_grant` (the database user can see no table), `vpc_only` (an OpenSearch domain inside a VPC), `no_snapshot_export` (DocumentDB, Neptune), `needs_task` (EFS, FSx), `backup_copy` (a Backup vault), `archived` (an archived EBS snapshot), `live_queue` (an SQS queue that is not a dead-letter queue), `redrive_would_change` (a dead-letter queue with its own redrive policy), `no_s3_destination` (a Firehose stream with no S3 location), `in_memory` (ElastiCache, MemoryDB) and `no_read_path` (Timestream for InfluxDB); (1.4) `db_user_can_write` (the databases runner's user can write, so it was refused; see `writeGrants`), `grants_unverifiable` (the user's privileges could not be read, so it was refused) and `driver_missing` (the image carries no driver for the engine); (1.5) `user_can_write` (a broker user given for reading can change a queue or administer the broker, so it was refused; see `writeGrants`), and `vpc_only` and `no_read_path` also for MSK and Amazon MQ (brokers out of reach; no IAM authentication, or RabbitMQ) and SageMaker (an online-only feature group, a notebook instance), and `archive_retrieval` (an S3 Glacier vault: reading an archive needs a retrieval job, which the scanner never starts); (1.6) `network` (the store admits only selected networks or private endpoints, and the scanner is not among them) |
