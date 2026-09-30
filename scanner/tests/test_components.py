@@ -56,6 +56,8 @@ def test_the_manifest_ships_in_the_core_and_names_every_part() -> None:
     m = Manifest.load()
     for name in (
         "adapter:s3",
+        "listing:s3",
+        "listing:m365_sharepoint",
         "adapter:m365_sharepoint",
         "adapter:dynamodb",
         "adapter:postgresql",
@@ -148,13 +150,43 @@ def test_versions_move_only_with_what_they_are_made_of(tmp_path: Path) -> None:
     assert changed() == {"spec-standalone/passport", "spec-conversation"}
     before = C.compute(root)["components"]
 
+    # An adapter is its read path: a change to how a bucket is listed moves `listing:`, never
+    # `adapter:` (#67), and a change to how an object is read moves `adapter:` only.
     s3 = root / "scanner/src/sensitive_data_scanner/sources/s3.py"
     s3.write_text(s3.read_text() + "\n# a listing change\n")
+    assert changed() == {"listing:s3", "listing:glue_table", "listing:s3_directory"}
+    before = C.compute(root)["components"]
+
+    inventory = root / "scanner/src/sensitive_data_scanner/sources/inventory.py"
+    inventory.write_text(inventory.read_text() + "\n# a report format\n")
+    assert changed() == {"listing:s3", "listing:glue_table"}
+    before = C.compute(root)["components"]
+
+    s3_read = root / "scanner/src/sensitive_data_scanner/sources/s3_read.py"
+    s3_read.write_text(s3_read.read_text() + "\n# a read change\n")
     assert changed() == {"adapter:s3", "adapter:glue_table", "adapter:s3_directory"}
+    before = C.compute(root)["components"]
+
+    sharepoint = root / "scanner/saas/src/sensitive_data_saas/sources/m365_files.py"
+    sharepoint.write_text(sharepoint.read_text() + "\n# a discovery change\n")
+    assert changed() == {"listing:m365_sharepoint", "listing:m365_onedrive"}
+
+
+def test_an_indexed_adapter_without_a_read_module_fails_the_check(tmp_path: Path) -> None:
+    """A module that records objects in the index keeps its read path in its own module, or
+    a change to its listing would move its objects' versions; a read module needs its adapter
+    module beside it."""
+    root = _copy(tmp_path)
+    assert C.uncovered(root) == []
+    sources = root / "scanner/src/sensitive_data_scanner/sources"
+    (sources / "code_read.py").unlink()
+    assert any("code.py" in u and "_read.py" in u for u in C.uncovered(root))
+    (sources / "orphan_read.py").write_text('READS = ("codecommit",)\n')
+    assert any("orphan_read.py" in u for u in C.uncovered(root))
 
 
 def test_the_manifest_is_valid_json_with_hex_versions() -> None:
     doc = json.loads((REPO / C.MANIFEST).read_text())
-    assert doc["manifestVersion"] == 1
+    assert doc["manifestVersion"] == 2  # adapters narrowed to their read path (#67)
     for name, version in doc["components"].items():
         assert len(version) == 12 and int(version, 16) >= 0, name

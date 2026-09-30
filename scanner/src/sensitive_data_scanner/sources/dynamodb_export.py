@@ -26,22 +26,19 @@ when the last export is older than point-in-time recovery keeps (35 days).
 from __future__ import annotations
 
 import datetime as _dt
-import gzip
 import hashlib
-import hmac
-import json
 import secrets
-import zlib
 from typing import TYPE_CHECKING, Any
 
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
-from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.findings import Coverage
 from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
-from sensitive_data_core.scan.attributes import FORMAT, AttributeRules, key_value, scan_attributes
+from sensitive_data_core.scan.attributes import AttributeRules
 
-from ..resources import dynamodb_link, dynamodb_resource
+from ..resources import dynamodb_link
+from . import dynamodb_export_read as _read_path
 from .exports import ExportQuota, delete_prefix, drop_other_passes, due, list_keys
 
 
@@ -292,20 +289,10 @@ class DynamoDBExportSource:
                 done = False
                 break
             budget.take(size)
-            try:
-                args: dict[str, Any] = {"Bucket": self.bucket, "Key": key}
-                if int(obj.get("Size", 0)) > self.max_object_bytes:
-                    args["Range"] = f"bytes=0-{self.max_object_bytes - 1}"
-                    cov.partial += 1
-                data = self.s3.get_object(**args)["Body"].read()
-                d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-                text = d.decompress(data, self.max_inflated_bytes).decode("utf-8", "replace")
-            except (zlib.error, OSError, EOFError, gzip.BadGzipFile) as err:
-                cov.unreadable += 1
-                log_event("item.unreadable", source=self.target, error=error_name(err))
+            text = self._file_text(obj, cov)
+            if text is None:
                 c["after"] = key
                 continue
-            cov.bytes_scanned += len(data)
             for line in text.splitlines():
                 self._item(
                     line,
@@ -347,65 +334,6 @@ class DynamoDBExportSource:
         }
         return SourceRun(cov, {k: v for k, v in finished.items() if v}, None, extra)
 
-    def _item(
-        self,
-        line: str,
-        *,
-        c: dict[str, Any],
-        cov: Coverage,
-        detector: Detector,
-        store: FindingStore,
-        salt: str,
-        link: str,
-        seen_at: str,
-    ) -> None:
-        try:
-            doc = json.loads(line)
-        except ValueError:
-            return
-        if not isinstance(doc, dict):
-            return
-        if "Keys" in doc:
-            # An incremental export's line: the item's keys and its new image, or no image
-            # for an item deleted in the window.
-            keys = doc.get("Keys") if isinstance(doc.get("Keys"), dict) else {}
-            item = doc.get("NewImage")
-            if not isinstance(item, dict):
-                canonical = json.dumps(
-                    {n: key_value(v) for n, v in sorted((keys or {}).items())},
-                    separators=(",", ":"),
-                )
-                gone = hmac.new(salt.encode(), canonical.encode(), hashlib.sha256).hexdigest()
-                store.remove_location(f"{self.id}\n{gone}")
-                return
-        else:
-            item = doc.get("Item")
-        if not isinstance(item, dict):
-            return
-        cov.eligible += 1
-        key = {n: item[n] for n in c.get("keyNames") or [] if n in item}
-        canonical = json.dumps(
-            {n: key_value(v) for n, v in sorted(key.items())}, separators=(",", ":")
-        )
-        key_hash = hmac.new(salt.encode(), canonical.encode(), hashlib.sha256).hexdigest()
-        try:
-            result = scan_attributes(item, detector, self.rules)
-        except Exception as err:  # one bad item must not stop the pass
-            cov.unreadable += 1
-            log_event("item.unreadable", source=self.target, error=error_name(err))
-            return
-        cov.scanned += 1
-        cov.formats[FORMAT] = cov.formats.get(FORMAT, 0) + 1
-        cov.redaction_markers += result.redaction_markers
-        cov.test_values += result.test_values
-        cov.suppressed += result.suppressed
-        shown = {n: key_value(v) for n, v in key.items()}
-        findings = []
-        for path, found in sorted(result.by_path.items()):
-            resource = dynamodb_resource(self.table, shown, key_hash, path)
-            for cf in found.findings.values():
-                f = finding_json(resource, link, FORMAT, cf, seen_at, facts=self.facts)
-                f["_pass"] = c["passId"]
-                f.update(c.get("rescan") or {})
-                findings.append(f)
-        store.replace_location(f"{self.id}\n{key_hash}", findings)
+    # The read path (`dynamodb_export_read.py`, the `adapter:<kind>` component, #67).
+    _file_text = _read_path._file_text
+    _item = _read_path._item

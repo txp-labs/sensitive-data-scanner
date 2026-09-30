@@ -632,3 +632,102 @@ def test_ecr_reads_a_shared_layer_once_and_rescans_it_for_a_reader_change(
     cov = next(c for c in third["coverage"] if c["kind"] == "ecr")
     assert cov["rescanned"] == {READER: 1}
     assert all(f["rescanReason"] == READER for f in third["findings"])
+
+
+# ------------------------------------------------------------------ listing is not reading
+
+
+def test_a_listing_change_relists_and_reads_nothing(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refactor of how a bucket is listed (`s3.py`, `inventory.py`) moves `listing:s3`, not
+    `adapter:s3` (#67): the next pass lists the bucket again from the start, and reads no
+    object whose row is current."""
+    first = seeded(env)
+    read_keys = gets(env)
+    # A pass left mid-way: the re-list starts it over.
+    state = env.state()
+    sid = next(k for k in state["cursors"] if k.startswith("s3:"))
+    assert state["cursors"][sid]["listing"] == BASE.listing("s3")
+    use(monkeypatch, bumped("listing:s3", "listing:glue_table", "listing:s3_directory"))
+    doc = env.run(config())
+    assert doc is not None
+    assert read_keys == []
+    cov = s3_coverage(doc)
+    assert cov["relisted"] is True
+    assert (cov["scanned"], cov["rescanned"], cov["rescanBacklog"]) == (0, {}, 0)
+    assert cov["listed"] == len(OBJECTS) and cov["passComplete"]
+    assert {f["id"] for f in doc["findings"]} == {f["id"] for f in first["findings"]}
+    assert env.state()["cursors"][sid]["listing"] == BUMP
+    # Once re-listed, the next run is an ordinary one.
+    again = env.run(config())
+    assert again is not None and "relisted" not in s3_coverage(again) and read_keys == []
+
+
+def test_a_relist_drops_the_position_and_keeps_the_watermark() -> None:
+    from sensitive_data_core.index import LISTING_KEY, RELISTED, relist
+
+    class Src:
+        kind = "s3"
+        target = "b/"
+        relist_keys = ("startAfter", "passStartedAt")
+
+    idx = Indexes(MemoryBackend(), SALT, manifest=bumped("listing:s3"))
+    cursor = {"watermark": "w", "startAfter": "k9", "passStartedAt": "t", LISTING_KEY: "old"}
+    out = relist(Src(), cursor, idx)
+    assert out["watermark"] == "w" and "startAfter" not in out and out[RELISTED]
+    # The first run after an upgrade (no version recorded yet), or no index: nothing dropped.
+    assert relist(Src(), {"startAfter": "k9"}, idx) == {"startAfter": "k9"}
+    assert relist(Src(), cursor, None) == cursor
+
+
+def test_a_sharepoint_listing_change_downloads_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A delta feed re-listed from no link lists every file again; a file whose row has its
+    content tag is not downloaded."""
+    from saas_fakes import HOST, Item
+    from saas_fakes import settings as m365_settings
+    from sensitive_data_core.state import FileState
+    from test_saas_m365 import files_tenant, scan
+
+    m = files_tenant()
+    for i in range(3):
+        m.drives["d-lib"].add(Item(f"p{i}", f"r{i}.pdf", pdf([f"ssn {dashed(SSN_A)} {i}"])))
+    state = FileState(str(tmp_path / "state.json"))
+    s = m365_settings(tmp_path, M365_SITES=f"{HOST}:/sites/finance", DISCOVER="sharepoint")
+    first = scan(m, s, state=state)
+    scan(m, s, state=state)
+    use(monkeypatch, bumped("listing:m365_sharepoint", "listing:m365_onedrive"))
+    m.calls.clear()
+    doc = scan(m, s, state=state)
+    downloads = [u for _, u, _, _ in m.calls if u.endswith("/content")]
+    assert downloads == []
+    assert any("/root/delta" in u and "token" not in u for _, u, _, _ in m.calls)  # from no link
+    cov = next(c for c in doc["coverage"] if c["kind"] == "m365_sharepoint")
+    assert cov["relisted"] is True and cov["scanned"] == 0 and cov["rescanned"] == {}
+    assert {f["id"] for f in doc["findings"]} == {f["id"] for f in first["findings"]}
+
+
+def test_rows_from_before_the_narrowing_are_carried_not_rescanned() -> None:
+    """A row recorded when an adapter's version hashed its whole module (manifest scheme 1)
+    is not rescanned for its adapter: it takes this build's version when met unchanged."""
+    backend = MemoryBackend()
+    old = Manifest({**BASE.components, "adapter:s3": "a" * 12}, BASE.reader_kinds, scheme=1)
+    before = Indexes(backend, SALT, manifest=old)
+    op = ObjectPass(before, "s3:b/", "s3", budget=Budget(100, 10**9, float("inf")))
+    op.record("k", marker="m1", got=read("k.txt", OBJECTS["a/notes.txt"]))
+    before.save()
+    assert Indexes(backend, SALT).open("s3:b/").get("k").profile.scheme == 1  # type: ignore[union-attr]
+    now = Indexes(backend, SALT)
+    op2 = ObjectPass(now, "s3:b/", "s3", budget=Budget(100, 10**9, float("inf")))
+    assert op2.stale_rows() == 0
+    assert op2.decide("k", changed=False, marker="m1").action == "skip"
+    now.save()
+    row = Indexes(backend, SALT).open("s3:b/").get("k")
+    assert row is not None and row.profile.scheme == BASE.scheme
+    assert row.profile.adapter_v == BASE.adapter("s3")
+    # From then on, a change to the read path rescans it as any adapter change does.
+    later = Indexes(backend, SALT, manifest=bumped("adapter:s3"))
+    op3 = ObjectPass(later, "s3:b/", "s3", budget=Budget(100, 10**9, float("inf")))
+    assert op3.decide("k", changed=False, marker="m1").why == Stale(ADAPTER)
