@@ -7,6 +7,23 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Spec
+- **Spec 0.6** ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), from Stugum's adoption of 0.5;
+  every change is listed for consumers in `spec/README.md`, "Changes from
+  0.5"):
+  - `us_ssn_last4`'s prompt phrase allows "my" as well as "your" and "the",
+    as the last-four context exclusion always has. "To verify, say the last
+    four of my social" now arms `us_ssn_last4`; in 0.5 it armed nothing, and
+    "... the last 4 digits of my Social Security number" armed `us_ssn`.
+  - The last-four context exclusion is one identical string on `us_ssn` and
+    `us_itin` (`us_ssn`'s gains `itin`, which changes no `us_ssn` match), so
+    consumers can take the shared set.
+  - `specVersion` is `"0.6"`; the JSON Schemas follow. An implementation of
+    0.5 refuses the files.
+  - Vectors: five in `vectors/prompt-phrases.jsonl`. They pass in the Python
+    engine, the Presidio path and the TypeScript package; the two 0.6 cases
+    fail on the 0.5 rules.
+  - `@txp-labs/sensitive-data-spec`: `SPEC_VERSION` is `'0.6'`; `dist/` is
+    rebuilt. Stugum, which mirrors the spec, needs both changes.
 - **Spec 0.5** ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the accuracy benchmark;
   every change is listed for consumers in `spec/README.md`, "Changes from
   0.4"):

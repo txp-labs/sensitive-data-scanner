@@ -422,6 +422,6 @@
       }
     }
   },
-  "specVersion": "0.5",
+  "specVersion": "0.6",
   "tolerance": 0.01
 }

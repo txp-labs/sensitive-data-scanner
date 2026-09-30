@@ -1,7 +1,7 @@
 // Generated from spec/classes.yaml and spec/normalize.yaml by scripts/gen-spec.ts.
 // Do not edit by hand: change the YAML and run `npm run gen:spec`.
 export const CLASSES_RAW = {
-    "specVersion": "0.5",
+    "specVersion": "0.6",
     "classes": {
         "us_ssn": {
             "severity": "high",
@@ -25,7 +25,7 @@ export const CLASSES_RAW = {
                 "social security"
             ],
             "contextExclusions": [
-                "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)",
+                "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn|itin)",
                 "social[- ]media"
             ],
             "dummyValues": [
@@ -252,7 +252,7 @@ export const CLASSES_RAW = {
         "us_ssn_last4": {
             "severity": "low",
             "promptPhrases": [
-                "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the))? (?:social(?: security)?(?: number)?|ssn)"
+                "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)"
             ],
             "shape": {
                 "digits": 4
@@ -406,7 +406,7 @@ export const CLASSES_RAW = {
     ]
 };
 export const NORMALIZE_RAW = {
-    "specVersion": "0.5",
+    "specVersion": "0.6",
     "steps": [
         {
             "strip_keypad_terminator": [

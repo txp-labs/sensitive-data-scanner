@@ -1,4 +1,4 @@
-# The sensitive-data spec, version 0.5
+# The sensitive-data spec, version 0.6
 
 This directory is a **contract**. Three implementations follow it:
 
@@ -319,10 +319,10 @@ classed.
 
 ## Stability
 
-- `specVersion` is `"0.5"`.
+- `specVersion` is `"0.6"`.
 - A version has two parts, `major.minor`, and no patch. The findings schema
   requires `specVersion` to match `^[0-9]+\.[0-9]+$`.
-- Before 1.0, a **breaking change bumps the minor version** (0.4 to 0.5).
+- Before 1.0, a **breaking change bumps the minor version** (0.5 to 0.6).
   A change is breaking if it can change the matches for any input, or if it
   changes a file's shape. Every change is listed in the repository
   CHANGELOG.
@@ -333,6 +333,42 @@ classed.
   change to the contract.
 - An implementation declares the `specVersion` it implements and refuses to
   load a spec file with any other version.
+
+## Changes from 0.5
+
+Version 0.6 comes from Stugum's adoption of 0.5 (txp-labs/sensitive-data-scanner#94).
+Stugum mirrors the spec's phrases, and found two places where the last four of a
+social was written two ways.
+
+The first change can alter matches, so under [Stability](#stability) it is a
+minor bump. Every rule has vectors, near-misses included, in
+`vectors/prompt-phrases.jsonl`.
+
+1. **`us_ssn_last4` arms on "my" too.**
+   - What changed: its prompt phrase allowed "your" and "the", but not "my".
+     The last-four context exclusion on `us_ssn` and `us_itin` has always
+     allowed "my". The prompt now reads
+     `last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)`.
+   - "To verify, say the last four of my social." now arms `us_ssn_last4`. A
+     four-digit answer is `us_ssn_last4`, via `prompt`, with high confidence.
+     In 0.5 it armed nothing.
+   - "Or key in the last 4 digits of my Social Security number." now arms
+     `us_ssn_last4`, which outlasts the `us_ssn` phrase inside it. In 0.5 it
+     armed `us_ssn`, and a four-digit answer was `us_ssn` at `low`.
+   - "the last four of my phone number" still arms nothing.
+2. **One last-four exclusion, shared.**
+   - What changed: `us_ssn` and `us_itin` wrote the exclusion differently
+     (`us_itin`'s also named `itin`). They now hold the **same string**:
+     `last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn|itin)`.
+     A consumer can take the shared set as one.
+   - For `us_ssn` this adds "last four of my itin". That span holds none of
+     `us_ssn`'s context words, so removing it changes no `us_ssn` match: this
+     part alone would not be a version change.
+3. **`specVersion` is `"0.6"`** in both spec files and schemas. An
+   implementation of 0.5 refuses them.
+
+For consumers that mirror the spec (Stugum): add "my" to the `us_ssn_last4`
+prompt phrase, and use the one shared last-four exclusion for both classes.
 
 ## Changes from 0.4
 

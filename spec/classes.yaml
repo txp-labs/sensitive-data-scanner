@@ -8,7 +8,7 @@
 #
 # Synthetic and public values only. Never put a real card number, SSN or any
 # other personal value in this file.
-specVersion: "0.5"
+specVersion: "0.6"
 
 classes:
   us_ssn:
@@ -36,8 +36,10 @@ classes:
     contextWords: ["social", "ssn", "social security"]
     # Removed from the context before contextWords are looked for: the last
     # four of a social is not an SSN, and "social media" is not "social".
+    # The last-four exclusion is the same string on us_ssn and us_itin (0.6),
+    # so a consumer can take the shared set as one.
     contextExclusions:
-      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)"
+      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn|itin)"
       # "social media" is not an SSN word (0.5), as it arms no SSN prompt (0.4).
       - "social[- ]media"
     # Published sample numbers. Excluded from shape and context detection
@@ -218,10 +220,11 @@ classes:
   us_ssn_last4:
     severity: low
     # "last four of your social", "last 4 digits of your social security
-    # number", "last four of the ssn". Longer than any us_ssn phrase it
-    # overlaps, so it wins.
+    # number", "last four of the ssn", and (0.6) "last four of my social", as
+    # the last-four context exclusion has always read. Longer than any us_ssn
+    # phrase it overlaps, so it wins.
     promptPhrases:
-      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the))? (?:social(?: security)?(?: number)?|ssn)"
+      - "last (?:four|4)(?: digits)?(?: of)?(?: (?:your|the|my))? (?:social(?: security)?(?: number)?|ssn)"
     shape: { digits: 4 }
 
 # Stripped from the start of a bot or agent turn before prompt matching. Each

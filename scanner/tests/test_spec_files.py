@@ -43,9 +43,33 @@ def test_spec_file_follows_schema(yaml_name: str, schema_name: str) -> None:
     assert errors == []
 
 
-def test_spec_version_is_0_5() -> None:
-    assert load_yaml("classes.yaml")["specVersion"] == "0.5"
-    assert load_yaml("normalize.yaml")["specVersion"] == "0.5"
+def test_spec_version_is_0_6() -> None:
+    assert load_yaml("classes.yaml")["specVersion"] == "0.6"
+    assert load_yaml("normalize.yaml")["specVersion"] == "0.6"
+
+
+def test_the_last_four_exclusion_is_one_shared_string() -> None:
+    """Spec 0.6: us_ssn and us_itin hold the same last-four exclusion, so a consumer (Stugum)
+    can take the shared set; and us_ssn_last4 arms on every possessive it excludes."""
+    classes = load_yaml("classes.yaml")["classes"]
+    last4 = [
+        [e for e in classes[c]["contextExclusions"] if e.startswith("last ")]
+        for c in ("us_ssn", "us_itin")
+    ]
+    assert len(last4[0]) == 1 and last4[0] == last4[1]
+    exclusion = re.compile(last4[0][0], re.IGNORECASE)
+    (prompt,) = classes["us_ssn_last4"]["promptPhrases"]
+    phrase = re.compile(prompt, re.IGNORECASE)
+    for text in (
+        "last four of my social",
+        "last 4 digits of your social security number",
+        "last four of the ssn",
+        "last four my social",
+    ):
+        assert exclusion.fullmatch(text), text
+        assert phrase.fullmatch(text), text
+    assert exclusion.fullmatch("last four of my itin")
+    assert phrase.fullmatch("last four of my itin") is None  # an ITIN's last four: not a class
 
 
 def test_prompt_phrases_leave_boundaries_to_the_implementation() -> None:
