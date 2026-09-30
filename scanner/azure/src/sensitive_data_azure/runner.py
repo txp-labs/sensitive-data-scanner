@@ -218,6 +218,8 @@ def _scan(
     for source in sources:
         if hasattr(source, "indexes"):
             source.indexes = indexes
+            if indexes is not None:
+                indexes.register(source.id)
     in_scope = {s.id for s in sources}
     findings = FindingStore(started.isoformat())
     for f in saved.get("findings") or []:

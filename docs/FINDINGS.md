@@ -121,7 +121,9 @@ value shows up in findings, events, logs, exception messages or object reprs.
 - Version 1.11 ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67))
   narrows an adapter's version to its read path: `relisted` in coverage, when
   a change to how a store is listed made the run list it again from the start
-  (reading only what changed); and the store recommendations
+  (reading only what changed); `duplicatesAcross` in coverage, and
+  `duplicateOf` naming a finding of another store of the same account,
+  subscription or project; and the store recommendations
   `s3_inventory_daily`, `blob_inventory` and `storage_insights`. All additive.
 
 ## Sources and modes (1.8)
@@ -326,7 +328,7 @@ One class of data at one location.
 | `offsets` | Where each occurrence is, at most 50 (`offsetsTruncated` says if more exist). `start` and `end` are UTF-16 code units. For a JSON item, `pointer` (RFC 6901) names the string they are in. A value split across a caller's turns has one offset per turn. |
 | `link` | A deep link into the account's own AWS console: the S3 object version, the log event, or the DynamoDB table's item explorer (it names no key; query by the masked key). A reviewer follows it with their own access. It is `null` when the key had to be masked. |
 | `rescanReason`, `rescanClasses` | (1.10) Present when this run read the object again although it had not changed at its source ([Rescans](#rescans-110)). |
-| `duplicateOf` | (1.10) This object was not read: its bytes are those of another object of the same store (the same content fingerprint, under a name of the same kind), read with the same components. The finding is that object's finding as this object's own (its resource, id, link and storage encryption), and `duplicateOf` is the other's finding id. |
+| `duplicateOf` | (1.10) This object was not read: its bytes are those of another object of the same store, or (1.11) of another store of the same account, subscription or project (the same content fingerprint, under a name of the same kind), read with the same components. The finding is that object's finding as this object's own (its resource, id, link and storage encryption), and `duplicateOf` is the other's finding id. |
 
 ### A table finding: a column (1.2)
 
@@ -858,6 +860,7 @@ One entry per source says what was, and was not, read:
 | `kmsDenied` | Items not read because the scanner may not use their KMS key (1.2; present when not zero) |
 | `disguised` | Objects and archive entries whose name claims another kind than their bytes are, read by content (1.9; present when not zero). Counted whether or not anything was found in them |
 | `duplicates` | (1.10) Objects not read because their bytes are an indexed object's ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); their findings carry `duplicateOf` |
+| `duplicatesAcross` | (1.11) Of `duplicates`, the objects whose original is in another store of the same account, subscription or project, found by the account's shared fingerprint table ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)) |
 | `notAllowed` | (1.10) Objects listed and not read because the store's own rules do not allow them, by reason: `key_filter` (a bucket's `keyInclude` / `keyExclude`, [ARCHITECTURE.md](ARCHITECTURE.md#discovery)). Present when not zero |
 | `relisted` | (1.11) How this kind of store is listed changed (its `listing:<kind>` component): the run listed it again from the start. Nothing unchanged was read for it ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)) |
 | `indexed`, `rescanned`, `rescanBacklog` | (1.10) Present when the source keeps an object index: the objects the index holds after the run, the objects read again this run though unchanged at their source by `rescanReason`, and the rescans still owed (objects whose recorded components are stale, and objects with no row met and not read). Later runs read the backlog within `RESCAN_PERCENT` of each source's budget |

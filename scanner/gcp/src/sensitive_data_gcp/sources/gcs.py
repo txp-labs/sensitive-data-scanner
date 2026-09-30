@@ -232,6 +232,7 @@ class GcsSource:
             generation=generation,
             columnar=self.columnar,
             budget=budget,
+            scope=f"gcp:{self.t.where.project}" if self.t.where.project else None,
         )
         try:
             while budget.time_left():
