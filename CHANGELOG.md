@@ -633,6 +633,33 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
 
 ### Fixed
+- **A source dropped for a run lost its findings for good when it came back**
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), found in the rescan refinements). A source
+  missing from one run (taken out of the configuration, not discovered, or
+  left to a vendor's findings) had its carried findings dropped, but kept its
+  object index and cursor; added back, its unchanged objects were skipped as
+  already read, so their findings never returned. Now its cursor and index go
+  with its findings, on every runner (AWS, Azure, Google Cloud, SaaS,
+  databases), and a returning source is read as a new one. An index that
+  cannot be deleted is emptied, and one that cannot be touched at all is
+  retried on the next run (the state's `forget`). New log events
+  `state.forgotten` and `index.dropped`.
+- **The SaaS sources' shared `ItemReader` belonged to no component**, so a
+  change to it rescanned nothing. It is now hashed, with `html_text` and
+  `bytes_fetch`, into the `adapter:<kind>` of every SaaS kind that reads with
+  it (`SHARED_READ` in `scripts/components.py`). The manifest check now fails
+  when an adapter's read path imports a name from a helper module that is
+  neither a shared read helper nor named as plumbing. That check also found
+  Azure's `plain`, `message_text` and `merge_items` (`common.py`) and the AWS
+  export `merge` (`exports.py`), now part of the adapters that use them. The
+  affected adapters' versions moved: their indexed objects (SaaS files and
+  attachments, RDS exports, CodeCommit, ECR) are rescanned once, within
+  `RESCAN_PERCENT`.
+- **`AZURE_BLOB_INVENTORY_MIN_OBJECTS` and `GCS_INVENTORY_MIN_OBJECTS` are
+  deployment parameters**: `blobInventoryMinObjects` in the Azure Bicep and
+  `gcs_inventory_min_objects` in the Google Cloud Terraform (default
+  1,000,000; 0 names no bucket), held by the strict template tests and
+  `terraform test`.
 - **`deploy/scanner.yaml` could not deploy: IAM refused the scanner's role.**
   Its inline policies came to about 13,900 characters with the defaults and
   22,900 with every opt-in on, against the 10,240 a role may hold in all

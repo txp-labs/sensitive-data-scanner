@@ -35,7 +35,15 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
-from sensitive_data_core.index import Indexes, S3Backend, index_salt, listed_with, relist
+from sensitive_data_core.index import (
+    FORGET_KEY,
+    Indexes,
+    S3Backend,
+    forget_absent,
+    index_salt,
+    listed_with,
+    relist,
+)
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
 
@@ -512,6 +520,9 @@ def run_scan(
                     st.skip("vendor_mode" if st.kind == "s3" else "vendor_not_covered")
             sources = []
         in_scope = {s.id for s in sources} | ({importer.id} if importer is not None else set())
+        forget = forget_absent(
+            cursors, state.get("findings") or [], in_scope, indexes, state.get(FORGET_KEY)
+        )
         store = FindingStore(started.isoformat())
         for f in state.get("findings") or []:
             loc = f.get("_location", "")
@@ -613,6 +624,8 @@ def run_scan(
         if indexes is not None:
             indexes.save()
             new_state["indexSalt"] = indexes.salt
+        if forget:
+            new_state[FORGET_KEY] = forget
         _put_json(clients.s3, bucket, keys.state, new_state)
         _put_json(clients.s3, bucket, f"{keys.runs}{run_id}.json", doc)
         _put_json(clients.s3, bucket, keys.latest, doc)

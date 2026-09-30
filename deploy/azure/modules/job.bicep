@@ -22,6 +22,9 @@ param discover string = ''
 param readDatabases string = ''
 param readKeyVaultSecrets bool = false
 param readFileShares bool = false
+@description('AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container\'s last complete pass listed that name it in the run summary; 0 never.')
+@minValue(0)
+param blobInventoryMinObjects int = 1000000
 @secure()
 param findingsHttpsUrl string = ''
 @secure()
@@ -149,6 +152,10 @@ var settings = filter(
     {
       name: 'AZURE_FILES_READ'
       value: readFileShares ? 'on' : 'off'
+    }
+    {
+      name: 'AZURE_BLOB_INVENTORY_MIN_OBJECTS'
+      value: string(blobInventoryMinObjects)
     }
     {
       name: 'FINDINGS_EVENT_GRID_ENDPOINT'

@@ -436,6 +436,7 @@ az deployment mg create --management-group-id <mg> --location <region> \
 | `schedule`, `replicaTimeoutSeconds` | daily 06:00 UTC, 3600 | When it runs, and for how long at most |
 | `site` | the management group, lower case | `SCANNER_SITE` |
 | `discover`, `readDatabases`, `readKeyVaultSecrets`, `readFileShares` | every kind; off; off; off | `DISCOVER`, `AZURE_DB_READ` (with `AZURE_DB_PRINCIPAL` set to the job's name), `KEYVAULT_SECRETS_READ`, `AZURE_FILES_READ` |
+| `blobInventoryMinObjects` | 1,000,000 | `AZURE_BLOB_INVENTORY_MIN_OBJECTS`: a container whose last complete pass listed at least this many blobs is named in the run summary (`recommendation: blob_inventory`); 0: never |
 | `cosmosAccountIds` | | Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on (central mode) |
 | `findingsHttpsUrl`, `findingsHmacKey` | | The signed push; both are Container Apps secrets |
 | `findingsEventGridEndpoint` | | The Event Grid push; the topic's owner grants the job's identity EventGrid Data Sender on it |

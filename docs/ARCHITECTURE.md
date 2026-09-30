@@ -541,7 +541,7 @@ core package:
 
 | Component | Made of |
 |---|---|
-| `adapter:<kind>` | A kind of store's **read path**: the code that fetches its data and interprets it (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). An adapter whose objects the index records keeps its read path in its own module, `sources/<name>_read.py`, which names the kinds it reads (`READS`). The kinds are found from those, from the `kind = "..."` names in every platform's `sources/` modules, and from the kinds a module sets at run time. An adapter that records nothing in the index (it reads forward, or every pass) is its whole module. A vendor's importer is its own (`adapter:macie`) |
+| `adapter:<kind>` | A kind of store's **read path**: the code that fetches its data and interprets it (`adapter:s3`, `adapter:m365_sharepoint`, `adapter:dynamodb`, `adapter:postgresql`, ...). An adapter whose objects the index records keeps its read path in its own module, `sources/<name>_read.py`, which names the kinds it reads (`READS`). The kinds are found from those, from the `kind = "..."` names in every platform's `sources/` modules, and from the kinds a module sets at run time. An adapter that records nothing in the index (it reads forward, or every pass) is its whole module. A vendor's importer is its own (`adapter:macie`). A **shared read helper** in a helper module is part of the read path of every kind whose modules import it (`SHARED_READ`): the SaaS sources' `ItemReader`, `html_text` and `bytes_fetch` (`saas/.../sources/base.py`), Azure's stored-value, queue-message and field-merge helpers (`common.py`), and the AWS findings merge across an export's files (`exports.py`'s `merge`) |
 | `listing:<kind>` | The rest of a split adapter: discovery, listing, inventory reports, configuration and logging (`sources/<name>.py`, and helpers such as `inventory.py` and `exports.py`). A change here re-lists the store and reads nothing again ([below](#how-rescans-are-chosen)) |
 | `reader:<name>` | One of the core's readers: `text`, `transcript`, `docx`, `xlsx`, `pptx`, `pdf`, `archive-zip`, `archive-tar`, `archive-stream` (gzip, bzip2, xz, zstd), `columnar` (Parquet, ORC), `avro`, `rdb`, and for tables `sql` and `attributes`. A reader can be made of named functions of a shared file, so a change to `_pptx` in `scan/office.py` moves `reader:pptx` and not `reader:docx`. The manifest also lists the kinds of object each reader reads (`readerKinds`) |
 | `sniffer` | `scan/sniff.py`, and the routing in `scan/objects.py` that sends bytes to a reader |
@@ -554,7 +554,11 @@ CI runs `uv run python ../scripts/components.py --check`, and
 source changed and the manifest was not regenerated, so a version is never
 forgotten. It also fails when a new `sources/` module names no kind and is not
 a listed helper, when a module that records objects in the index has no read
-module of its own, and when a read module has no adapter module beside it. To regenerate, run
+module of its own, and when a read module has no adapter module beside it. It
+fails too when an adapter's read path imports a name from a helper module that
+is neither a shared read helper (`SHARED_READ`, hashed into that adapter) nor
+named as plumbing (`PLUMBING`: the context, a refused call as a gap, encryption
+facts, settings), so a helper that reads cannot change without a rescan. To regenerate, run
 `uv run python ../scripts/components.py --write` in `scanner/` and commit the
 manifest.
 
@@ -618,6 +622,16 @@ The index is bounded:
   was reset), is no index: the run starts a fresh one.
 - Saving is best effort. A failed save is logged (`index.failed`) and costs
   the next run its decisions, never findings.
+- **A source a run does not have** (taken out of the configuration, no longer
+  discovered, or left to a vendor's findings) loses its carried findings, and
+  with them its cursor and its index (`state.forgotten`, `index.dropped`). If
+  it comes back, its store is read as a new one's and its real findings
+  return. Were its index kept, its unchanged objects would be skipped as
+  already read and their findings never come back. The meta file goes first;
+  where the state location allows writes but not deletes, an empty one is
+  written over it, which is no index either. An index that could not be
+  removed at all is named in the state document (`forget`) and removed first
+  on the next run.
 
 `OBJECT_INDEX=off` turns the index off.
 

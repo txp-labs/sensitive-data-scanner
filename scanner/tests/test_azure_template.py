@@ -237,6 +237,30 @@ def test_every_environment_variable_is_one_the_code_reads() -> None:
         assert f'"{name}"' in code, name
 
 
+def test_the_blob_inventory_threshold_is_a_parameter_that_reaches_every_job() -> None:
+    """AZURE_BLOB_INVENTORY_MIN_OBJECTS is set from `blobInventoryMinObjects` (the scanner's
+    own default, 0 to never name a container), in central and per-subscription mode alike."""
+    t = load()
+    p = t["parameters"]["blobInventoryMinObjects"]
+    assert p["type"] == "int"
+    assert p["defaultValue"] == 1_000_000
+    assert p["minValue"] == 0
+    assert p["maxValue"] == 10_000_000_000
+    jobs = [r for _, r in resources(t) if r.get("type") == "Microsoft.Resources/deployments"]
+    passed = [
+        j["properties"]["parameters"]["blobInventoryMinObjects"]["value"]
+        for j in jobs
+        if "jobName" in (j["properties"].get("parameters") or {})
+    ]
+    assert passed == ["[parameters('blobInventoryMinObjects')]"] * 2
+    job = bicep("modules/job.bicep")
+    assert "param blobInventoryMinObjects int = 1000000" in job
+    assert re.search(
+        r"name: 'AZURE_BLOB_INVENTORY_MIN_OBJECTS'\s+value: string\(blobInventoryMinObjects\)", job
+    )
+    assert "1_000_000, 0, 10_000_000_000" in CONFIG.read_text()
+
+
 @pytest.mark.parametrize("module", sorted(p.name for p in (BICEP / "modules").glob("*.bicep")))
 def test_every_module_is_in_the_compiled_template(module: str) -> None:
     assert module.removesuffix(".bicep") in (BICEP / "main.bicep").read_text()

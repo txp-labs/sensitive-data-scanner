@@ -88,16 +88,17 @@ locals {
     { GCP_PROJECTS = join(",", var.project_ids) }
   )
   env = { for k, v in merge(local.scope_env, {
-    SCANNER_SITE          = local.site
-    STATE_BUCKET          = "gs://${local.state_bucket}"
-    DISCOVER              = var.discover
-    GCP_DB_READ           = var.read_databases ? "all" : ""
-    GCP_DB_PRINCIPAL      = var.read_databases ? google_service_account.scanner.email : ""
-    LOGGING_PRIVATE_READ  = var.read_private_logs ? "on" : ""
-    SECRET_MANAGER_READ   = var.read_secrets ? "on" : ""
-    FINDINGS_PUBSUB_TOPIC = var.findings_pubsub_topic
-    SCAN_MODE             = var.scan_mode != "scanner" ? var.scan_mode : ""
-    SDP_LOCATIONS         = var.scan_mode != "scanner" ? join(",", var.sdp_locations) : ""
+    SCANNER_SITE              = local.site
+    STATE_BUCKET              = "gs://${local.state_bucket}"
+    DISCOVER                  = var.discover
+    GCP_DB_READ               = var.read_databases ? "all" : ""
+    GCP_DB_PRINCIPAL          = var.read_databases ? google_service_account.scanner.email : ""
+    LOGGING_PRIVATE_READ      = var.read_private_logs ? "on" : ""
+    SECRET_MANAGER_READ       = var.read_secrets ? "on" : ""
+    FINDINGS_PUBSUB_TOPIC     = var.findings_pubsub_topic
+    SCAN_MODE                 = var.scan_mode != "scanner" ? var.scan_mode : ""
+    SDP_LOCATIONS             = var.scan_mode != "scanner" ? join(",", var.sdp_locations) : ""
+    GCS_INVENTORY_MIN_OBJECTS = tostring(var.gcs_inventory_min_objects)
   }) : k => v if v != "" }
 
   apis = concat(var.scan_mode != "scanner" ? ["dlp.googleapis.com"] : [], [

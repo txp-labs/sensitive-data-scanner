@@ -63,6 +63,10 @@ EVENTS: Final = frozenset(
         # The object index (#67): written, or not (the next run then decides without it).
         "index.saved",
         "index.failed",
+        # A source this run does not have: its cursor and index removed with its findings,
+        # so if it comes back its store is read afresh (#67).
+        "state.forgotten",
+        "index.dropped",
         # How a store is listed changed: it is listed again from the start (#67).
         "source.relist",
     }

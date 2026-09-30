@@ -32,7 +32,15 @@ from sensitive_data_core.coverage import Discovery, Store, settle, summary
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.spec import load_spec
 from sensitive_data_core.findings import Coverage, findings_document
-from sensitive_data_core.index import Indexes, PrefixBackend, index_salt, listed_with, relist
+from sensitive_data_core.index import (
+    FORGET_KEY,
+    Indexes,
+    PrefixBackend,
+    forget_absent,
+    index_salt,
+    listed_with,
+    relist,
+)
 from sensitive_data_core.push import FindingsSink
 from sensitive_data_core.safety import ScanError, error_name, log_event
 
@@ -221,6 +229,9 @@ def _scan(
             if indexes is not None:
                 indexes.register(source.id)
     in_scope = {s.id for s in sources}
+    forget = forget_absent(
+        cursors, saved.get("findings") or [], in_scope, indexes, saved.get(FORGET_KEY)
+    )
     findings = FindingStore(started.isoformat())
     for f in saved.get("findings") or []:
         if str(f.get("_location", "")).split("\n", 1)[0] in in_scope:
@@ -306,6 +317,8 @@ def _scan(
         if indexes is not None:
             indexes.save()
             new_state["indexSalt"] = indexes.salt
+        if forget:
+            new_state[FORGET_KEY] = forget
         state.put_json(STATE, new_state)
         state.put_json(f"{RUNS}{run_id}.json", doc)
         state.put_json(LATEST, doc)

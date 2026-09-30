@@ -113,6 +113,16 @@ variable "sdp_locations" {
   default     = ["global"]
 }
 
+variable "gcs_inventory_min_objects" {
+  description = "GCS_INVENTORY_MIN_OBJECTS: a bucket whose last complete pass listed at least this many objects is named in the run summary (recommendation: storage_insights). 0: never named."
+  type        = number
+  default     = 1000000
+  validation {
+    condition     = var.gcs_inventory_min_objects >= 0 && var.gcs_inventory_min_objects <= 10000000000 && floor(var.gcs_inventory_min_objects) == var.gcs_inventory_min_objects
+    error_message = "gcs_inventory_min_objects is a whole number from 0 to 10000000000."
+  }
+}
+
 variable "findings_https_url" {
   description = "FINDINGS_HTTPS_URL: the signed push's endpoint. Held in a Secret Manager secret of the job's own."
   type        = string
