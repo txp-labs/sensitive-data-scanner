@@ -246,3 +246,28 @@ def test_the_scheduler_account_can_only_start_the_job() -> None:
         ("google_cloud_run_v2_job_iam_member", "scheduler"),
         ("google_cloud_scheduler_job", "scanner"),
     ]
+
+
+# Google Cloud's limits on a custom role: 3,000 permissions, and 64 KB for its title,
+# description and permission names together; 300 custom roles in an organization.
+ROLE_PERMISSIONS = 3_000
+ROLE_BYTES = 64_000
+ORG_ROLES = 300
+
+
+def test_every_custom_role_fits_googles_limits_with_every_opt_in_on() -> None:
+    """The worst case: every opt-in variable on, so every role in local.roles is made."""
+    t = load()
+    source = (DEPLOY / "main.tf").read_text()
+    made = re.findall(
+        r'\{ \w+ = \{ id = "(\w+)", title = "([^"]+)", permissions = local\.(\w+) \}', source
+    )
+    assert len(made) == 1 + len(OPT_IN_ROLES) + 1  # read, the opt-ins, SDP profiles
+    (role,) = load()["resource"]["google_organization_iam_custom_role"].values()
+    description = str(role["description"])
+    for role_id, title, local in made:
+        perms = t["locals"][local]
+        assert len(perms) <= ROLE_PERMISSIONS, role_id
+        size = len(title.encode()) + len(description.encode()) + sum(len(p.encode()) for p in perms)
+        assert size <= ROLE_BYTES, f"{role_id}: {size} bytes"
+    assert len(made) <= ORG_ROLES

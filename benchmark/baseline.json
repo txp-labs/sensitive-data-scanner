@@ -1,0 +1,427 @@
+{
+  "note": "Written by tests/bench_score.py --update. Do not edit by hand.",
+  "runners": {
+    "conversation": {
+      "account_number": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        }
+      },
+      "card": {
+        "high": {
+          "f1": 0.7742,
+          "fn": 28,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 0.6316,
+          "tp": 48
+        },
+        "low": {
+          "f1": 0.8706,
+          "fn": 2,
+          "fp": 20,
+          "precision": 0.7872,
+          "recall": 0.9737,
+          "tp": 74
+        },
+        "medium": {
+          "f1": 0.9867,
+          "fn": 2,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 0.9737,
+          "tp": 74
+        }
+      },
+      "cvv": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 50
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 50
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 50
+        }
+      },
+      "dob": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 53
+        },
+        "low": {
+          "f1": 0.8689,
+          "fn": 0,
+          "fp": 16,
+          "precision": 0.7681,
+          "recall": 1.0,
+          "tp": 53
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 53
+        }
+      },
+      "pin": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        }
+      },
+      "us_itin": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 15
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 15
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 15
+        }
+      },
+      "us_ssn": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 40
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 40
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 40
+        }
+      },
+      "us_ssn_last4": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        }
+      }
+    },
+    "objects": {
+      "account_number": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 33
+        }
+      },
+      "card": {
+        "high": {
+          "f1": 0.8856,
+          "fn": 187,
+          "fp": 6,
+          "precision": 0.992,
+          "recall": 0.7998,
+          "tp": 747
+        },
+        "low": {
+          "f1": 0.9132,
+          "fn": 14,
+          "fp": 161,
+          "precision": 0.8511,
+          "recall": 0.985,
+          "tp": 920
+        },
+        "medium": {
+          "f1": 0.9223,
+          "fn": 14,
+          "fp": 141,
+          "precision": 0.8671,
+          "recall": 0.985,
+          "tp": 920
+        }
+      },
+      "cvv": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 50
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 50
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 50
+        }
+      },
+      "dob": {
+        "high": {
+          "f1": 0.7602,
+          "fn": 0,
+          "fp": 451,
+          "precision": 0.6132,
+          "recall": 1.0,
+          "tp": 715
+        },
+        "low": {
+          "f1": 0.7538,
+          "fn": 0,
+          "fp": 467,
+          "precision": 0.6049,
+          "recall": 1.0,
+          "tp": 715
+        },
+        "medium": {
+          "f1": 0.7602,
+          "fn": 0,
+          "fp": 451,
+          "precision": 0.6132,
+          "recall": 1.0,
+          "tp": 715
+        }
+      },
+      "pin": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        }
+      },
+      "us_itin": {
+        "high": {
+          "f1": 0.9379,
+          "fn": 0,
+          "fp": 9,
+          "precision": 0.8831,
+          "recall": 1.0,
+          "tp": 68
+        },
+        "low": {
+          "f1": 0.9379,
+          "fn": 0,
+          "fp": 9,
+          "precision": 0.8831,
+          "recall": 1.0,
+          "tp": 68
+        },
+        "medium": {
+          "f1": 0.9379,
+          "fn": 0,
+          "fp": 9,
+          "precision": 0.8831,
+          "recall": 1.0,
+          "tp": 68
+        }
+      },
+      "us_ssn": {
+        "high": {
+          "f1": 0.6435,
+          "fn": 96,
+          "fp": 448,
+          "precision": 0.5229,
+          "recall": 0.8365,
+          "tp": 491
+        },
+        "low": {
+          "f1": 0.7238,
+          "fn": 0,
+          "fp": 448,
+          "precision": 0.5671,
+          "recall": 1.0,
+          "tp": 587
+        },
+        "medium": {
+          "f1": 0.7238,
+          "fn": 0,
+          "fp": 448,
+          "precision": 0.5671,
+          "recall": 1.0,
+          "tp": 587
+        }
+      },
+      "us_ssn_last4": {
+        "high": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        },
+        "low": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        },
+        "medium": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 19
+        }
+      }
+    }
+  },
+  "specVersion": "0.4",
+  "tolerance": 0.01
+}

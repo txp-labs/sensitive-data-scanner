@@ -65,6 +65,11 @@ jobs:
           SDS_REQUIRE_DOCKER: "1"
         run: uv run pytest
 
+      - name: Accuracy benchmark (#75)
+        # Precision, recall and F1 per class and confidence over a made-up, labeled corpus;
+        # fails on a drop past benchmark/baseline.json or on a value in any output.
+        run: uv run python tests/bench_score.py --check
+
   node:
     name: Node (typecheck, tests)
     runs-on: ubuntu-latest

@@ -1,0 +1,1502 @@
+{
+ "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request.",
+ "statements": [
+  {
+   "gates": [
+    "ConfigInSsm"
+   ],
+   "statement": {
+    "Action": "ssm:GetParameter",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/*"
+    },
+    "Sid": "ReadOwnConfigParameter"
+   }
+  },
+  {
+   "gates": [
+    "DataApi"
+   ],
+   "statement": {
+    "Action": "secretsmanager:GetSecretValue",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Split": [
+      ",",
+      {
+       "Fn::Join": [
+        ",",
+        {
+         "Ref": "DataApiSecretArns"
+        }
+       ]
+      }
+     ]
+    },
+    "Sid": "NamedSecretsOnly"
+   }
+  },
+  {
+   "gates": [
+    "DataApi"
+   ],
+   "statement": {
+    "Action": [
+     "rds-data:BeginTransaction",
+     "rds-data:ExecuteStatement",
+     "rds-data:RollbackTransaction"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Split": [
+      ",",
+      {
+       "Fn::Join": [
+        ",",
+        {
+         "Ref": "DataApiClusterArns"
+        }
+       ]
+      }
+     ]
+    },
+    "Sid": "ReadOnlySqlOnNamedClusters"
+   }
+  },
+  {
+   "gates": [
+    "DynamoDBExport",
+    "DynamoDBExportKey"
+   ],
+   "statement": {
+    "Action": [
+     "kms:Decrypt",
+     "kms:GenerateDataKey"
+    ],
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "s3.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "DynamoDBExportKmsKeyArn"
+    },
+    "Sid": "EncryptExportsThroughS3"
+   }
+  },
+  {
+   "gates": [
+    "DynamoDBExport"
+   ],
+   "statement": {
+    "Action": [
+     "dynamodb:DescribeContinuousBackups",
+     "dynamodb:DescribeExport",
+     "dynamodb:ExportTableToPointInTime"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ExportLargeTables"
+   }
+  },
+  {
+   "gates": [
+    "EbsRead"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": [
+       {
+        "Fn::Sub": "ebs.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "ec2.${AWS::Region}.amazonaws.com"
+       }
+      ]
+     }
+    },
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DecryptSnapshotsThroughEbs"
+   }
+  },
+  {
+   "gates": [
+    "EbsRead"
+   ],
+   "statement": {
+    "Action": [
+     "ebs:GetSnapshotBlock",
+     "ebs:ListSnapshotBlocks"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+    },
+    "Sid": "ReadEbsSnapshotBlocks"
+   }
+  },
+  {
+   "gates": [
+    "EcrReads"
+   ],
+   "statement": {
+    "Action": [
+     "ecr:BatchGetImage",
+     "ecr:DescribeImages",
+     "ecr:GetDownloadUrlForLayer"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+    },
+    "Sid": "ReadEcrImageLayers"
+   }
+  },
+  {
+   "gates": [
+    "EventBridgeReplays"
+   ],
+   "statement": {
+    "Action": [
+     "events:DeleteRule",
+     "events:PutRule",
+     "events:PutTargets",
+     "events:RemoveTargets"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/sensitive-data-scanner-replay-*"
+     },
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*"
+     }
+    ],
+    "Sid": "OwnReplayRules"
+   }
+  },
+  {
+   "gates": [
+    "EventBridgeReplays"
+   ],
+   "statement": {
+    "Action": [
+     "events:DescribeReplay",
+     "events:StartReplay"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:replay/sds-*"
+    },
+    "Sid": "StartOwnReplays"
+   }
+  },
+  {
+   "gates": [
+    "EventBridgeReplays"
+   ],
+   "statement": {
+    "Action": [
+     "sqs:DeleteMessage",
+     "sqs:ReceiveMessage"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::GetAtt": [
+      "ReplayQueue",
+      "Arn"
+     ]
+    },
+    "Sid": "OwnReplayQueue"
+   }
+  },
+  {
+   "gates": [
+    "HasBus"
+   ],
+   "statement": {
+    "Action": "events:PutEvents",
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "FindingsEventBusArn"
+    },
+    "Sid": "PushFindings"
+   }
+  },
+  {
+   "gates": [
+    "KmsDecrypt"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": [
+       {
+        "Fn::Sub": "s3.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "dynamodb.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "kinesis.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "states.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "lambda.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "xray.${AWS::Region}.amazonaws.com"
+       },
+       {
+        "Fn::Sub": "codecommit.${AWS::Region}.amazonaws.com"
+       }
+      ]
+     }
+    },
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DecryptThroughS3AndDynamoDB"
+   }
+  },
+  {
+   "gates": [
+    "MacieImport"
+   ],
+   "statement": {
+    "Action": [
+     "macie2:GetFindings",
+     "macie2:GetMacieSession",
+     "macie2:ListFindings"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ReadMacieFindings"
+   }
+  },
+  {
+   "gates": [
+    "MqReads"
+   ],
+   "statement": {
+    "Action": "secretsmanager:GetSecretValue",
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "MqSecretArns"
+    },
+    "Sid": "ReadMqUserSecrets"
+   }
+  },
+  {
+   "gates": [
+    "MqReads"
+   ],
+   "statement": {
+    "Action": [
+     "mq:DescribeConfigurationRevision",
+     "mq:DescribeUser"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:broker:*"
+     },
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:mq:${AWS::Region}:${AWS::AccountId}:configuration:*"
+     }
+    ],
+    "Sid": "CheckMqUsers"
+   }
+  },
+  {
+   "gates": [
+    "MskReads"
+   ],
+   "statement": {
+    "Action": "kafka-cluster:DescribeGroup",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:group/*/*/sensitive-data-scanner-*"
+    },
+    "Sid": "DescribeOwnThrowawayGroups"
+   }
+  },
+  {
+   "gates": [
+    "MskReads"
+   ],
+   "statement": {
+    "Action": "kafka:GetBootstrapBrokers",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*"
+    },
+    "Sid": "MskBootstrapBrokers"
+   }
+  },
+  {
+   "gates": [
+    "MskReads"
+   ],
+   "statement": {
+    "Action": [
+     "kafka-cluster:Connect",
+     "kafka-cluster:DescribeCluster"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*/*"
+    },
+    "Sid": "ConnectToMskClusters"
+   }
+  },
+  {
+   "gates": [
+    "MskReads"
+   ],
+   "statement": {
+    "Action": [
+     "kafka-cluster:DescribeTopic",
+     "kafka-cluster:ReadData"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:topic/*/*/*"
+    },
+    "Sid": "ReadMskTopics"
+   }
+  },
+  {
+   "gates": [
+    "NeptuneGraphExport"
+   ],
+   "statement": {
+    "Action": "iam:PassRole",
+    "Condition": {
+     "StringEquals": {
+      "iam:PassedToService": "neptune-graph.amazonaws.com"
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::GetAtt": [
+      "NeptuneGraphExportRole",
+      "Arn"
+     ]
+    },
+    "Sid": "PassTheGraphExportRoleOnly"
+   }
+  },
+  {
+   "gates": [
+    "NeptuneGraphExport"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "s3.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "NeptuneAnalyticsExportKmsKeyArn"
+    },
+    "Sid": "ReadTheGraphExport"
+   }
+  },
+  {
+   "gates": [
+    "NeptuneGraphExport"
+   ],
+   "statement": {
+    "Action": "neptune-graph:GetExportTask",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:neptune-graph:${AWS::Region}:${AWS::AccountId}:export-task/*"
+    },
+    "Sid": "WatchGraphExports"
+   }
+  },
+  {
+   "gates": [
+    "NeptuneGraphExport"
+   ],
+   "statement": {
+    "Action": "neptune-graph:StartExportTask",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/*"
+    },
+    "Sid": "StartGraphExports"
+   }
+  },
+  {
+   "gates": [
+    "OpenSearchServerless"
+   ],
+   "statement": {
+    "Action": "aoss:APIAccessAll",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*"
+    },
+    "Sid": "ReadServerlessCollections"
+   }
+  },
+  {
+   "gates": [
+    "RdsExport"
+   ],
+   "statement": {
+    "Action": "iam:PassRole",
+    "Condition": {
+     "StringEquals": {
+      "iam:PassedToService": "export.rds.amazonaws.com"
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::GetAtt": [
+      "RdsExportRole",
+      "Arn"
+     ]
+    },
+    "Sid": "PassTheExportRoleOnly"
+   }
+  },
+  {
+   "gates": [
+    "RdsExport"
+   ],
+   "statement": {
+    "Action": "kms:CreateGrant",
+    "Condition": {
+     "Bool": {
+      "kms:GrantIsForAWSResource": "true"
+     },
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "rds.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "RdsExportKmsKeyArn"
+    },
+    "Sid": "GrantOnTheExportKeyOnlyThroughRds"
+   }
+  },
+  {
+   "gates": [
+    "RdsExport"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "s3.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "RdsExportKmsKeyArn"
+    },
+    "Sid": "ReadTheExport"
+   }
+  },
+  {
+   "gates": [
+    "RdsExport"
+   ],
+   "statement": {
+    "Action": "kms:DescribeKey",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "rds.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Ref": "RdsExportKmsKeyArn"
+    },
+    "Sid": "DescribeTheExportKeyThroughRds"
+   }
+  },
+  {
+   "gates": [
+    "RdsExport"
+   ],
+   "statement": {
+    "Action": "rds:StartExportTask",
+    "Effect": "Allow",
+    "Resource": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster-snapshot:*"
+     },
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:snapshot:*"
+     }
+    ],
+    "Sid": "StartExports"
+   }
+  },
+  {
+   "gates": [
+    "RedshiftDbUserMode",
+    "RedshiftReads"
+   ],
+   "statement": {
+    "Action": "redshift:GetClusterCredentials",
+    "Effect": "Allow",
+    "Resource": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbuser:*/${RedshiftDbUser}"
+     },
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbname:*/*"
+     }
+    ],
+    "Sid": "ClusterDbUserCredentials"
+   }
+  },
+  {
+   "gates": [
+    "RedshiftIam",
+    "RedshiftReads"
+   ],
+   "statement": {
+    "Action": "redshift:GetClusterCredentialsWithIAM",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbname:*/*"
+    },
+    "Sid": "ClusterIamCredentials"
+   }
+  },
+  {
+   "gates": [
+    "RedshiftReads"
+   ],
+   "statement": {
+    "Action": "redshift-serverless:GetCredentials",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:redshift-serverless:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+    },
+    "Sid": "ServerlessIamCredentials"
+   }
+  },
+  {
+   "gates": [
+    "RedshiftReads"
+   ],
+   "statement": {
+    "Action": [
+     "redshift-data:DescribeStatement",
+     "redshift-data:GetStatementResult"
+    ],
+    "Condition": {
+     "StringEquals": {
+      "redshift-data:statement-owner-iam-userid": "${aws:userid}"
+     }
+    },
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "OwnStatementsOnly"
+   }
+  },
+  {
+   "gates": [
+    "RedshiftReads"
+   ],
+   "statement": {
+    "Action": [
+     "redshift-data:ExecuteStatement",
+     "redshift-data:ListDatabases"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:cluster:*"
+     },
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:redshift-serverless:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+     }
+    ],
+    "Sid": "ReadOnlySqlOnRedshift"
+   }
+  },
+  {
+   "gates": [
+    "SecretsValues"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DecryptSecretsThroughSecretsManager"
+   }
+  },
+  {
+   "gates": [
+    "SecretsValues"
+   ],
+   "statement": {
+    "Action": "secretsmanager:GetSecretValue",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*"
+    },
+    "Sid": "ReadSecretValues"
+   }
+  },
+  {
+   "gates": [
+    "SqsDlq"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "sqs.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DecryptQueuesThroughSqs"
+   }
+  },
+  {
+   "gates": [
+    "SqsDlq"
+   ],
+   "statement": {
+    "Action": "sqs:ReceiveMessage",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:*"
+    },
+    "Sid": "ReceiveFromDeadLetterQueues"
+   }
+  },
+  {
+   "gates": [
+    "SsmSecureStrings"
+   ],
+   "statement": {
+    "Action": "kms:Decrypt",
+    "Condition": {
+     "StringEquals": {
+      "kms:ViaService": {
+       "Fn::Sub": "ssm.${AWS::Region}.amazonaws.com"
+      }
+     }
+    },
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DecryptParametersThroughSsm"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "cassandra:Select",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*"
+    },
+    "Sid": "SelectKeyspaces"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "es:ESHttpGet",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:es:${AWS::Region}:${AWS::AccountId}:domain/*/*"
+    },
+    "Sid": "ReadOpenSearchDomains"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "events:StartReplay",
+    "Effect": "Deny",
+    "NotResource": {
+     "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:replay/sds-*"
+    },
+    "Sid": "NoReplaysButOwn"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "kms:ListAliases",
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ListKmsAliases"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "lakeformation:*",
+    "Effect": "Deny",
+    "Resource": "*",
+    "Sid": "NeverAskLakeFormation"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "s3:ListBucket",
+    "Effect": "Allow",
+    "Resource": "arn:aws:s3:::*",
+    "Sid": "ReadS3"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "s3:ListBucket",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::GetAtt": [
+      "ResultsBucket",
+      "Arn"
+     ]
+    },
+    "Sid": "OwnResultsBucketList"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "s3express:CreateSession",
+    "Condition": {
+     "StringEquals": {
+      "s3express:SessionMode": "ReadOnly"
+     }
+    },
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:s3express:${AWS::Region}:${AWS::AccountId}:bucket/*"
+    },
+    "Sid": "ReadOnlyExpressSessions"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "s3express:CreateSession",
+    "Condition": {
+     "StringNotEquals": {
+      "s3express:SessionMode": "ReadOnly"
+     }
+    },
+    "Effect": "Deny",
+    "Resource": "*",
+    "Sid": "NoReadWriteExpressSessions"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "s3express:ListAllMyDirectoryBuckets",
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ListDirectoryBuckets"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "sqs:DeleteMessage*",
+    "Effect": "Deny",
+    "NotResource": {
+     "Fn::Sub": "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:sensitive-data-scanner-replay"
+    },
+    "Sid": "NoMessageDeletesButOwnQueue"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "ssm:GetParameters",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
+    },
+    "Sid": "ReadParameters"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": "timestream:Select",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:timestream:${AWS::Region}:${AWS::AccountId}:database/*/table/*"
+    },
+    "Sid": "SelectTimestreamTables"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "aoss:BatchGetCollection",
+     "aoss:ListCollections",
+     "aoss:ListTagsForResource",
+     "es:DescribeDomains",
+     "es:ListDomainNames",
+     "es:ListTags"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeOpenSearch"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "aoss:Create*",
+     "aoss:Delete*",
+     "aoss:Update*",
+     "backup:Create*",
+     "backup:Delete*",
+     "backup:Put*",
+     "backup:Start*",
+     "backup:Update*",
+     "cassandra:Alter",
+     "cassandra:Create",
+     "cassandra:Drop",
+     "cassandra:Modify",
+     "cassandra:Restore*",
+     "cassandra:UpdatePartitioner",
+     "codecommit:Associate*",
+     "codecommit:Create*",
+     "codecommit:Delete*",
+     "codecommit:Disassociate*",
+     "codecommit:GitPush",
+     "codecommit:Merge*",
+     "codecommit:Override*",
+     "codecommit:Post*",
+     "codecommit:Put*",
+     "codecommit:TagResource",
+     "codecommit:UntagResource",
+     "codecommit:Update*",
+     "docdb-elastic:Create*",
+     "docdb-elastic:Delete*",
+     "docdb-elastic:Update*",
+     "dynamodb:BatchWriteItem",
+     "dynamodb:Create*",
+     "dynamodb:Delete*",
+     "dynamodb:DeleteItem",
+     "dynamodb:PartiQLDelete",
+     "dynamodb:PartiQLInsert",
+     "dynamodb:PartiQLUpdate",
+     "dynamodb:PutItem",
+     "dynamodb:Restore*",
+     "dynamodb:Update*",
+     "dynamodb:UpdateItem",
+     "ebs:CompleteSnapshot",
+     "ebs:PutSnapshotBlock",
+     "ebs:StartSnapshot",
+     "ec2:AttachVolume",
+     "ec2:CopySnapshot",
+     "ec2:CreateSnapshot*",
+     "ec2:CreateVolume",
+     "ec2:DeleteSnapshot",
+     "ec2:DeleteVolume",
+     "ec2:DetachVolume",
+     "ec2:ModifySnapshot*",
+     "ec2:ModifyVolume*",
+     "ecr:BatchDeleteImage",
+     "ecr:CompleteLayerUpload",
+     "ecr:Create*",
+     "ecr:Delete*",
+     "ecr:InitiateLayerUpload",
+     "ecr:Put*",
+     "ecr:ReplicateImage",
+     "ecr:Set*",
+     "ecr:Start*",
+     "ecr:TagResource",
+     "ecr:UntagResource",
+     "ecr:UploadLayerPart",
+     "elasticache:CopyServerlessCacheSnapshot",
+     "elasticache:CopySnapshot",
+     "elasticache:Create*",
+     "elasticache:Delete*",
+     "elasticache:ExportServerlessCacheSnapshot",
+     "elasticache:Modify*",
+     "elasticache:Reboot*",
+     "elasticache:TestFailover",
+     "elasticfilesystem:ClientRootAccess",
+     "elasticfilesystem:ClientWrite",
+     "elasticfilesystem:Create*",
+     "elasticfilesystem:Delete*",
+     "elasticfilesystem:Put*",
+     "elasticfilesystem:Update*",
+     "es:Create*",
+     "es:Delete*",
+     "es:ESHttpDelete",
+     "es:ESHttpPatch",
+     "es:ESHttpPost",
+     "es:ESHttpPut",
+     "es:Update*",
+     "events:CancelReplay",
+     "events:CreateArchive",
+     "events:CreateEventBus",
+     "events:DeleteArchive",
+     "events:DeleteEventBus",
+     "events:PutPermission",
+     "events:RemovePermission",
+     "events:UpdateArchive",
+     "events:UpdateEventBus",
+     "firehose:Create*",
+     "firehose:Delete*",
+     "firehose:Put*",
+     "firehose:Start*",
+     "firehose:Stop*",
+     "firehose:Update*",
+     "fsx:Create*",
+     "fsx:Delete*",
+     "fsx:Update*",
+     "glacier:AbortMultipartUpload",
+     "glacier:AbortVaultLock",
+     "glacier:AddTagsToVault",
+     "glacier:CompleteMultipartUpload",
+     "glacier:CompleteVaultLock",
+     "glacier:Create*",
+     "glacier:Delete*",
+     "glacier:InitiateJob",
+     "glacier:InitiateMultipartUpload",
+     "glacier:InitiateVaultLock",
+     "glacier:RemoveTagsFromVault",
+     "glacier:Set*",
+     "glacier:Upload*",
+     "glue:BatchDelete*",
+     "glue:Create*",
+     "glue:Delete*",
+     "glue:Update*",
+     "kafka-cluster:AlterCluster",
+     "kafka-cluster:AlterClusterDynamicConfiguration",
+     "kafka-cluster:AlterGroup",
+     "kafka-cluster:AlterTopic",
+     "kafka-cluster:AlterTopicDynamicConfiguration",
+     "kafka-cluster:AlterTransactionalId",
+     "kafka-cluster:CreateTopic",
+     "kafka-cluster:DeleteGroup",
+     "kafka-cluster:DeleteTopic",
+     "kafka-cluster:WriteData",
+     "kafka-cluster:WriteDataIdempotently",
+     "kafka:BatchAssociate*",
+     "kafka:BatchDisassociate*",
+     "kafka:Create*",
+     "kafka:Delete*",
+     "kafka:Put*",
+     "kafka:Reboot*",
+     "kafka:TagResource",
+     "kafka:UntagResource",
+     "kafka:Update*",
+     "kinesis:*RetentionPeriod",
+     "kinesis:*StreamEncryption",
+     "kinesis:Create*",
+     "kinesis:Delete*",
+     "kinesis:MergeShards",
+     "kinesis:PutRecord*",
+     "kinesis:RegisterStreamConsumer",
+     "kinesis:SplitShard",
+     "kinesis:Update*",
+     "lambda:AddPermission",
+     "lambda:Create*",
+     "lambda:Delete*",
+     "lambda:Invoke*",
+     "lambda:Publish*",
+     "lambda:Put*",
+     "lambda:RemovePermission",
+     "lambda:TagResource",
+     "lambda:UntagResource",
+     "lambda:Update*",
+     "logs:Delete*",
+     "logs:PutDataProtectionPolicy",
+     "logs:PutRetentionPolicy",
+     "logs:PutSubscriptionFilter",
+     "memorydb:CopySnapshot",
+     "memorydb:Create*",
+     "memorydb:Delete*",
+     "memorydb:Update*",
+     "mq:Create*",
+     "mq:Delete*",
+     "mq:Promote",
+     "mq:Reboot*",
+     "mq:Update*",
+     "neptune-graph:CancelExportTask",
+     "neptune-graph:CancelImportTask",
+     "neptune-graph:Create*",
+     "neptune-graph:Delete*",
+     "neptune-graph:DeleteDataViaQuery",
+     "neptune-graph:Reset*",
+     "neptune-graph:Restore*",
+     "neptune-graph:StartImportTask",
+     "neptune-graph:TagResource",
+     "neptune-graph:UntagResource",
+     "neptune-graph:Update*",
+     "neptune-graph:WriteDataViaQuery",
+     "rds:CancelExportTask",
+     "rds:Create*",
+     "rds:Delete*",
+     "rds:Modify*",
+     "rds:Reboot*",
+     "rds:Restore*",
+     "rds:StopDB*",
+     "redshift-data:BatchExecuteStatement",
+     "redshift-serverless:Create*",
+     "redshift-serverless:Delete*",
+     "redshift-serverless:Restore*",
+     "redshift-serverless:Update*",
+     "redshift:CreateClusterUser",
+     "redshift:Delete*",
+     "redshift:JoinGroup",
+     "redshift:Modify*",
+     "redshift:Pause*",
+     "redshift:Reboot*",
+     "redshift:Restore*",
+     "redshift:Resume*",
+     "s3express:CreateBucket",
+     "s3express:DeleteBucket",
+     "s3express:DeleteBucketPolicy",
+     "s3express:PutBucketPolicy",
+     "s3express:PutEncryptionConfiguration",
+     "s3express:PutLifecycleConfiguration",
+     "sagemaker:AddTags",
+     "sagemaker:Create*",
+     "sagemaker:Delete*",
+     "sagemaker:Put*",
+     "sagemaker:Start*",
+     "sagemaker:Stop*",
+     "sagemaker:Update*",
+     "secretsmanager:CancelRotateSecret",
+     "secretsmanager:CreateSecret",
+     "secretsmanager:DeleteResourcePolicy",
+     "secretsmanager:DeleteSecret",
+     "secretsmanager:PutResourcePolicy",
+     "secretsmanager:PutSecretValue",
+     "secretsmanager:RemoveRegionsFromReplication",
+     "secretsmanager:ReplicateSecretToRegions",
+     "secretsmanager:RestoreSecret",
+     "secretsmanager:RotateSecret",
+     "secretsmanager:StopReplicationToReplica",
+     "secretsmanager:UpdateSecret*",
+     "sqs:CancelMessageMoveTask",
+     "sqs:ChangeMessageVisibility*",
+     "sqs:CreateQueue",
+     "sqs:DeleteQueue",
+     "sqs:PurgeQueue",
+     "sqs:SendMessage*",
+     "sqs:SetQueueAttributes",
+     "sqs:StartMessageMoveTask",
+     "ssm:DeleteParameter*",
+     "ssm:LabelParameterVersion",
+     "ssm:PutParameter",
+     "ssm:UnlabelParameterVersion",
+     "states:Create*",
+     "states:Delete*",
+     "states:Publish*",
+     "states:RedriveExecution",
+     "states:SendTask*",
+     "states:Start*",
+     "states:Stop*",
+     "states:TagResource",
+     "states:UntagResource",
+     "states:Update*",
+     "timestream-influxdb:Create*",
+     "timestream-influxdb:Delete*",
+     "timestream-influxdb:Update*",
+     "timestream:Create*",
+     "timestream:Delete*",
+     "timestream:Update*",
+     "timestream:WriteRecords",
+     "xray:Create*",
+     "xray:Delete*",
+     "xray:Put*",
+     "xray:TagResource",
+     "xray:UntagResource",
+     "xray:Update*"
+    ],
+    "Effect": "Deny",
+    "Resource": "*",
+    "Sid": "NoDataStoreWrites"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "backup:ListBackupVaults",
+     "backup:ListRecoveryPointsByBackupVault",
+     "backup:ListTags",
+     "docdb-elastic:ListClusters",
+     "docdb-elastic:ListTagsForResource",
+     "ec2:DescribeSnapshots",
+     "ec2:DescribeVolumes",
+     "elasticfilesystem:DescribeFileSystems",
+     "fsx:DescribeFileSystems"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeSnapshotsBackupsAndFileSystems"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "codecommit:GetBranch",
+     "codecommit:GetFile",
+     "codecommit:GetFolder",
+     "codecommit:GetRepository",
+     "codecommit:ListRepositories",
+     "codecommit:ListTagsForResource",
+     "lambda:GetFunctionConfiguration",
+     "lambda:ListFunctions",
+     "lambda:ListTags",
+     "states:DescribeStateMachine",
+     "states:GetExecutionHistory",
+     "states:ListExecutions",
+     "states:ListStateMachines",
+     "states:ListTagsForResource",
+     "xray:BatchGetTraces",
+     "xray:GetEncryptionConfig",
+     "xray:GetTraceSummaries"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ReadWorkflowsFunctionsTracesAndCode"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "dynamodb:DescribeTable",
+     "dynamodb:ListTables",
+     "dynamodb:ListTagsOfResource",
+     "dynamodb:Query",
+     "dynamodb:Scan"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ReadDynamoDB"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "ecr:DescribeRepositories",
+     "ecr:ListTagsForResource",
+     "events:DescribeArchive",
+     "events:ListArchives",
+     "glacier:ListTagsForVault",
+     "glacier:ListVaults",
+     "neptune-graph:ListGraphs",
+     "neptune-graph:ListTagsForResource",
+     "sagemaker:DescribeFeatureGroup",
+     "sagemaker:ListFeatureGroups",
+     "sagemaker:ListNotebookInstances",
+     "sagemaker:ListTags"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeImagesMlGraphsAndArchives"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "elasticache:DescribeCacheClusters",
+     "elasticache:DescribeReplicationGroups",
+     "elasticache:DescribeServerlessCacheSnapshots",
+     "elasticache:DescribeServerlessCaches",
+     "elasticache:DescribeSnapshots",
+     "memorydb:DescribeClusters",
+     "memorydb:DescribeSnapshots",
+     "timestream-influxdb:ListDbInstances",
+     "timestream:DescribeEndpoints",
+     "timestream:ListDatabases",
+     "timestream:ListTables",
+     "timestream:ListTagsForResource"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeCachesAndTimeSeries"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "events:DeleteRule",
+     "events:DisableRule",
+     "events:EnableRule",
+     "events:PutRule",
+     "events:PutTargets",
+     "events:RemoveTargets"
+    ],
+    "Effect": "Deny",
+    "NotResource": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/sensitive-data-scanner-replay-*"
+     },
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*/sensitive-data-scanner-replay-*"
+     }
+    ],
+    "Sid": "NoRulesButOwnReplayRules"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "firehose:DescribeDeliveryStream",
+     "firehose:ListDeliveryStreams",
+     "firehose:ListTagsForDeliveryStream",
+     "kinesis:DescribeStreamSummary",
+     "kinesis:GetRecords",
+     "kinesis:GetShardIterator",
+     "kinesis:ListShards",
+     "kinesis:ListStreams",
+     "kinesis:ListTagsForStream",
+     "sqs:GetQueueAttributes",
+     "sqs:ListQueueTags",
+     "sqs:ListQueues"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ReadStreamsAndListQueues"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "glue:GetDatabases",
+     "glue:GetTables",
+     "glue:GetTags"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ReadGlueCatalog"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "kafka:ListClustersV2",
+     "mq:DescribeBroker",
+     "mq:ListBrokers"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeBrokers"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "logs:CreateLogStream",
+     "logs:PutLogEvents"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "${LogGroup.Arn}"
+    },
+    "Sid": "OwnLogs"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "logs:DescribeLogGroups",
+     "logs:FilterLogEvents",
+     "logs:ListTagsForResource"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ReadLogs"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "macie2:Accept*",
+     "macie2:Create*",
+     "macie2:Decline*",
+     "macie2:Delete*",
+     "macie2:Disable*",
+     "macie2:Enable*",
+     "macie2:GetRevealConfiguration",
+     "macie2:GetSensitiveDataOccurrences*",
+     "macie2:Put*",
+     "macie2:Tag*",
+     "macie2:Untag*",
+     "macie2:Update*",
+     "macie2:UpdateRevealConfiguration"
+    ],
+    "Effect": "Deny",
+    "Resource": "*",
+    "Sid": "NeverRevealOrChangeMacie"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "rds:DescribeDBClusterSnapshots",
+     "rds:DescribeDBClusters",
+     "rds:DescribeDBInstances",
+     "rds:DescribeDBSnapshots",
+     "rds:DescribeExportTasks"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeRds"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "redshift-serverless:ListNamespaces",
+     "redshift-serverless:ListTagsForResource",
+     "redshift-serverless:ListWorkgroups",
+     "redshift:DescribeClusters"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeRedshift"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "s3:AbortMultipartUpload",
+     "s3:DeleteObject",
+     "s3:GetObject",
+     "s3:PutObject"
+    ],
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "${ResultsBucket.Arn}/*"
+    },
+    "Sid": "OwnResultsBucket"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "s3:DeleteBucket*",
+     "s3:DeleteObject",
+     "s3:DeleteObjectVersion",
+     "s3:PutBucket*",
+     "s3:PutObject",
+     "s3:PutObjectAcl",
+     "s3:PutObjectTagging",
+     "s3:ReplicateObject",
+     "s3:RestoreObject"
+    ],
+    "Effect": "Deny",
+    "NotResource": [
+     {
+      "Fn::GetAtt": [
+       "ResultsBucket",
+       "Arn"
+      ]
+     },
+     {
+      "Fn::Sub": "${ResultsBucket.Arn}/*"
+     }
+    ],
+    "Sid": "NoWritesOutsideOwnBucket"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "s3:GetBucketTagging",
+     "s3:GetEncryptionConfiguration",
+     "s3:GetInventoryConfiguration",
+     "s3:ListAllMyBuckets"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DiscoverS3"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "s3:GetObject",
+     "s3:GetObjectVersion"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:s3:::*/*",
+    "Sid": "ReadS3Objects"
+   }
+  },
+  {
+   "gates": [],
+   "statement": {
+    "Action": [
+     "secretsmanager:ListSecrets",
+     "ssm:DescribeParameters",
+     "ssm:ListTagsForResource"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ListConfigStores"
+   }
+  }
+ ]
+}
