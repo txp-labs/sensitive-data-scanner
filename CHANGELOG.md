@@ -6,6 +6,27 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Spec
+- **Spec 0.5** ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the accuracy benchmark;
+  every change is listed for consumers in `spec/README.md`, "Changes from
+  0.4"):
+  - `us_ssn` and `us_itin` gain the context exclusion `social[- ]media`.
+    "Shared on social media, post 512437788" matches nothing; in 0.4 it was
+    a high-confidence SSN. "social" outside "social media" is still context,
+    and a `ddd-dd-dddd` value is still an SSN by its shape.
+  - `specVersion` is `"0.5"`; the JSON Schemas follow. An implementation of
+    0.4 refuses the files.
+  - Vectors: `vectors/benchmark.jsonl`, ten cases, passed by the Python
+    engine, the Presidio path and the TypeScript package alike. Five are the
+    0.5 change and its near-misses. Five pin what the benchmark measured in
+    conversations and 0.4 already did: a card's last four and a birth year
+    after a prompt at `low`, a card two turns late at `medium`, and callback
+    and confirmation numbers as nothing.
+  - `@txp-labs/sensitive-data-spec`: `SPEC_VERSION` is `'0.5'`; `dist/` is
+    rebuilt. Stugum, which mirrors the spec, needs the new exclusion.
+  - Benchmark, stored text: `us_ssn` precision 0.781 to 1.000, `us_itin`
+    0.907 to 1.000.
+
 ### Feature
 - **Azure, step 1: the package, Blob Storage and ADLS Gen2** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
   `sensitive-data-scanner-azure` (`scanner/azure`), a Container Apps job's
@@ -666,6 +687,53 @@ bumps the minor version. Spec changes are listed under **Spec**.
   with `duplicateOf` naming the other store's finding. Coverage counts them in
   `duplicatesAcross`. The original is always checked in its own index, so a
   changed or deleted original is no original.
+- **Big DynamoDB tables with PITR are read by export, then only what changed**
+  ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements): with `DYNAMODB_EXPORT`, a table below
+  `DYNAMODB_MAX_TABLE_BYTES` whose point-in-time recovery is on and that holds
+  at least `DYNAMODB_EXPORT_MIN_BYTES` (1 GiB) or `DYNAMODB_EXPORT_MIN_ITEMS`
+  (1,000,000) is read by a full export and then by incremental exports,
+  instead of a sampled `Scan` every pass. Smaller tables, and big ones without
+  PITR, keep the sampled `Scan` (never skipped for it). Exports stay within
+  `MAX_EXPORTS_PER_RUN`.
+- **The run summary names what an inventory would help, and recommends daily
+  S3 Inventory** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 4 and 9):
+  - A bucket read from a weekly S3 Inventory configuration says
+    `recommendation: s3_inventory_daily`, since a change can wait a week to
+    be seen. `s3_inventory` (no configuration) now means a daily one.
+  - Azure Blob Inventory and Cloud Storage's Storage Insights reports stay
+    designed and built on demand. A container whose last complete pass listed
+    at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000) says
+    `recommendation: blob_inventory`, and a bucket past
+    `GCS_INVENTORY_MIN_OBJECTS` says `recommendation: storage_insights`. The
+    scanner never configures one.
+- **Stored text: context goes to the value it labels, and no further**
+  ([#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75), found by the
+  benchmark). Four fixes to the readers; the spec is unchanged:
+  - A CSV object is read as a table is: each column's cells, with that
+    column's name as context. Before, the whole header was context for every
+    cell. With `ssn` and `date_of_birth` columns, every routing number was a
+    high-confidence SSN and every hire date a date of birth. Offsets still
+    point into the object's text.
+  - A JSON value's context is its own key path, plus the labels of the
+    objects that hold it (`{"label": "SSN", "value": ...}` still works). Other
+    keys in the document no longer count, so a `dateOfBirth` key no longer
+    makes a log record's `timestamp` a date of birth.
+  - A card number is never four groups from the middle of a longer run, such
+    as a USPS tracking number or an IBAN. A card typed with its expiry right
+    after it (`4539 1488 0343 6467 04/29`) is now found. Presidio had dropped
+    the 16-digit match inside the longer weak-pattern match before any Luhn
+    check. Now the longest head of a match, cut at a separator, that passes
+    Luhn and the IIN table is the card, as the spec's shorter heads are.
+  - A DOB word's context window stops at the nearest other date, so in "date
+    of birth 03/14/1985, charged on 09/03/2026" only the first date is a
+    birth date.
+  - Benchmark, stored text:
+    - `us_ssn` precision 0.567 to 0.781;
+    - `dob` precision 0.605 to 0.978;
+    - `us_itin` precision 0.883 to 0.907;
+    - `card` precision 0.851 to 0.859, recall 0.985 to 0.998.
+  - The text reader's and the detection's component versions change, so
+    unchanged objects are read again under the rescan budget.
 - **An adapter's version is its read path; a listing change re-lists, never
   re-reads** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements):
   - Every adapter whose objects the index records (S3, Glue tables and
@@ -809,7 +877,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `relisted` and `duplicatesAcross` in coverage; `duplicateOf` may name a
-  finding of another store of the same account, subscription or project.
+  finding of another store of the same account, subscription or project; the
+  store recommendations `s3_inventory_daily`, `blob_inventory` and
+  `storage_insights`.
 - Version **1.10**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
   `rescanReason` (`adapter`, `reader`, `new_reader`, `sniffer`,
   `spec_standalone`, `spec_conversation`, `unindexed`) and `rescanClasses` on
@@ -875,6 +945,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- Rescans ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), refinements 1, 7 and 8): `docs/ARCHITECTURE.md` says
+  why the one-time `unindexed` read after an upgrade is kept (within 25% of
+  the budget; it is how objects read before the index get the improved
+  detection), and that stores with no cheap change marker (OpenSearch,
+  Firestore, Cosmos DB, Bigtable, Redshift, Spanner, MongoDB, small DynamoDB
+  tables) keep sampling each pass, as accepted. `docs/DATABASES.md` and
+  `docs/AZURE.md` add `VIEW DATABASE STATE` (`VIEW DATABASE PERFORMANCE STATE`
+  on Azure SQL) to the SQL Server read-only user, so tables unchanged since
+  their last read are skipped; the user check already counts it as a read,
+  and a test now says so.
 - `README.md` rewritten to say what the scanner does, accurately: a capability
   matrix by platform (read by default, opt-in, reported as a gap), what it
   detects, scanner, vendor or both, how it stays safe, efficiency, how to

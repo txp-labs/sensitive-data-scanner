@@ -262,3 +262,29 @@ def test_finding_the_report_reads_only() -> None:
     }
     assert {"list_bucket_inventory_configurations", "list_objects_v2", "get_object"} <= called
     assert not {c for c in called if c.startswith(("put_", "delete_", "create_"))}
+
+
+def test_a_weekly_inventory_is_read_and_daily_is_recommended(env: Env) -> None:
+    """A weekly report leaves changes unseen for up to a week: the run summary recommends a
+    daily one (#67), on the pass that reads the report and while the bucket waits for the
+    next; a daily inventory gets no recommendation."""
+    for i in range(4):
+        env.put(f"a/{i}.txt", f"note {i}")
+    s3 = setup(env, [configuration(Schedule={"Frequency": "Weekly"})])
+    t0 = dt.datetime.now(dt.UTC)
+    first = env.run(cfg(), now=lambda: t0)
+    assert first is not None and "recommendation" not in s3_store(first)  # listed, not known
+    publish(env, t0 + dt.timedelta(hours=1))
+    second = env.run(cfg(), now=lambda: t0 + dt.timedelta(hours=2))
+    assert second is not None
+    store = s3_store(second)
+    assert (store["listedBy"], store["recommendation"]) == ("inventory", "s3_inventory_daily")
+    idle = env.run(cfg(), now=lambda: t0 + dt.timedelta(hours=3))
+    assert idle is not None and s3_store(idle)["recommendation"] == "s3_inventory_daily"
+    # Made daily: the next report's pass names nothing.
+    s3.configs = [configuration()]
+    publish(env, t0 + dt.timedelta(hours=4))
+    daily = env.run(cfg(), now=lambda: t0 + dt.timedelta(hours=5))
+    assert daily is not None
+    store = s3_store(daily)
+    assert store["listedBy"] == "inventory" and "recommendation" not in store

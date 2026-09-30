@@ -122,6 +122,7 @@ class GcsAdapter:
             max_inflated_bytes=s.max_inflated_bytes,
             max_rows=s.columnar_max_rows,
             skew_seconds=s.skew_seconds,
+            inventory_min_objects=s.gcs_inventory_min_objects,
         )
 
 
@@ -138,7 +139,18 @@ class GcsSource:
     kind = KIND
     # A change to how this kind is listed (`listing:<kind>`) drops these cursor keys: the next
     # pass lists the store again from the start and reads only what changed (#67).
-    relist_keys: tuple[str, ...] = ("passStartedAt", "token", "skip", "prefixDir", "prefixCount")
+    relist_keys: tuple[str, ...] = (
+        "passStartedAt",
+        "token",
+        "skip",
+        "prefixDir",
+        "prefixCount",
+        "passListed",
+    )
+    # (#67) Named in the run summary when its last complete pass listed at least
+    # `inventory_min_objects`: an inventory report would spare it a listing each pass. Not
+    # built; the scanner never configures one (a write).
+    recommendation = "storage_insights"
     indexes: Indexes | None = None  # the run's object indexes (#67), set by the runner
 
     def __init__(
@@ -155,7 +167,9 @@ class GcsSource:
         skew_seconds: int = 300,
         columnar: bool | None = None,
         page_size: int = 1000,
+        inventory_min_objects: int = 1_000_000,
     ) -> None:
+        self.inventory_min_objects = inventory_min_objects
         self.rest = rest
         self.t = target
         self.prefix = prefix
@@ -267,10 +281,16 @@ class GcsSource:
             for obj, why in self._op.rescans.drain(budget, self._planned):
                 err_name = self._guarded(obj, cov, detector, store, seen_at, why)
                 first_error = first_error or err_name
+        # Objects listed this pass, over its runs: a large store is named (`recommendation`).
+        listed = int(cursor.get("passListed") or 0) + cov.listed
         if done and cov.error is None:
             cov.pass_complete = True
             self._op.complete()
-            new_cursor: dict[str, Any] = {"watermark": pass_started, "passStartedAt": None}
+            new_cursor: dict[str, Any] = {
+                "watermark": pass_started,
+                "passStartedAt": None,
+                "objects": listed,
+            }
             cur_dir, cur_n = None, 0
         else:
             if cov.error is None:
@@ -280,7 +300,10 @@ class GcsSource:
                 "passStartedAt": pass_started,
                 "token": token,
                 "skip": skip,
+                "passListed": listed,
             }
+            if cursor.get("objects"):
+                new_cursor["objects"] = cursor["objects"]
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
@@ -288,7 +311,10 @@ class GcsSource:
         self._op.settle(cov)
         if cov.error is None and cov.scanned == 0 and cov.unreadable > 0:
             cov.error = first_error
-        return SourceRun(cov, new_cursor, note=note)
+        extra: dict[str, Any] = {}
+        if 0 < self.inventory_min_objects <= int(new_cursor.get("objects") or 0):
+            extra["recommendation"] = self.recommendation
+        return SourceRun(cov, new_cursor, note=note, extra=extra)
 
     def _one(
         self,

@@ -147,7 +147,8 @@ One run:
 | `RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN` | The role RDS assumes to write snapshot exports, and the customer's KMS key to encrypt them. Both are needed to read RDS and Aurora | none: RDS stores are reported `export_not_configured` |
 | `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB) a run may start | 1 |
 | `EXPORT_MIN_INTERVAL_DAYS` | Days before a store is exported again | 7 |
-| `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR) | off |
+| `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR), and a big table with PITR on below that cap too, then only what changed ([below](#dynamodb-export-to-s3-large-tables)) | off |
+| `DYNAMODB_EXPORT_MIN_BYTES`, `DYNAMODB_EXPORT_MIN_ITEMS` | With `DYNAMODB_EXPORT`: a table below `DYNAMODB_MAX_TABLE_BYTES` with PITR on is read by export when it holds at least this many bytes or items (0 turns a measure off); smaller tables are sampled by Scan | 1 GiB, 1,000,000 |
 | `DYNAMODB_EXPORT_KMS_KEY_ARN` | Encrypt DynamoDB exports with this key (`SSE-KMS`) | SSE-S3 |
 | `DYNAMODB_INCREMENTAL` | After a table's full export, read only what changed, with incremental exports ([below](#dynamodb-export-to-s3-large-tables)) | on |
 | `RDS_DATA_API` | Opt-in: Aurora clusters to read with read-only SQL through the Data API, as a JSON list | none (off) |
@@ -238,7 +239,7 @@ region, and a bucket in another region is left to that region's scanner.
 |---|---|---|
 | `s3` | `ListBuckets` with `BucketRegion` set to the run's region | the whole bucket, by the S3 source |
 | `logs` | `DescribeLogGroups` | each group, by the CloudWatch Logs source |
-| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT`; a table over `DYNAMODB_MAX_TABLE_BYTES` is read by export with `DYNAMODB_EXPORT`, and is otherwise `too_large` (`pitr_off` when export is on and point-in-time recovery is off) |
+| `dynamodb` | `ListTables`, then `DescribeTable` | a Scan of all attributes, sampled by `DYNAMODB_SAMPLE_PERCENT`; a table over `DYNAMODB_MAX_TABLE_BYTES` is read by export with `DYNAMODB_EXPORT`, and is otherwise `too_large` (`pitr_off` when export is on and point-in-time recovery is off); with `DYNAMODB_EXPORT`, a table below it with PITR on and at least `DYNAMODB_EXPORT_MIN_BYTES` or `DYNAMODB_EXPORT_MIN_ITEMS` is read by export too |
 | `glue` | `GetDatabases`, then `GetTables` | each table's S3 location, by column ([below](#glue-data-catalog-and-lake-formation)) |
 | `rds` | `DescribeDBClusters`, `DescribeDBInstances` | the latest automated snapshot, exported to Parquet ([below](#rds-and-aurora-by-snapshot-export)) |
 | `redshift` | `DescribeClusters`; Serverless `ListWorkgroups`, `ListNamespaces` | sampled read-only SQL through the Data API, opt-in ([below](#redshift-and-redshift-serverless)) |
@@ -681,6 +682,17 @@ makes a million objects stale costs each run a quarter of its budget, never
 more. `RESCAN_PERCENT=0` turns rescans off: only changes are read, and the
 backlog is still reported.
 
+**The one-time `unindexed` read after an upgrade is kept on purpose**
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), decided 30 Sep 2026). On an existing deployment, the first
+runs read every unchanged object once, because it was read before any vector
+existed. That read is how those objects get the improved detection (the
+archives and PDFs counted, not read, before #66 are the example) and how the
+index learns which readers read them. The alternative, seeding rows without
+reading, would record a vector the object was never read with, so a later
+reader change would never reach it. The read stays within the same
+`RESCAN_PERCENT` (25%) share of each run's budget, after the run's changes,
+so it is spread over runs and never a spike.
+
 **By kind of source:**
 
 - **Listings** (S3, Azure Blob Storage and Files, Cloud Storage) meet their
@@ -751,6 +763,15 @@ used ([DATABASES.md](DATABASES.md#tables-unchanged-since-the-last-read)).
 Redshift and Spanner keep no such marker, so their tables are sampled on
 every pass.
 
+**Stores with no cheap change marker keep sampling, by decision**
+([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), 30 Sep 2026). OpenSearch, Firestore and Datastore,
+Cosmos DB, Bigtable, Redshift, Spanner, MongoDB and small DynamoDB tables
+(read by `Scan`) offer no marker of change that costs less than the sample it
+would spare. They are sampled on every pass, within their budget share, as
+before. This is accepted. Candidates for a later change are OpenSearch's
+`_stats` indexing counters, Redshift's `svv_table_info` and Spanner's
+commit-timestamp columns where a schema has them.
+
 - A table is sampled whatever its marker says once 7 days have passed, in
   case a marker missed a change.
 - The same rules apply to tables, with the `sql` reader in their vector. This
@@ -759,8 +780,10 @@ every pass.
 - BigQuery already skipped tables unchanged since their last read
   (`lastModifiedTime`), and now rescans them by the same rules.
 - DynamoDB tables read by export use incremental exports
-  ([above](#dynamodb-export-to-s3-large-tables)), and a stale table gets a full
-  export as its rescan.
+  ([below](#dynamodb-export-to-s3-large-tables)), and a stale table gets a full
+  export as its rescan. With `DYNAMODB_EXPORT`, that includes every table with
+  PITR on past `DYNAMODB_EXPORT_MIN_BYTES` or `DYNAMODB_EXPORT_MIN_ITEMS`, not
+  only those too large to Scan. Smaller tables are sampled each pass.
 
 Logs, X-Ray traces and streams are read forward from their position, so their
 history is not re-read.
@@ -868,19 +891,26 @@ index, sampling and rescans. It resumes at a file and row. Its watermark is the
 report's own time, because a report says nothing of objects written after it:
 they are in the next one. Until the next report arrives, a run lists nothing
 for that bucket. So on an inventory the change latency is the inventory's
-schedule, which should be daily. The run summary says `listedBy: inventory`.
+schedule. **Daily is the recommended schedule** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)): a weekly
+report leaves a change unseen for up to a week. The run summary says
+`listedBy: inventory`, and a bucket read from a weekly configuration also says
+`recommendation: s3_inventory_daily`. Listing the keys modified since the
+report as well was considered and not taken: it would cost the listing an
+inventory is there to spare.
 
 The scanner **never creates or changes an inventory configuration**, because
 that is a write. A large bucket with no configuration is named in the run
-summary as `recommendation: s3_inventory` and listed as before. A
+summary as `recommendation: s3_inventory` (a daily configuration, with `Size`,
+`LastModifiedDate` and `ETag`) and listed as before. A
 configuration without the needed fields, a destination the scanner may not
 read, a Parquet or ORC report in the Lambda zip, or a report older than eight
 days also means a listing. A bucket read with `S3_MAX_OBJECTS_PER_PREFIX`
 (which needs key order), a directory bucket and a Glue table's location are
 always listed.
 
-**Azure Blob Inventory and Cloud Storage inventory reports (not built).** Both
-work the same way, and the design is the same:
+**Azure Blob Inventory and Cloud Storage inventory reports (designed, built on
+demand).** Both work the same way, and the design is the same. They are built
+when a customer needs them ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67), decided 30 Sep 2026):
 
 - **Azure:** a storage account's blob inventory policy
   (`blobServices/default/inventoryPolicies`, readable with Reader) writes CSV
@@ -892,7 +922,11 @@ work the same way, and the design is the same:
   bucket.
 
 Neither is built yet. Their large containers and buckets are listed, as S3's
-were before.
+were before, and **the run summary names them**. A container whose last
+complete pass listed at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000)
+says `recommendation: blob_inventory`. A bucket past `GCS_INVENTORY_MIN_OBJECTS`
+(1,000,000) says `recommendation: storage_insights`. So a customer can see
+which stores would benefit before asking for the reader.
 
 ### Glue Data Catalog and Lake Formation
 
@@ -1589,8 +1623,22 @@ source (the same `dynamodb_item` findings), and deleted afterwards.
   - the table's recorded components are stale (the attribute reader, the
     adapter or the spec changed): a rescan within the rescan share;
   - the last export is older than point-in-time recovery keeps (35 days).
-- A table read by `Scan` (below the size cap) is sampled on every pass as
-  before: DynamoDB keeps no cheap marker of change.
+- **Big tables below the cap** ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)).
+  With `DYNAMODB_EXPORT`, a table below `DYNAMODB_MAX_TABLE_BYTES` is read by
+  export as well when point-in-time recovery is on and it holds at least
+  `DYNAMODB_EXPORT_MIN_BYTES` (1 GiB) or `DYNAMODB_EXPORT_MIN_ITEMS`
+  (1,000,000). Its first export is full, and the later ones incremental, so a
+  big table costs a pass only what was written since the last one, where a
+  Scan would sample all of it again.
+  - Discovery asks `DescribeContinuousBackups` only for a table past a
+    threshold. Without PITR, such a table is sampled by `Scan` as before, and
+    never skipped for it.
+  - Its exports count against `MAX_EXPORTS_PER_RUN` like any other, and a
+    newly exported table is not read until its first full export completes
+    (`export_pending`).
+- A **small table** (below both thresholds) is sampled by `Scan` on every
+  pass, as before: DynamoDB keeps no cheap marker of change, and a Scan of a
+  small table costs less than an export. This is accepted.
 
 ### The DynamoDB source
 

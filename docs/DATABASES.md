@@ -247,6 +247,7 @@ GRANT SELECT, SHOW VIEW ON app.* TO 'scanner_ro'@'%';
 CREATE LOGIN scanner_ro WITH PASSWORD = '...';   -- Azure SQL: CREATE USER scanner_ro WITH PASSWORD = '...'
 CREATE USER scanner_ro FOR LOGIN scanner_ro;
 ALTER ROLE db_datareader ADD MEMBER scanner_ro;
+GRANT VIEW DATABASE STATE TO scanner_ro;               -- Azure SQL: GRANT VIEW DATABASE PERFORMANCE STATE TO scanner_ro;
 
 -- Oracle
 CREATE USER scanner_ro IDENTIFIED BY "...";
@@ -264,6 +265,14 @@ GRANT ROLE scanner_reader TO USER scanner;
 -- Databricks (Unity Catalog), for the service principal the token belongs to
 GRANT USE CATALOG, USE SCHEMA, SELECT ON CATALOG main TO `scanner`;
 ```
+
+On SQL Server, `VIEW DATABASE STATE` (on Azure SQL Database, `VIEW DATABASE
+PERFORMANCE STATE`) lets the scanner read each table's change marker,
+`sys.dm_db_index_usage_stats.last_user_update`, so a table unchanged since its
+last read is skipped ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)). It also names the TDE encryptor.
+It reads server state and writes nothing, and the user check counts every
+`VIEW ...` permission as a read. Without it, the scanner still reads every
+table, sampled on every pass as before.
 
 MongoDB: a user with the built-in `readAnyDatabase` role (Atlas: "Only read
 any database"), or `read` on the databases to scan.
