@@ -146,7 +146,7 @@ def test_budget_resumes_where_it_stopped_and_reads_nothing_twice(env: Env) -> No
 
 def test_sampling_is_stated(env: Env) -> None:
     for i in range(20):
-        env.put(f"sample/{i:02d}.txt", "hello")
+        env.put(f"sample/{i:02d}.txt", f"hello {i}")  # distinct: copies would be duplicates
     doc = env.run(config(sample_percent=30))
     assert doc is not None
     cov = doc["coverage"][0]

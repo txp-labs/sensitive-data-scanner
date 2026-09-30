@@ -574,6 +574,11 @@
           "description": "(1.10, #67) The object did not change at its source and was read again because a component it was last read with changed and could change this result: its adapter, a reader it was read with, a new reader for a kind it held unread, the sniffer (for an object whose kind was undetermined or disputed), the standalone spec (text-bearing objects), the conversation spec (transcripts), or it had no row in the object index (read before the index knew it). Absent on a read for a change at the source.",
           "$ref": "#/$defs/rescanReason"
         },
+        "duplicateOf": {
+          "description": "(1.10, #67) This object was not read: its bytes are those of another object of the same store (the same content fingerprint), read with the same components. This finding is that object's finding, as this object's own; duplicateOf is the other's finding id.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
         "rescanClasses": {
           "description": "(1.10) With rescanReason spec_standalone: the classes whose own rules changed, or that are new, when only those changed.",
           "type": "array",
@@ -649,6 +654,11 @@
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/rescanReason" },
           "additionalProperties": { "type": "integer", "minimum": 1 }
+        },
+        "duplicates": {
+          "description": "(1.10, #67) Objects not read because their bytes are an object this source already read, with components still current (the same content fingerprint): their findings are copies naming the original's (duplicateOf).",
+          "type": "integer",
+          "minimum": 0
         },
         "rescanBacklog": {
           "description": "(1.10) Rescans still owed: objects whose recorded components are stale, and objects with no row met and not read. Later runs read them within their capped share.",

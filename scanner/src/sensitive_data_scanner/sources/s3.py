@@ -404,6 +404,8 @@ class S3Source:
             for obj, why in op.rescans.drain(
                 budget, lambda o: planned_bytes(o["Key"], o.get("Size", 0), self.max_object_bytes)
             ):
+                if self._duplicate(obj, cov, store, seen_at, op, why):
+                    continue
                 error = self._read_one(obj, cov, detector, store, seen_at, op, why)
                 first_read_error = first_read_error or error
         listed = int(cursor.get("passListed") or 0) + cov.listed
@@ -524,6 +526,9 @@ class S3Source:
             op.offer(obj, decision)  # read after this run's changes, if it fits
             w.cur_n += int(counted)
             return True
+        if self._duplicate(obj, cov, w.store, w.seen_at, op):
+            w.cur_n += 1  # in its directory's sample, as a read would be
+            return True  # the same bytes as an object read with what it would be read with now
         size = planned_bytes(key, obj.get("Size", 0), self.max_object_bytes)
         if not w.budget.has(size):
             return False
@@ -531,6 +536,47 @@ class S3Source:
         w.cur_n += 1
         error = self._read_one(obj, cov, w.detector, w.store, w.seen_at, op)
         w.first_error = w.first_error or error
+        return True
+
+    def _duplicate(  # noqa: PLR0917 - one object of the pass
+        self,
+        obj: Mapping[str, Any],
+        cov: Coverage,
+        store: FindingStore,
+        seen_at: str,
+        op: ObjectPass,
+        why: Stale | None = None,
+    ) -> bool:
+        """An object whose single-part ETag is an indexed object's, read with components that
+        are still current, is not read (#67 part 5): its findings are the original's, as its
+        own, each naming the original's (`duplicateOf`). Its version and its own encryption
+        come from one HeadObject (no bytes). False when it is no duplicate, or the head fails
+        (it is then read)."""
+        key = obj["Key"]
+        fingerprint = object_fingerprint(obj)
+        original = op.duplicate(key, fingerprint)
+        if original is None:
+            return False
+        try:
+            head = dict(self.client.head_object(Bucket=self.bucket, Key=key))
+        except Exception:  # read it instead
+            return False
+        version = str(head.get("VersionId") or "null")
+        facts = s3_object_facts(self.keys, head) if self.keys is not None else self.facts
+        findings = op.copy_findings(
+            original,
+            store,
+            f"{self.id}\n",
+            resource_for=lambda column: s3_resource(
+                self.bucket, key, version, column=column, catalog=self.catalog
+            ),
+            link=s3_link(self.region, self.bucket, key, version, directory=self.express),
+            seen_at=seen_at,
+            facts=facts,
+        )
+        op.rescanned(findings, why)
+        store.replace_location(f"{self.id}\n{key}", findings)
+        op.record_duplicate(key, original, marker=object_marker(obj), fingerprint=fingerprint)
         return True
 
     def _read_one(  # noqa: PLR0917 - one object of the pass

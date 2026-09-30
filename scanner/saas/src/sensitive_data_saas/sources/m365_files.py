@@ -434,6 +434,14 @@ class DriveSource:
                 column=column,
             )
 
+        fingerprint = item_fingerprint(item)
+        prefix = f"{self.id}\n"
+        copied = r.duplicate(
+            iid, name, fingerprint, item_marker(item), resource_for, link, prefix, why
+        )
+        if copied is not None:
+            r.store.replace_location(location, copied)  # the same bytes as a file read
+            return
         try:
             findings = r.file(
                 name,

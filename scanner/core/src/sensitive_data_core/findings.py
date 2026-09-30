@@ -292,6 +292,8 @@ class Coverage:
     rescanned: dict[str, int] = field(default_factory=dict)
     rescan_backlog: int = 0
     indexed: int | None = None
+    # (1.10, #67 part 5) Objects not read because their bytes are an indexed object's.
+    duplicates: int = 0
 
     def as_json(self) -> dict[str, Any]:
         d = asdict(self)
@@ -323,6 +325,7 @@ class Coverage:
             out["indexed"] = self.indexed
             out["rescanned"] = dict(sorted(self.rescanned.items()))
             out["rescanBacklog"] = self.rescan_backlog
+            out["duplicates"] = self.duplicates
         return out
 
 

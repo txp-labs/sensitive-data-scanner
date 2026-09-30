@@ -390,7 +390,7 @@ def test_objects_read_before_the_index_are_read_once_more(env: Env) -> None:
     import datetime as dt
 
     for k in ("x/1.txt", "x/2.txt"):
-        env.put(k, b"hello")
+        env.put(k, f"hello from {k}".encode())
     hour = dt.datetime.now(dt.UTC) + dt.timedelta(hours=1)
     assert env.run(config(object_index=False), now=lambda: hour) is not None
     read_keys = gets(env)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import hashlib
 import json
 import re
 import urllib.parse
@@ -80,6 +81,7 @@ class Obj:
     csek: bool = False
     storage_class: str = "STANDARD"
     fail: Resp | None = None
+    md5: bool = False  # the listing gives md5Hash (#67 part 5)
 
 
 @dataclass
@@ -277,6 +279,9 @@ class Cloud:
                 item["kmsKeyName"] = o.kms + "/cryptoKeyVersions/3"
             if o.csek:
                 item["customerEncryption"] = {"encryptionAlgorithm": "AES256", "keySha256": "x"}
+            if o.md5:
+                digest = hashlib.md5(o.data, usedforsecurity=False).digest()
+                item["md5Hash"] = base64.b64encode(digest).decode()
             items.append(item)
         per = min(bucket.per_page, int(query.get("maxResults") or bucket.per_page))
         start = int(query.get("pageToken") or 0)

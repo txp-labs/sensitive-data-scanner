@@ -209,7 +209,7 @@ class ItemReader:
             columnar=self.columnar,
         )
         if self.index is not None and key is not None:
-            self.index.record(key, marker=marker, fingerprint=fingerprint, got=got)
+            self.index.record(key, marker=marker, fingerprint=fingerprint, got=got, name=name)
         findings = record(
             got,
             self.cov,
@@ -220,6 +220,38 @@ class ItemReader:
             table_offsets=False,
         )
         return findings or []
+
+    def duplicate(  # noqa: PLR0917 - one file of the pass
+        self,
+        key: str,
+        name: str,
+        fingerprint: str | None,
+        marker: str | None,
+        resource_for: Callable[[str | None], dict[str, Any]],
+        link: str | None,
+        prefix: str,
+        why: Any = None,
+    ) -> list[dict[str, Any]] | None:
+        """A file whose hash (from the listing) is a file already read under a name of the
+        same kind, with components still current (#67 part 5): not downloaded; its findings
+        are the original's, as its own (`duplicateOf`). None when it must be read."""
+        if self.index is None:
+            return None
+        original = self.index.duplicate(key, fingerprint, name=name)
+        if original is None:
+            return None
+        findings = self.index.copy_findings(
+            original,
+            self.store,
+            prefix,
+            resource_for=resource_for,
+            link=link,
+            seen_at=self.seen_at,
+            facts=self.facts,
+        )
+        self.index.rescanned(findings, why)
+        self.index.record_duplicate(key, original, marker=marker, fingerprint=fingerprint)
+        return findings
 
 
 def bytes_fetch(data: bytes) -> Callable[[int, int], bytes]:
