@@ -82,7 +82,31 @@ bumps the minor version. Spec changes are listed under **Spec**.
     makes), resuming by continuation token, since a directory bucket lists in
     no key order.
 
+- **MSK and Amazon MQ, opt-in** ([#35](https://github.com/txp-labs/sensitive-data-scanner/issues/35), step 3):
+  - **MSK** (`msk`, `MSK_READ`): provisioned and Serverless clusters with
+    IAM authentication, sampled per partition from the earliest offset
+    (`MSK_RECORDS_PER_PARTITION`, 100; `MSK_MAX_TOPICS`, 50;
+    `MSK_MAX_PARTITIONS`, 50) by a consumer under a throwaway group id that
+    never joins or commits. A cluster without IAM authentication is
+    `no_read_path`; one out of reach is `vpc_only`. `kafka-python` is a new
+    dependency of the image and the zip (about 5 MB).
+  - **Amazon MQ** (`mq`, `MQ_READ`, `MQ_BROKERS`): ActiveMQ queues named per
+    broker are browsed over STOMP (`browser:true`), never consumed or acked,
+    up to `MQ_MESSAGES_PER_QUEUE` (100). The broker user, from a Secrets
+    Manager secret, is checked first and refused as `user_can_write` (new
+    reason) when it has console access, when the broker has no authorization
+    map, or when its groups may write to or administer queues. RabbitMQ has no
+    safe peek and is reported `no_read_path`.
+
 ### Security
+- The brokers' reads (step 3) are opt-in statements: `kafka:GetBootstrapBrokers`,
+  `kafka-cluster:Connect`, `DescribeCluster`, `DescribeTopic`, `ReadData`, and
+  `DescribeGroup` on the scanner's own throwaway groups only; `mq:DescribeUser`,
+  `mq:DescribeConfigurationRevision` and the named broker-user secrets. Listing
+  (`kafka:ListClustersV2`, `mq:ListBrokers`, `mq:DescribeBroker`) is always on.
+  Denied: every MSK data and group write (`WriteData*`, `AlterGroup`,
+  `DeleteGroup`, topic and cluster changes) and every MSK and MQ control-plane
+  change.
 - Group 7's reads (step 2) are one statement of read actions
   (`ReadWorkflowsFunctionsTracesAndCode`), `s3express:ListAllMyDirectoryBuckets`,
   and `s3express:CreateSession` allowed only with `s3express:SessionMode`

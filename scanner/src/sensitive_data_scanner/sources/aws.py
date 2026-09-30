@@ -11,6 +11,7 @@ from __future__ import annotations
 from sensitive_data_core.adapter import Adapter
 
 from .base import Context
+from .brokers import MqAdapter, MskAdapter
 from .code import CodeCommitAdapter, DirectoryBucketAdapter
 from .compute import LambdaAdapter, StepFunctionsAdapter, XRayAdapter
 from .config_stores import SecretsAdapter, SsmAdapter
@@ -50,5 +51,8 @@ _ALL: list[Adapter[Context]] = [
     XRayAdapter(),
     CodeCommitAdapter(),
     DirectoryBucketAdapter(),
+    # Group 7, opt-in brokers (#35).
+    MskAdapter(),
+    MqAdapter(),
 ]
 ADAPTERS: dict[str, Adapter[Context]] = {a.kind: a for a in _ALL}

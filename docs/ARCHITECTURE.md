@@ -150,6 +150,10 @@ One run:
 | `STEPFUNCTIONS_EXECUTIONS`, `STEPFUNCTIONS_EVENTS` | Executions sampled per Standard state machine (the most recent), and history events read per execution | 20 and 500 |
 | `XRAY_MAX_TRACES`, `XRAY_LOOKBACK_HOURS` | Traces read per run, and how far back the first run (and a long gap) reaches | 100 and 24 |
 | `CODECOMMIT_MAX_FILES`, `CODECOMMIT_MAX_FOLDERS` | Files read per repository per head, and folders walked to find them | 200 and 500 |
+| `MSK_READ` | Sample MSK topics ([below](#msk-and-amazon-mq)) | off: reported `read_not_configured` |
+| `MSK_RECORDS_PER_PARTITION`, `MSK_MAX_TOPICS`, `MSK_MAX_PARTITIONS` | Records read per partition from its earliest offset, topics per cluster, partitions per topic | 100, 50 and 50 |
+| `MQ_READ`, `MQ_BROKERS` | Browse ActiveMQ queues: a JSON list of `{"broker", "secretArn", "queues"}`, the secret holding a read-only broker user's `username` and `password` | off; none |
+| `MQ_MESSAGES_PER_QUEUE` | Messages browsed per queue | 100 |
 | `CONFIG_LOCATION` | A configuration document to read at the start of each run: `s3://bucket/key`, or an SSM parameter as `ssm:<name>` or its ARN ([below](#configuration-beyond-4-kb)) | none |
 
 #### Configuration beyond 4 KB
@@ -230,6 +234,8 @@ region, and a bucket in another region is left to that region's scanner.
 | `xray` | `GetEncryptionConfig` | one store, `xray-traces`: sampled traces since the last run, annotations and metadata |
 | `codecommit` | `ListRepositories`, `GetRepository` | a stable sample of the default branch's files at its head ([below](#codecommit-and-s3-directory-buckets)) |
 | `s3express` | `ListDirectoryBuckets` | each directory bucket, by the S3 source, through read-only S3 Express sessions |
+| `msk` | `ListClustersV2` | each topic's partitions sampled from the earliest offset with IAM authentication, never committed, opt-in ([below](#msk-and-amazon-mq)) |
+| `mq` | `ListBrokers`, `DescribeBroker` | an ActiveMQ broker's named queues browsed (never consumed) by a checked read-only user, opt-in; RabbitMQ reported |
 
 #### Coverage by store
 
@@ -264,6 +270,9 @@ reason.
 | X-Ray traces | **Scanned** | sampled traces' annotations and metadata | |
 | CodeCommit | **Scanned** | a sample of the default branch's files at its head | `unsupported` (`state: empty`) |
 | S3 directory buckets | **Scanned** | the S3 source, read-only S3 Express sessions | `self` |
+| MSK, provisioned and Serverless | **Opt-in** (`MSK_READ`) | sampled from the earliest offset, IAM authentication, a throwaway group id, never committed | `read_not_configured`, `vpc_only`, `no_read_path` (no IAM authentication), `unsupported` |
+| Amazon MQ for ActiveMQ | **Opt-in** (`MQ_READ`, `MQ_BROKERS`) | named queues browsed over STOMP (`browser:true`) by a checked read-only user | `read_not_configured`, `user_can_write`, `vpc_only` |
+| Amazon MQ for RabbitMQ | Coverage only | | `no_read_path` |
 
 **The explicit configuration keeps working.** `SCAN_BUCKETS`,
 `SCAN_PREFIXES`, `SCAN_LOG_GROUPS` and `SCAN_DYNAMODB` are read as before,
@@ -912,6 +921,65 @@ passing, and each read is a describe or a get.
   after the objects of that page already read. Links open the directory
   bucket's page (`bucketType=directory`).
 
+### MSK and Amazon MQ
+
+Both are discovered and reported always, and read only when turned on. A
+broker lives inside a VPC: the scanner reaches it only through a public
+endpoint or when its function runs in that VPC, and a broker it cannot reach
+is `vpc_only`, a coverage gap.
+
+**MSK** (`msk`, `MSK_READ`). `ListClustersV2` lists provisioned and
+Serverless clusters, with their encryption (a provisioned cluster's data
+volume key; Serverless always an AWS key). A cluster is read only with IAM
+authentication (Serverless always has it; a provisioned cluster without it is
+`no_read_path`, since the scanner keeps no SASL/SCRAM password or client
+certificate):
+
+- `GetBootstrapBrokers`, preferring the public IAM endpoint;
+- a Kafka consumer (`kafka-python`, its `AWS_MSK_IAM` mechanism signed with
+  the scanner's role) under a **throwaway group id**,
+  `sensitive-data-scanner-<random>`, with auto-commit off. It never joins the
+  group: partitions are assigned by hand. It never commits: no commit is ever
+  called, and the role denies `kafka-cluster:AlterGroup`, so none could be.
+  The only group permission is `DescribeGroup` on the scanner's own
+  throwaway groups (the consumer asks for their committed offsets; there are
+  none);
+- for each topic (internal `__*` topics left out, up to `MSK_MAX_TOPICS`),
+  its partitions (up to `MSK_MAX_PARTITIONS`) seeked to the beginning and
+  polled up to `MSK_RECORDS_PER_PARTITION` records each. Records are read as
+  text, gunzipped when gzip; binary records are counted, tombstones skipped.
+  A pass resumes at the next topic, and keeps no offset.
+
+Findings are `store_field` with the cluster as `store`, the topic as
+`table`, `field: records` and `readBy: consumer_sample`.
+
+**Amazon MQ** (`mq`, `MQ_READ` and `MQ_BROKERS`). `ListBrokers` and
+`DescribeBroker` list every broker with its encryption (an AWS owned key or
+the broker's KMS key).
+
+- **RabbitMQ** has no read that leaves a queue as it was: a get (or the
+  management API's "get messages") takes the message and requeues it,
+  redelivered. It is reported `no_read_path`.
+- **ActiveMQ** queues are **browsed**: STOMP 1.2 over TLS (`stomp+ssl`,
+  port 61614) with `SUBSCRIBE ... browser:true`, which ActiveMQ serves with a
+  queue browser. Messages are sent to the scanner and stay on the queue; the
+  scanner never sends `ACK`, then `UNSUBSCRIBE` and `DISCONNECT`. Up to
+  `MQ_MESSAGES_PER_QUEUE` per queue, for the queues named in the broker's
+  `MQ_BROKERS` entry (listing a broker's queues needs its web console, an
+  administrator's).
+- **The user is checked first**, as the databases runner checks its own.
+  The broker has no IAM for its data, so the entry names a Secrets Manager
+  secret with a broker user's `username` and `password`. Before connecting,
+  `DescribeUser` and the broker's current configuration
+  (`DescribeConfigurationRevision`) are read, and the user is refused as
+  `user_can_write` (with `writeGrants`) when it has web console access (an
+  administrator: `console_access`), when the broker has no authorization map
+  (every user can do everything: `no_authorization_map`), or when a queue
+  authorization entry gives one of its groups `write` or `admin`
+  (`queue_write`, `queue_admin`). Nothing is read from a refused broker.
+  Findings are `store_field` with the broker as `store`, the queue as
+  `table`, `field: messages` and `readBy: browse`.
+
 ### DynamoDB Export to S3 (large tables)
 
 With `DYNAMODB_EXPORT=on`, a discovered table too large to Scan
@@ -1130,6 +1198,7 @@ named resources because the stores are not known in advance. They are read-only:
 | `ebs`, `backup`, `documentdb`, `neptune`, `efs`, `fsx` | `ec2:DescribeVolumes`, `ec2:DescribeSnapshots`, `backup:ListBackupVaults`, `backup:ListRecoveryPointsByBackupVault`, `backup:ListTags`, `rds:DescribeDBClusters`, `docdb-elastic:ListClusters`, `docdb-elastic:ListTagsForResource`, `elasticfilesystem:DescribeFileSystems`, `fsx:DescribeFileSystems`; with `EbsDirectRead`, `ebs:ListSnapshotBlocks` and `ebs:GetSnapshotBlock` on this region's snapshots, and `kms:Decrypt` through EBS | `*`; `snapshot/*` |
 | `kinesis`, `firehose`, `sqs` | `kinesis:ListStreams`, `kinesis:DescribeStreamSummary` (the stream's encryption), `kinesis:ListShards`, `kinesis:GetShardIterator`, `kinesis:GetRecords`, `firehose:ListDeliveryStreams`, `firehose:DescribeDeliveryStream`, `sqs:ListQueues`, `sqs:GetQueueAttributes`; `kinesis:ListTagsForStream`, `firehose:ListTagsForDeliveryStream`, `sqs:ListQueueTags` only with tag rules; with `SqsDlqRead`, `sqs:ReceiveMessage` | `*`; this account's queues |
 | `stepfunctions`, `lambda`, `xray`, `codecommit` | `states:ListStateMachines`, `states:DescribeStateMachine`, `states:ListTagsForResource`, `states:ListExecutions`, `states:GetExecutionHistory`, `lambda:ListFunctions`, `lambda:ListTags`, `lambda:GetFunctionConfiguration`, `xray:GetEncryptionConfig`, `xray:GetTraceSummaries`, `xray:BatchGetTraces`, `codecommit:ListRepositories`, `codecommit:GetRepository`, `codecommit:ListTagsForResource`, `codecommit:GetBranch`, `codecommit:GetFolder`, `codecommit:GetFile` | `*` |
+| `msk`, `mq` | `kafka:ListClustersV2`, `mq:ListBrokers`, `mq:DescribeBroker`; with `MskRead`, `kafka:GetBootstrapBrokers`, `kafka-cluster:Connect`, `kafka-cluster:DescribeCluster`, `kafka-cluster:DescribeTopic`, `kafka-cluster:ReadData`, and `kafka-cluster:DescribeGroup` on the scanner's own `sensitive-data-scanner-*` groups only; with `MqRead`, `mq:DescribeUser`, `mq:DescribeConfigurationRevision` and `secretsmanager:GetSecretValue` on the named secrets | `*`; this account's clusters, topics and groups; the ARNs named |
 | `s3express` | `s3express:ListAllMyDirectoryBuckets`; `s3express:CreateSession` with `s3express:SessionMode` `ReadOnly` only | `*`; this account's directory buckets |
 | `ssm`, `secretsmanager` | `ssm:DescribeParameters`, `ssm:GetParameters` (on this account's parameters), `secretsmanager:ListSecrets`; `ssm:ListTagsForResource` only with tag rules; with `SsmDecrypt`, `kms:Decrypt` through SSM; with `SecretsRead`, `secretsmanager:GetSecretValue` on this account's secrets and `kms:Decrypt` through Secrets Manager | `*`; the ARNs named |
 | `elasticache`, `memorydb`, `timestream`, `keyspaces` | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream-influxdb:ListDbInstances`; `timestream:ListTagsForResource` only with tag rules; `timestream:Select` on the tables; `cassandra:Select` on the keyspaces | `*`; the ARNs named |
@@ -1265,6 +1334,12 @@ several things:
 | Workflows, functions, traces and code (#35) | `states:ListStateMachines`, `states:DescribeStateMachine`, `states:ListTagsForResource`, `states:ListExecutions`, `states:GetExecutionHistory`, `lambda:ListFunctions`, `lambda:ListTags`, `lambda:GetFunctionConfiguration`, `xray:GetEncryptionConfig`, `xray:GetTraceSummaries`, `xray:BatchGetTraces`, `codecommit:ListRepositories`, `codecommit:GetRepository`, `codecommit:ListTagsForResource`, `codecommit:GetBranch`, `codecommit:GetFolder`, `codecommit:GetFile` | `*` | Read by default |
 | S3 directory buckets (#35) | `s3express:ListAllMyDirectoryBuckets` | `*` | |
 | | `s3express:CreateSession` | this account's `bucket/*` in the region | `s3express:SessionMode` is `ReadOnly`; `NoReadWriteExpressSessions` denies any other mode |
+| Brokers (discovery) | `kafka:ListClustersV2`, `mq:ListBrokers`, `mq:DescribeBroker` | `*` | |
+| MSK reads (opt-in) | `kafka:GetBootstrapBrokers`; `kafka-cluster:Connect`, `kafka-cluster:DescribeCluster` | this account's `cluster/*/*` in the region | only with `MskRead` |
+| | `kafka-cluster:DescribeTopic`, `kafka-cluster:ReadData` | this account's `topic/*/*/*` | only with `MskRead` |
+| | `kafka-cluster:DescribeGroup` | this account's `group/*/*/sensitive-data-scanner-*` | only with `MskRead`; the scanner's own throwaway groups |
+| Amazon MQ reads (opt-in) | `mq:DescribeUser`, `mq:DescribeConfigurationRevision` | this account's brokers and configurations | only with `MqRead` and `MqSecretArns` |
+| | `secretsmanager:GetSecretValue` | the named secrets (`MqSecretArns`) | the read-only broker users |
 | KMS aliases (1.5) | `kms:ListAliases` | `*` | The one KMS action with no `kms:ViaService`: it lists names and names no key material (`ListKmsAliases`) |
 | Central sink | `events:PutEvents` | the bus | only with `FindingsEventBusArn` |
 | RDS snapshot export | `rds:StartExportTask` | this account's cluster and DB snapshots | only with `RdsExportKmsKeyArn` |
@@ -1306,7 +1381,7 @@ role might gain:
 | Deny | What |
 |---|---|
 | `NoWritesOutsideOwnBucket` | S3 object and bucket writes and deletes anywhere but the results bucket |
-| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner`; (#35) Step Functions `Start*`, `Stop*`, `SendTask*`, `RedriveExecution`, `Publish*`, create, update, delete and tags; Lambda `Invoke*`, create, update, delete, `Put*`, `Publish*`, permissions and tags; X-Ray `Put*`, create, update, delete and tags; CodeCommit `GitPush`, `Put*`, `Merge*`, `Post*`, `Override*`, associations, create, update, delete and tags; S3 directory bucket create, delete, policy, encryption and lifecycle changes |
+| `NoDataStoreWrites` | DynamoDB item, table and restore writes; RDS create, delete, modify, reboot, restore, stop and export cancel; Glue catalog writes; log deletes, retention, subscription and data-protection changes; Redshift user creation (`CreateClusterUser`, so `GetClusterCredentials` can never auto-create a user), `JoinGroup`, and cluster and workgroup create, modify, delete, pause, resume, reboot and restore; `redshift-data:BatchExecuteStatement`; OpenSearch `ESHttpPost`, `ESHttpPut`, `ESHttpPatch`, `ESHttpDelete` and domain and collection create, update and delete; EBS snapshot writes (`StartSnapshot`, `PutSnapshotBlock`, `CompleteSnapshot`), snapshot and volume create, copy, modify, attach, detach and delete; Backup create, delete, put, start (restore and copy jobs) and update; EFS create, delete, put, update, `ClientWrite` and `ClientRootAccess`; FSx and DocumentDB elastic create, update and delete; Kinesis record writes, stream create, update, delete, reshard, consumer registration, encryption and retention changes; Firehose create, delete, update, put, start and stop; SQS `DeleteMessage*`, `ChangeMessageVisibility*`, `SendMessage*`, `PurgeQueue`, `SetQueueAttributes`, create, delete, and message-move tasks; SSM parameter put, delete and labels; Secrets Manager create, put, update, delete, restore, rotate, resource policies and replication; ElastiCache and MemoryDB create, delete, modify, reboot, failover and snapshot copy or export; Timestream `WriteRecords` and create, update and delete; Keyspaces `Create`, `Alter`, `Drop`, `Modify`, `Restore*` and `UpdatePartitioner`; (#35) Step Functions `Start*`, `Stop*`, `SendTask*`, `RedriveExecution`, `Publish*`, create, update, delete and tags; Lambda `Invoke*`, create, update, delete, `Put*`, `Publish*`, permissions and tags; X-Ray `Put*`, create, update, delete and tags; CodeCommit `GitPush`, `Put*`, `Merge*`, `Post*`, `Override*`, associations, create, update, delete and tags; S3 directory bucket create, delete, policy, encryption and lifecycle changes; MSK `WriteData`, `WriteDataIdempotently`, `AlterGroup`, `DeleteGroup`, topic and cluster create, alter and delete, `AlterTransactionalId`, and cluster create, update, reboot and tags; Amazon MQ create, update, delete, reboot and promote |
 | `NoReadWriteExpressSessions` | `s3express:CreateSession` unless `s3express:SessionMode` is `ReadOnly`: a directory bucket session that could write is never created |
 | `NeverAskLakeFormation` | `lakeformation:*`: no data access, no credential vending, no grants. A governed table is read only if Lake Formation has granted the role `SELECT`; otherwise it is reported as `lake_formation` |
 

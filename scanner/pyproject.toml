@@ -13,6 +13,8 @@ dependencies = [
     "cassandra-driver>=3.29",
     "cassandra-sigv4>=4.0.2",
     "pyyaml>=6.0.3",
+    # Amazon MSK, sampled with IAM authentication (its own AWS_MSK_IAM mechanism); opt-in.
+    "kafka-python>=3.0",
 ]
 
 [dependency-groups]
@@ -95,6 +97,7 @@ files = ["src", "core/src", "db/src", "tests"]
 module = [
   "pyarrow", "pyarrow.*", "fastavro", "fastavro.*",
   "cassandra", "cassandra.*", "cassandra_sigv4", "cassandra_sigv4.*",
+  "kafka", "kafka.*",
   "pymysql", "pymysql.*", "pymssql", "pymssql.*", "snowflake", "snowflake.*",
   "databricks", "databricks.*", "testcontainers", "testcontainers.*", "docker", "docker.*",
 ]
