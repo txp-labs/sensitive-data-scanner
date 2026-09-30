@@ -2334,3 +2334,99 @@ def test_no_value_leaves_azure_files(capsys: pytest.CaptureFixture[str]) -> None
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob and SSN_A not in blob and CARDS["jcb"] not in blob, where
+
+
+# ------------------------------------------------------------ the SaaS scanner (#21 step 6)
+
+
+def test_no_value_leaves_the_saas_scanner_m365(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Values in mail, attachments, files, Teams messages and chats, and in addresses, site,
+    library, team, channel, file and attachment names, and Graph's and Entra's error
+    messages: none of them in the findings, the logs, the state or any repr. No address is
+    written at all, masked or not: a person is only ever a hash."""
+    from office_fixtures import docx, xlsx
+    from saas_fakes import HOST, M365, ChannelMsg, Item, Message, Versioned, graph_error, settings
+    from sensitive_data_core.state import FileState
+    from sensitive_data_saas.runner import run_scan
+
+    alice = f"ssn.{SSN_A}@contoso.example"
+    bob = f"card{CARDS['discover']}@contoso.example"
+    team = "00000000-0000-4000-8000-000000000001"
+    m = M365()
+    a = m.user(alice, "u-a", drive="d-a")
+    b = m.user(bob, "u-b")
+    inbox = m.folder(a.id)
+    inbox.add(
+        Message(
+            "m1",
+            f"re: card {CARDS['visa']}",
+            f"my card is {printed(CARDS['visa'])}, ssn {dashed(SSN_B)}",
+            attachments=[
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "id": "a1",
+                    "name": f"ssn-{SSN_A}.docx",
+                    "size": 900,
+                    "data": docx([f"card {printed(CARDS['amex'])}"]),
+                }
+            ],
+        )
+    )
+    m.drives["d-a"].add(Item("f1", f"{CARDS['jcb']}.xlsx", xlsx([["card"], [CARDS["jcb"]]])))
+    m.site(
+        f"{HOST}:/sites/finance", f"{HOST},s1,w1", f"Fin {SSN_A}", {"d-l": f"Docs {CARDS['mir']}"}
+    )
+    m.drives["d-l"].add(
+        Item("x1", "notes.txt", f"call me, my card is {printed(CARDS['visa'])}".encode())
+    )
+    m.teams[team] = f"Team {dashed(SSN_B)}"
+    m.channels[team] = {"19:c1@thread.tacv2": f"chan {CARDS['unionpay']}"}
+    box = m.channel_msgs.setdefault(f"{team}/19:c1@thread.tacv2", Versioned())
+    box.add(ChannelMsg("1727000000001", f"<p>ssn <b>{dashed(SSN_A)}</b></p>"))
+    b.chats = ["19:chat"]
+    m.chats["19:chat"] = [
+        {
+            "id": "1727000000009",
+            "body": {
+                "contentType": "text",
+                "content": f"my card is {printed(CARDS['mastercard'])}",
+            },
+            "lastModifiedDateTime": "2026-09-28T10:00:00.000Z",
+        }
+    ]
+    m.fail["/sites/contoso.sharepoint.com:/sites/legal"] = graph_error(
+        403, "accessDenied", f"{bob} may not read {CARDS['visa']}"
+    )
+    s = settings(
+        tmp_path,
+        M365_USERS=f"{alice},{bob},missing-{SSN_B}@contoso.example",
+        M365_MAIL_SCOPE_CHECK=f"out-{SSN_A}@contoso.example",
+        M365_SITES=f"{HOST}:/sites/finance,{HOST}:/sites/legal",
+        M365_TEAMS=team,
+        DISCOVER="all",
+    )
+    state = FileState(str(tmp_path / "state.json"))
+    clients = m.clients(s)
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    from saas_fakes import NOW
+
+    doc, _ = run_scan(s, clients, detector=detector, now=lambda: NOW, state=state)
+    out = capsys.readouterr().out
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    services = {f["resource"]["service"] for f in doc["findings"]}
+    assert {"exchange", "onedrive", "sharepoint", "teams_channel", "teams_chat"} <= services
+    blobs = {
+        "document": json.dumps(doc),
+        "logs": out,
+        # The state keeps ids and hashes to resume; never a value or an address.
+        "state": (tmp_path / "state.json").read_text(),
+        "reprs": repr(s) + repr(clients) + repr(s.m365) + repr(doc.get("discovery")),
+    }
+    for where, blob in blobs.items():
+        assert leaks(blob) == [], where
+        for secret in (SSN_A, SSN_B, CARDS["visa"], "made-up-client-secret", "made-up-graph-token"):
+            assert secret not in blob, where
+        assert "@contoso.example" not in blob, where

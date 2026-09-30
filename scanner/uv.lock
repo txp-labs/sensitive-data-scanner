@@ -23,6 +23,7 @@ members = [
     "sensitive-data-scanner-core",
     "sensitive-data-scanner-db",
     "sensitive-data-scanner-gcp",
+    "sensitive-data-scanner-saas",
 ]
 
 [[package]]
@@ -3123,6 +3124,7 @@ dev = [
     { name = "sensitive-data-scanner-azure", extra = ["all"] },
     { name = "sensitive-data-scanner-db", extra = ["all"] },
     { name = "sensitive-data-scanner-gcp", extra = ["all"] },
+    { name = "sensitive-data-scanner-saas", extra = ["all"] },
     { name = "testcontainers" },
     { name = "types-jsonschema" },
     { name = "types-pyyaml" },
@@ -3156,6 +3158,7 @@ dev = [
     { name = "sensitive-data-scanner-azure", extras = ["all"], editable = "azure" },
     { name = "sensitive-data-scanner-db", extras = ["all"], editable = "db" },
     { name = "sensitive-data-scanner-gcp", extras = ["all"], editable = "gcp" },
+    { name = "sensitive-data-scanner-saas", extras = ["all"], editable = "saas" },
     { name = "testcontainers", specifier = ">=4.8" },
     { name = "types-jsonschema", specifier = ">=4.26.0.20260518" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260906" },
@@ -3346,6 +3349,39 @@ requires-dist = [
     { name = "sensitive-data-scanner-gcp", extras = ["columnar", "postgresql", "mysql"], marker = "extra == 'all'", editable = "gcp" },
 ]
 provides-extras = ["columnar", "postgresql", "mysql", "all"]
+
+[[package]]
+name = "sensitive-data-scanner-saas"
+version = "0.3.0"
+source = { editable = "saas" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "requests" },
+    { name = "sensitive-data-scanner-core" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "boto3" },
+    { name = "pyarrow" },
+]
+aws = [
+    { name = "boto3" },
+]
+columnar = [
+    { name = "pyarrow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.43" },
+    { name = "cryptography", specifier = ">=45" },
+    { name = "pyarrow", marker = "extra == 'columnar'", specifier = ">=21" },
+    { name = "requests", specifier = ">=2.32" },
+    { name = "sensitive-data-scanner-core", editable = "core" },
+    { name = "sensitive-data-scanner-saas", extras = ["columnar", "aws"], marker = "extra == 'all'", editable = "saas" },
+]
+provides-extras = ["columnar", "aws", "all"]
 
 [[package]]
 name = "setuptools"

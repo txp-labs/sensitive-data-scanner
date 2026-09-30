@@ -330,6 +330,50 @@ bumps the minor version. Spec changes are listed under **Spec**.
   engine), its SBOM, and the `sensitive_data_scanner_db` wheel, from a job of
   their own, with `SHA256SUMS` naming every file as GitHub serves it.
 
+- **SaaS, step 1: the package and Microsoft 365** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
+  `sensitive-data-scanner-saas` (`scanner/saas`), a container the customer
+  runs in its own environment (`docker build --target saas`) with read-only
+  grants to its tenants; only findings reach Mermera, whose servers never read
+  SaaS content ([docs/SAAS.md](docs/SAAS.md)):
+  - Exchange Online mail (`m365_mail`), with Graph's `Mail.Read` limited by
+    Exchange (RBAC for Applications, or an application access policy) and
+    **proved limited before any mail is read**: a mailbox outside the scope
+    (`M365_MAIL_SCOPE_CHECK`) must be refused, else every mailbox is
+    `unscoped_grant` (or `scope_unverified` without the check). Subjects,
+    bodies as text and file attachments are read; attached items and links
+    are `linked_item`, oversized attachments `too_large`.
+  - SharePoint (`m365_sharepoint`, `Sites.Selected` with a per-site `read`
+    grant, or `Files.Read.All`) and OneDrive (`m365_onedrive`), each drive read
+    from its delta query with ranged content GETs by the core's readers;
+    rights-managed Office files are `encrypted`.
+  - Teams channel messages and replies (`m365_teams_channel`) and chats
+    (`m365_teams_chat`), opt-in: protected APIs Microsoft must approve, so a
+    `protected_api` gap until it has.
+  - Sign-in with a certificate (a `PS256` client assertion) or a federated
+    workload identity (a projected token file, AWS `sts:GetWebIdentityToken`,
+    the GCP metadata server, or an Azure managed identity); a client secret
+    only from a mounted file, never the environment. Tokens go to Graph only.
+  - Delta queries for incremental runs, resumable mid-page, with the cursors
+    and carried findings at `STATE_LOCATION` (the core's new state location:
+    a mounted path, S3 or signed HTTPS). Per mailbox, drive and channel caps,
+    stable sampling by item id, and Graph's `Retry-After` honored (a wait past
+    `MAX_THROTTLE_WAIT_SECONDS` or the run's end defers the store as
+    `throttled`).
+  - People are named only by the SHA-256 of their principal name
+    (`ownerHash`); tenants by `tenantHash`; site, library, team, channel,
+    file and attachment names masked like keys; links into Outlook on the
+    web, SharePoint and Teams built from ids only. `M365_CUSTOMER_KEY_ID`
+    (Microsoft Purview Customer Key) makes findings `customer_managed_key`,
+    hashed; otherwise `service_managed`.
+- **The core reads Word, Excel and PowerPoint files** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 6):
+  `.docx`, `.xlsx` and `.pptx` (and `.docm`, `.xlsm`) are read as their text
+  (`scan/office.py`, the standard library only), through ranged reads of the
+  zip; a DTD is never expanded, inflated text is capped, and a rights-managed
+  file is counted as `encrypted`. Every reader built on `scan/objects.py`
+  (Azure Blob Storage and Files, Cloud Storage, the SaaS scanner) now reads
+  them instead of counting them as `document`; the AWS S3 source still counts
+  them. PDFs and the older binary formats are still counted.
+
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
   the opt-in `RDS_DATA_API` read now runs the databases runner's own user
@@ -345,7 +389,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   apart (`public_schema_create`), and stays strict before PostgreSQL 15; the
   docs show the one-line `REVOKE`.
 
+- The Azure and Google Cloud scanners now read `.docx`, `.xlsx` and `.pptx`
+  objects (they were counted as `document`), so findings can appear in files
+  that were skipped before.
+
 ### Security
+- The SaaS scanner's Microsoft 365 grants read only, and mail is read only
+  once the scanner has proved Exchange limits the app's `Mail.Read` to the
+  mailboxes in scope. A client secret is never taken from the environment;
+  no token, assertion, secret or address is logged; the app's token is sent
+  to `graph.microsoft.com` only (a file download's redirect goes without it).
 - The Azure deployment assigns Storage File Data Privileged Reader only with
   `readFileShares` (off by default); the strict test lists its data actions
   (`fileshares/files/read`, `readFileBackupSemantics/action`) and holds it to
@@ -402,6 +455,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
+- `schemaVersion` is now **1.8**, additive: the SaaS scanner's
+  `platform: saas`, the `saas_item` resource (`vendor`, `service`,
+  `tenantHash`, `ownerHash`, `container`, `channel`, `itemId`, `itemHash`,
+  `part`, `name`, `column`), `vendor`, `tenantHash` and `ownerHash` on a
+  store, the `m365_mail`, `m365_onedrive`, `m365_sharepoint`,
+  `m365_teams_channel` and `m365_teams_chat` kinds, the `docx`, `xlsx` and
+  `pptx` formats, the `encrypted`, `too_large` and `linked_item` skip kinds,
+  the `scope_unverified`, `unscoped_grant`, `protected_api`,
+  `not_provisioned` and `throttled` reasons, and Outlook on the web,
+  SharePoint and Teams links.
 - `schemaVersion` is now **1.7**, additive: Azure Files' `azure_files` kind
   and `azure_file` resource, and the Google Cloud scanner's
   `platform: gcp`, the `gcs_object` resource, `project` and
@@ -449,6 +512,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   hosting the EFS and FSx file-system task in the same image.
 
 ### Internal
+- The databases runner's state location (a path, S3, signed HTTPS) moved to the
+  core (`sensitive_data_core.state`), which the SaaS scanner uses too; the
+  databases runner keeps its 64 KiB document and its API.
 - CI checks the Google Cloud deployment: `terraform fmt`, `validate` and
   `terraform test` (offline plans and applies against a mock provider) with a
   pinned, checksum-verified Terraform and the provider pinned by its lock

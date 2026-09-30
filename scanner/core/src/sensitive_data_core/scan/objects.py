@@ -5,8 +5,12 @@ and gives `read_object` a way to fetch a byte range of one (`fetch(start,
 end)`, both inclusive); this module decides how to read what it gets, the same
 way the AWS scanner reads an S3 object:
 
-- a file whose name says it is audio, video, an image, an office document or
-  an archive is not read, and is counted by kind (`skip_kind`);
+- a file whose name says it is audio, video, an image, a PDF or an older
+  binary Office document, or an archive is not read, and is counted by kind
+  (`skip_kind`);
+- Word, Excel and PowerPoint's Open XML files (`.docx`, `.xlsx`, `.pptx`) are
+  read as their text (`scan/office.py`) through ranged reads of the zip, and a
+  rights-managed one (an OLE container) is counted as `encrypted`;
 - Parquet and ORC (by extension or magic bytes) are read by column through
   ranged reads, so a large file's footer and first row groups are read
   without the rest (`RangeFile`), up to `max_rows` rows and `max_bytes` bytes;
@@ -43,6 +47,7 @@ from .columnar import (
     zstd_text,
 )
 from .item import ItemResult, classify_key, looks_binary, scan_item_text
+from .office import OfficeUnreadable, is_encrypted_office, office_kind, office_text
 from .raw import printable_text
 
 Fetch = Callable[[int, int], bytes]
@@ -89,7 +94,7 @@ def gunzip(data: bytes, limit: int) -> bytes:
 
 def skip_kind(key: str) -> str | None:
     """The kind of file a key names when it is not read (`audio`, `image`, ...), else None."""
-    if columnar_kind(key) is not None:
+    if columnar_kind(key) is not None or office_kind(key) is not None:
         return None
     read_it, _, kind = classify_key(inner_name(key))
     return None if read_it else (kind or "binary")
@@ -201,6 +206,17 @@ def read_object(
 ) -> ObjectResult:
     """Read one object of `size` bytes named `key`. A fetch that fails is raised to the
     caller (the object is then unreadable); a format this build cannot read is `skipped`."""
+    office = office_kind(key)
+    if office is not None:
+        return _read_office(
+            key,
+            office,
+            size,
+            fetch,
+            detector,
+            max_object_bytes=max_object_bytes,
+            max_inflated_bytes=max_inflated_bytes,
+        )
     kind = columnar_kind(key)
     head: bytes | None = None
     partial = False
@@ -244,3 +260,35 @@ def read_object(
         table.partial = True
     read = raw.bytes_read if raw is not None else len(head or b"")
     return ObjectResult(table=table, read=read, partial=table.partial)
+
+
+def _read_office(
+    key: str,
+    kind: str,
+    size: int,
+    fetch: Fetch,
+    detector: Detector,
+    *,
+    max_object_bytes: int,
+    max_inflated_bytes: int,
+) -> ObjectResult:
+    """A `.docx`, `.xlsx` or `.pptx` file: its zip read through ranged fetches (the central
+    directory, then the parts with text), up to `max_object_bytes` fetched. A rights-managed
+    file is `encrypted`; a file that is not a readable zip, or whose directory lies past the
+    byte cap, is counted as a `document` not read."""
+    if size <= 0:
+        return ObjectResult(skipped="document")
+    head = fetch(0, min(size, 8) - 1)
+    if is_encrypted_office(head):
+        return ObjectResult(skipped="encrypted", read=len(head))
+    raw = RangeFile(fetch, size=size, max_bytes=max_object_bytes)
+    f = io.BufferedReader(raw, buffer_size=64 * 1024)
+    try:
+        got = office_text(kind, f, max_inflated_bytes=max_inflated_bytes)
+    except (OfficeUnreadable, RangeCut):
+        return ObjectResult(skipped="document", read=raw.bytes_read + len(head), partial=raw.cut)
+    name = inner_name(key) + (".csv" if kind == "xlsx" else ".txt")
+    item = scan_item_text(name, got.text, detector)
+    item.format = kind
+    partial = got.partial or raw.cut
+    return ObjectResult(item=item, read=raw.bytes_read + len(head), partial=partial)

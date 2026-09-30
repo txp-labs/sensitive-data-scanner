@@ -17,6 +17,9 @@ a database. It can live in three places:
 - **HTTPS** (`https://...`): read with a GET and written with a PUT, signed like the
   findings push (`X-SDS-Signature`, HMAC-SHA256 under `FINDINGS_HMAC_KEY`).
 
+The three locations are the core's (`sensitive_data_core.state`), held here to
+64 KiB, the size of this document.
+
 A state that cannot be read (missing, unreadable, another site's) is no state: the run
 goes on from the start. One that cannot be written is logged by error name; the run's
 findings still go out.
@@ -24,143 +27,57 @@ findings still go out.
 
 from __future__ import annotations
 
-import json
-import os
-import time
 import urllib.parse
-import urllib.request
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
+from sensitive_data_core import state as core_state
 from sensitive_data_core.safety import error_name, log_event
+from sensitive_data_core.state import StateStore
 
 from . import __version__
 from .config import Secret, Settings
-from .sinks import SIGNATURE_HEADER, sign
 
 STATE_VERSION = 1
 MAX_STATE_BYTES = 64 * 1024
 
-
-class StateStore(Protocol):
-    def load(self) -> dict[str, Any] | None: ...
-
-    def save(self, state: dict[str, Any]) -> None: ...
-
-
-def _parse(raw: bytes) -> dict[str, Any] | None:
-    if len(raw) > MAX_STATE_BYTES:
-        return None
-    try:
-        doc = json.loads(raw)
-    except ValueError:
-        return None
-    return doc if isinstance(doc, dict) and doc.get("version") == STATE_VERSION else None
+__all__ = [
+    "FileState",
+    "HttpsState",
+    "S3State",
+    "StateStore",
+    "load_rotation",
+    "save_rotation",
+    "state_for",
+]
 
 
-def _body(state: dict[str, Any]) -> bytes:
-    return json.dumps(state, separators=(",", ":"), sort_keys=True).encode()
+def _s3_client() -> Any:
+    import boto3  # noqa: PLC0415 - the `aws` extra, only when S3 holds the state
+
+    return boto3.client("s3")
 
 
-class FileState:
-    """A file on a mounted volume, replaced atomically."""
+class FileState(core_state.FileState):
+    """A file on a mounted volume, replaced atomically (the core's, at 64 KiB)."""
 
     def __init__(self, path: str) -> None:
-        self.path = Path(path)
-
-    def __repr__(self) -> str:
-        return "FileState()"
-
-    def load(self) -> dict[str, Any] | None:
-        try:
-            return _parse(self.path.read_bytes()[: MAX_STATE_BYTES + 1])
-        except FileNotFoundError:
-            return None
-
-    def save(self, state: dict[str, Any]) -> None:
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_bytes(_body(state))
-        os.replace(tmp, self.path)
+        super().__init__(path, max_bytes=MAX_STATE_BYTES)
 
 
-class S3State:
-    """An object in S3 (the `aws` extra)."""
+class S3State(core_state.S3State):
+    """An object in S3 (the `aws` extra's boto3)."""
 
     def __init__(self, bucket: str, key: str, client: Any | None = None) -> None:
-        self.bucket = bucket
-        self.key = key
-        self._client = client
-
-    def __repr__(self) -> str:
-        return "S3State()"
-
-    def _s3(self) -> Any:
-        if self._client is None:
-            import boto3  # noqa: PLC0415 - the `aws` extra, only when S3 holds the state
-
-            self._client = boto3.client("s3")
-        return self._client
-
-    def load(self) -> dict[str, Any] | None:
-        try:
-            body = self._s3().get_object(Bucket=self.bucket, Key=self.key)["Body"]
-        except Exception as err:
-            if error_name(err) in ("NoSuchKey", "404", "NotFound"):
-                return None
-            raise
-        return _parse(body.read(MAX_STATE_BYTES + 1))
-
-    def save(self, state: dict[str, Any]) -> None:
-        self._s3().put_object(
-            Bucket=self.bucket, Key=self.key, Body=_body(state), ContentType="application/json"
-        )
+        super().__init__(bucket, key, client, client_factory=_s3_client, max_bytes=MAX_STATE_BYTES)
 
 
-class HttpsState:
+class HttpsState(core_state.HttpsState):
     """A URL the customer serves: GET to read, a signed PUT to write."""
 
-    def __init__(
-        self,
-        url: Secret,
-        key: Secret,
-        *,
-        opener: Callable[..., Any] = urllib.request.urlopen,
-        clock: Callable[[], float] = time.time,
-    ) -> None:
-        self._url = url
-        self._key = key
-        self._open = opener
-        self._clock = clock
-
-    def __repr__(self) -> str:
-        return "HttpsState(***)"
-
-    def load(self) -> dict[str, Any] | None:
-        req = urllib.request.Request(self._url.reveal(), method="GET")  # noqa: S310 - https only
-        try:
-            with self._open(req, timeout=30) as resp:
-                return _parse(resp.read(MAX_STATE_BYTES + 1))
-        except Exception as err:
-            if getattr(err, "code", None) == 404:
-                return None
-            raise
-
-    def save(self, state: dict[str, Any]) -> None:
-        body = _body(state)
-        ts = str(int(self._clock()))
-        req = urllib.request.Request(  # noqa: S310 - https only (config.py)
-            self._url.reveal(),
-            data=body,
-            method="PUT",
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": f"sensitive-data-scanner-db/{__version__}",
-                SIGNATURE_HEADER: sign(self._key.reveal().encode(), ts, body),
-            },
-        )
-        with self._open(req, timeout=30):
-            return
+    def __init__(self, url: Secret, key: Secret, **kwargs: Any) -> None:
+        kwargs.setdefault("user_agent", f"sensitive-data-scanner-db/{__version__}")
+        kwargs.setdefault("max_bytes", MAX_STATE_BYTES)
+        super().__init__(url, key, **kwargs)
 
 
 def state_for(settings: Settings) -> StateStore | None:
@@ -186,7 +103,7 @@ def load_rotation(store: StateStore | None, site: str) -> str | None:
     except Exception as err:  # no state: the run goes on from the start
         log_event("source.failed", source="state", error=error_name(err))
         return None
-    if not state or state.get("site") != site:
+    if not state or state.get("version") != STATE_VERSION or state.get("site") != site:
         return None
     rotation = state.get("rotation")
     return rotation if isinstance(rotation, str) else None
