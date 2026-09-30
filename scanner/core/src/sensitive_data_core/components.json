@@ -26,7 +26,7 @@
     "adapter:cosmosdb_mongo": "193941782002",
     "adapter:databricks": "7d92d9bc3374",
     "adapter:datastore": "ac001f01e9da",
-    "adapter:dynamodb": "40d6e66490b8",
+    "adapter:dynamodb": "7be7403e6891",
     "adapter:ebs": "ddd6838065c3",
     "adapter:ecr": "287e9cd81104",
     "adapter:efs": "05e098ede366",

@@ -1530,7 +1530,7 @@ Stugum's call-test runs for one test:
 |---|---|
 | `table` | The table name (required) |
 | `partition` | A partition key value: the read is a `Query` of that partition. Without it, the read is a `Scan` of the table |
-| `sortPrefix` | With `partition`: only items whose sort key begins with this (`begins_with`) |
+| `sortPrefix` | Only items whose sort key begins with this (`begins_with`). With `partition`, it is part of the `Query`'s key condition. Without it, the read is a whole-table `Scan` with `begins_with` as its filter: DynamoDB still reads (and bills for) every item, but returns only the matches, so the others are counted as listed and never scanned. The table needs a string sort key, or the read ends with an error |
 | `include` | Attribute paths to read. The request projects their top-level attributes and the key; the paths then pick the leaves. Empty: every attribute |
 | `exclude` | Attribute paths never read |
 | `keypad` | Paths that hold keypad (DTMF) entries |
