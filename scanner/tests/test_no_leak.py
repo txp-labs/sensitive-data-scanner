@@ -1970,3 +1970,38 @@ def test_no_value_leaves_log_analytics(capsys: pytest.CaptureFixture[str]) -> No
     for where, blob in {"document": json.dumps(doc), "logs": out}.items():
         assert leaks(blob) == [], where
         assert SSN_B not in blob, where
+
+
+def test_no_value_leaves_key_vault_secrets(capsys: pytest.CaptureFixture[str]) -> None:
+    """A secret's value, and values in vault and secret names: none of them leave."""
+    from types import SimpleNamespace
+
+    from azure_fakes import NOW, SUB_A, Graph, Tenant, settings
+    from sensitive_data_azure.runner import run_scan
+
+    vault = f"kv-{SSN_A}"
+    vault_id = f"/subscriptions/{SUB_A}/resourceGroups/rg/providers/Microsoft.KeyVault"
+    vault_id += f"/vaults/{vault}"
+    name = f"card-{CARDS['visa']}"
+
+    class Secrets:
+        def list_properties_of_secrets(self, **kwargs: Any) -> Any:
+            return iter([SimpleNamespace(name=name, enabled=True, managed=False, expires_on=None)])
+
+        def get_secret(self, n: str, **kwargs: Any) -> Any:
+            return SimpleNamespace(value=f"card {CARDS['mir']} ssn {dashed(SSN_B)}")
+
+    row = {"id": vault_id, "name": vault, "vaultUri": "https://v.example/"}
+    t = Tenant(Graph({"keyvault/vaults": [row]}))
+    clients = t.clients()
+    clients.made[("keyvault", "https://v.example/")] = Secrets()
+    capsys.readouterr()
+    detector = __import__("aws_fixtures").shared_detector()
+    s = settings(DISCOVER="keyvault", KEYVAULT_SECRETS_READ="on")
+    doc, failed = run_scan(s, clients, detector=detector, now=lambda: NOW)
+    out = capsys.readouterr().out
+    assert doc is not None and failed == 0
+    assert {"card", "us_ssn"} <= {f["class"] for f in doc["findings"]}
+    for where, blob in {"document": json.dumps(doc), "logs": out}.items():
+        assert leaks(blob) == [], where
+        assert SSN_B not in blob and CARDS["mir"] not in blob, where

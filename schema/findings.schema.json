@@ -73,7 +73,7 @@
         "ecr", "sagemaker", "neptune_analytics", "eventbridge_archive", "glacier",
         "azure_blob", "azure_sql", "azure_sql_mi", "azure_postgresql", "azure_mysql",
         "synapse_sql", "azure_table", "azure_queue", "cosmosdb", "cosmosdb_mongo",
-        "log_analytics"
+        "log_analytics", "azure_disk_snapshot", "key_vault"
       ]
     },
     "azureSubscription": {
@@ -397,7 +397,7 @@
         "needs_task", "backup_copy", "archived", "live_queue", "redrive_would_change",
         "no_s3_destination", "in_memory", "no_read_path",
         "db_user_can_write", "grants_unverifiable", "driver_missing", "user_can_write",
-        "archive_retrieval", "network"
+        "archive_retrieval", "network", "needs_sas_export"
       ]
     },
     "discovery": {

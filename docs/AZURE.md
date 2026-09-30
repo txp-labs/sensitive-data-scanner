@@ -43,6 +43,8 @@ and its own image (`docker build --target azure`).
 | `azure_table` (`table`) | A Table Storage table, `account/table` | Reader (the account's tables) and Storage Table Data Reader | read |
 | `azure_queue` (`queue`) | A Queue Storage queue, `account/queue` | Reader (the account's queues) and Storage Queue Data Reader, **peek only** | read |
 | `log_analytics` (`logs`, `monitor`) | A Log Analytics workspace (Azure Monitor logs) | Log Analytics Reader (KQL queries) and Reader (the tables' plans) | read |
+| `azure_disk_snapshot` (`snapshots`) | A managed disk's snapshots (the disk's name) | Reader | gap: `needs_sas_export` (reading needs a SAS export, a write; the opt-in reader is designed below, not built) |
+| `key_vault` (`keyvault`, `kv`) | A key vault's secrets | Reader; Key Vault Secrets User when on | **off**: `read_not_configured`; `KEYVAULT_SECRETS_READ=on` reads, counts only |
 
 ### Blob Storage and ADLS Gen2
 
@@ -239,6 +241,67 @@ cannot narrow is refused rather than read.
   key is `customer_managed_key` (hashed); otherwise Azure Monitor's own keys
   apply, `service_managed`.
 
+### Managed disk snapshots (coverage only)
+
+- Resource Graph lists every snapshot, grouped by the disk it was taken of,
+  as the AWS scanner groups EBS snapshots. There is one store per disk, or
+  per snapshot when its disk is gone. It carries the latest snapshot's
+  `snapshotTime`, `sizeBytes`, `olderSnapshots` and encryption: a platform key
+  is `service_managed`; a customer key through a disk encryption set is
+  `customer_managed_key`, hashed from the set's active key.
+- **It is not read.** A snapshot's bytes are reachable only through
+  `beginGetAccess`, which puts the snapshot in an exported state and mints a
+  SAS URL, then `endGetAccess`. Both are actions that change the resource,
+  so a scanner with read roles never calls them. Every snapshot is the gap
+  `needs_sas_export`.
+
+#### The opt-in export reader (design, not built)
+
+When a customer wants snapshots read, the job would get a second, separate
+role, and only then:
+
+1. **A custom role** with exactly
+   `Microsoft.Compute/snapshots/beginGetAccess/action` and
+   `Microsoft.Compute/snapshots/endGetAccess/action`, assigned per
+   subscription by a separate, opt-in module. The strict template test
+   allows it only in that module, and only with those two actions.
+2. **Per snapshot**, the latest of each disk only, rotating across runs:
+   `beginGetAccess` with `access: Read` and the shortest duration (for
+   example 600 seconds), which returns a read-only SAS URL for the VHD. Then
+   ranged GETs of the page blob, only the ranges with data (`Get Page
+   Ranges`), within the run's bytes budget. The blocks are read as the AWS
+   scanner reads EBS blocks: runs of printable text (`scan/raw.py`), format
+   `block`. Then `endGetAccess`, always, in a `finally`, and again on the
+   next run for any snapshot left exported.
+3. **The SAS URL is a secret.** It is held in `Secret`, never logged or
+   written, and dropped after the read.
+4. **Disks with `networkAccessPolicy: DenyAll`, or `AllowPrivate` through a
+   disk access the job is not on, are `network`.** A snapshot under a
+   customer key through a disk encryption set is readable by the SAS only
+   while the set's key is enabled.
+5. **Findings** would be `store_field` with `service: azure_disk_snapshot`,
+   `field: blocks`, `readBy: sas_export` and `snapshotTime`.
+
+The open questions are these. Is a short-lived export an acceptable write for
+customers? Could a snapshot's export conflict with the customer's own export
+or deletion? (`beginGetAccess` blocks deletion while it is active.) And the
+cost of reading VHDs.
+
+### Key Vault secrets (off by default)
+
+- Every vault is discovered. With `KEYVAULT_SECRETS_READ` off (the default),
+  each is `read_not_configured`, and the deployment grants no secrets role.
+- With it on, and Key Vault Secrets User granted (the Bicep parameter
+  `readKeyVaultSecrets`), the scanner lists each vault's secrets (properties
+  only), then reads the current value of each enabled, unexpired secret
+  that a certificate does not manage. It reports what the AWS scanner reports
+  for Secrets Manager: **counts only**, `field: value`, no offsets, and never
+  the value. The run summary gives the secrets listed (`items`) and their
+  kinds (`itemTypes`: `Secret`, `Disabled`, `Certificate`).
+- A vault that uses access policies rather than Azure RBAC refuses the role
+  (`access_denied`) until an access policy with Get and List on secrets is
+  added for the identity. A vault behind its firewall is `network`.
+
 ## Findings
 
 An Azure document says `"platform": "azure"` and names its `site`
@@ -283,6 +346,7 @@ to be masked.
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |
 | `TABLE_MAX_ENTITIES`, `COSMOS_MAX_ITEMS` | 1000, 1000 | Entities sampled per table; items per Cosmos DB container |
 | `LOGS_LOOKBACK_DAYS`, `LOGS_MAX_ROWS_PER_TABLE` | 1, 500 | Log Analytics: the window sampled, and rows per table |
+| `KEYVAULT_SECRETS_READ` | off | `on` reads Key Vault secrets' values, reported as counts only |
 
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
 `FINDINGS_EVENT_GRID_ENDPOINT` and `FINDINGS_FILE` is required.

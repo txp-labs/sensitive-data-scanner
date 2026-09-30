@@ -23,6 +23,8 @@ dependencies = [
     "azure-cosmos>=4.9",
     # Log Analytics workspaces (Azure Monitor logs), sampled KQL with Log Analytics Reader.
     "azure-monitor-query>=2.0",
+    # Key Vault secrets (off by default), counted with Key Vault Secrets User.
+    "azure-keyvault-secrets>=4.9",
 ]
 
 [project.optional-dependencies]

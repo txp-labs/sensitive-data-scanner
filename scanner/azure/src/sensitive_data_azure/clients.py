@@ -14,6 +14,7 @@ connection string or SAS is configured or made. The clients are:
   Table Data Reader and Storage Queue Data Reader;
 - `cosmos`: a Cosmos DB for NoSQL account, with its Built-in Data Reader role;
 - `logs`: the Log Analytics query API, with Log Analytics Reader;
+- `keyvault`: a key vault's secrets, with Key Vault Secrets User (opt-in);
 - `driver`: a database driver module, imported only when a database of its
   kind is read.
 
@@ -157,6 +158,10 @@ class Clients:
             from azure.monitor.query import LogsQueryClient  # noqa: PLC0415
 
             return LogsQueryClient(self.credential, user_agent=USER_AGENT)
+        if service == "keyvault":
+            from azure.keyvault.secrets import SecretClient  # noqa: PLC0415
+
+            return SecretClient(endpoint, self.credential, user_agent=USER_AGENT)
         if service == "driver":
             # A database driver module (`mssql_python`, `psycopg`, `pymysql`), or None when
             # the image does not carry it (the store's `driver_missing` gap).

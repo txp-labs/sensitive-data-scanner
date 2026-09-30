@@ -12,7 +12,9 @@ from .base import Context
 from .blob import BlobAdapter
 from .cosmos import CosmosAdapter, MongoClusterAdapter
 from .databases import DatabaseAdapter
+from .keyvault import KeyVaultAdapter
 from .logs import LogAnalyticsAdapter
+from .snapshots import DiskSnapshotAdapter
 from .storage_services import QueueAdapter, TableAdapter
 
 _ALL: list[Adapter[Context]] = [
@@ -22,6 +24,8 @@ _ALL: list[Adapter[Context]] = [
     CosmosAdapter(),
     MongoClusterAdapter(),
     LogAnalyticsAdapter(),
+    DiskSnapshotAdapter(),
+    KeyVaultAdapter(),
     DatabaseAdapter("azure_sql"),
     DatabaseAdapter("azure_sql_mi"),
     DatabaseAdapter("azure_postgresql"),

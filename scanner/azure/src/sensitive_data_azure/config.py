@@ -20,6 +20,8 @@ reported by a fixed code, never by its value.
   Cosmos DB container.
 - `LOGS_LOOKBACK_DAYS`, `LOGS_MAX_ROWS_PER_TABLE`: Log Analytics' window and the
   rows sampled per table.
+- `KEYVAULT_SECRETS_READ`: `on` reads Key Vault secrets' values (counts only);
+  off by default.
 - `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
   `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
@@ -75,6 +77,8 @@ KINDS: tuple[str, ...] = (
     "azure_queue",
     "cosmosdb",
     "log_analytics",
+    "azure_disk_snapshot",
+    "key_vault",
     *DATABASE_KINDS,
 )
 DEFAULT_KINDS: tuple[str, ...] = KINDS
@@ -95,6 +99,10 @@ KIND_ALIASES = {
     "mongo": "cosmosdb_mongo",
     "logs": "log_analytics",
     "monitor": "log_analytics",
+    "snapshot": "azure_disk_snapshot",
+    "snapshots": "azure_disk_snapshot",
+    "keyvault": "key_vault",
+    "kv": "key_vault",
 }
 
 _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -165,6 +173,8 @@ class Settings:
     # Log Analytics: how far back a table's rows are sampled, and how many.
     logs_lookback_days: int = 1
     logs_max_rows: int = 500
+    # Key Vault secrets' values: off by default, counts only when on.
+    keyvault_secrets_read: bool = False
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -182,6 +192,16 @@ def _int(v: str | None, default: int, lo: int, hi: int) -> int:
     except ValueError:
         raise ConfigError("not_a_number") from None
     return max(lo, min(hi, n))
+
+
+def _on(v: str | None) -> bool | None:
+    """True for on, False for off, None for anything else."""
+    t = (v or "off").strip().lower()
+    if t in ("on", "true", "1", "yes"):
+        return True
+    if t in ("off", "false", "0", "no", ""):
+        return False
+    return None
 
 
 def _list(v: str | None) -> tuple[str, ...]:
@@ -274,6 +294,9 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     state = _state(e.get("STATE_CONTAINER_URL"))
     if state is None and https_url is None and grid is None and findings_file is None:
         raise ConfigError("no_findings_destination")
+    keyvault = _on(e.get("KEYVAULT_SECRETS_READ"))
+    if keyvault is None:
+        raise ConfigError("keyvault_secrets_read")
     try:
         db_read = _kinds(e.get("AZURE_DB_READ"), (), DATABASE_KINDS)
     except ConfigError:
@@ -322,4 +345,5 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         cosmos_max_items=_int(e.get("COSMOS_MAX_ITEMS"), 1000, 1, 100_000),
         logs_lookback_days=_int(e.get("LOGS_LOOKBACK_DAYS"), 1, 1, 730),
         logs_max_rows=_int(e.get("LOGS_MAX_ROWS_PER_TABLE"), 500, 1, 30_000),
+        keyvault_secrets_read=keyvault,
     )

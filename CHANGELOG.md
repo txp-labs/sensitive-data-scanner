@@ -73,6 +73,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
   (`LOGS_MAX_ROWS_PER_TABLE`) and read by column (format `kql`); Basic and
   Auxiliary tables, billed per query, are counted as `billed_plan` and not
   read; a workspace resumes at its next table.
+- **Azure, step 5: disk snapshots and Key Vault** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
+  - Managed disk snapshots (`azure_disk_snapshot`), coverage only: grouped by
+    disk, with the latest snapshot's time, size, older count and encryption
+    (a disk encryption set's key hashed). Reading needs a SAS export, which
+    changes the snapshot, so each is `needs_sas_export`; the opt-in export
+    reader is designed in docs/AZURE.md and not built.
+  - Key Vault secrets (`key_vault`), **off by default**
+    (`read_not_configured`): with `KEYVAULT_SECRETS_READ=on` and Key Vault
+    Secrets User, each enabled secret's current value is read and reported
+    as counts only, like Secrets Manager; disabled, expired and certificate
+    secrets are counted, not read.
 - **Databases hosted anywhere** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 3):
   `sensitive-data-scanner-db` (`scanner/db`), a container you run in your
   own network, with its own image target (`docker build --target db`):
@@ -254,9 +265,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `resourceGroup` and `resourceIdHash` (the SHA-256 of the lower-cased
   resource ID) on Azure findings and stores, the `azure_blob`, `azure_sql`,
   `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`,
-  `cosmosdb`, `cosmosdb_mongo`, `azure_table`, `azure_queue` and
-  `log_analytics` kinds, the `kql` format and the `billed_plan` skip kind, the
-  store field `api`, the `network` reason, `hierarchicalNamespace`, `networkRestricted`, the
+  `cosmosdb`, `cosmosdb_mongo`, `azure_table`, `azure_queue`,
+  `log_analytics`, `azure_disk_snapshot` and `key_vault` kinds, the `kql`
+  format and the `billed_plan` skip kind, the store field `api`, the
+  `network` and `needs_sas_export` reasons, `hierarchicalNamespace`, `networkRestricted`, the
   `archive_tier` skip kind and Azure portal links.
 - Version **1.5**, additive: `atRestEncryption`,
   `atRestKeyHash` and `pciNote` on a finding, and `atRestEncryption` and
