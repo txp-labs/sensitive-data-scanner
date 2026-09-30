@@ -1,0 +1,104 @@
+# The SaaS scanner (docs/SAAS.md) as a Kubernetes CronJob: an example to adapt.
+#
+# - Secrets are files from a Secret volume (never environment variables):
+#     kubectl -n sds create secret generic sds-saas \
+#       --from-file=push-key=./push-key --from-file=slack-token=./slack-token
+# - Microsoft 365 signs in with the pod's projected service account token (a
+#   federated identity credential on the Entra app: issuer, the cluster's OIDC
+#   issuer; subject, system:serviceaccount:sds:sds-saas; audience,
+#   api://AzureADTokenExchange). No secret.
+# - The state is a file on a persistent volume.
+# - One run at a time (concurrencyPolicy: Forbid), no retries.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sds-saas
+  namespace: sds
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sds-saas-state
+  namespace: sds
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sds-saas
+  namespace: sds
+data:
+  SCANNER_SITE: acme-saas
+  M365_TENANT_ID: 00000000-0000-0000-0000-000000000000
+  M365_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+  M365_FEDERATED_TOKEN: file:/var/run/secrets/tokens/entra
+  M365_USERS: ""
+  M365_GROUPS: ""
+  M365_MAIL_SCOPE_CHECK: ""
+  M365_SITES: ""
+  SLACK_TOKEN_FILE: /run/secrets/sds/slack-token
+  STATE_LOCATION: /state/sds-saas-state.json
+  FINDINGS_HTTPS_URL: https://collector.example/findings
+  FINDINGS_HMAC_KEY_FILE: /run/secrets/sds/push-key
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sds-saas
+  namespace: sds
+spec:
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          serviceAccountName: sds-saas
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: scanner
+              image: ghcr.io/txp-labs/sensitive-data-scanner-saas@sha256:0000000000000000000000000000000000000000000000000000000000000000
+              args: [scan]
+              envFrom:
+                - configMapRef: { name: sds-saas }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 500m, memory: 1Gi }
+                limits: { memory: 4Gi }
+              volumeMounts:
+                - { name: secrets, mountPath: /run/secrets/sds, readOnly: true }
+                - { name: entra-token, mountPath: /var/run/secrets/tokens, readOnly: true }
+                - { name: state, mountPath: /state }
+          volumes:
+            - name: secrets
+              secret:
+                secretName: sds-saas
+                defaultMode: 0400
+            - name: entra-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: entra
+                      audience: api://AzureADTokenExchange
+                      expirationSeconds: 3600
+            - name: state
+              persistentVolumeClaim:
+                claimName: sds-saas-state

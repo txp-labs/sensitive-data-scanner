@@ -481,6 +481,47 @@ by its id.
 
 At least one of `FINDINGS_HTTPS_URL` and `FINDINGS_FILE` is required.
 
+## Deploying
+
+Releases publish the image as `ghcr.io/txp-labs/sensitive-data-scanner-saas`
+(`SAAS_IMAGE_DIGEST` in each release gives its digest; name it by digest) and
+the examples below as `sensitive-data-scanner-saas-deploy.tar.gz`. Each is an
+example to adapt, not a turnkey stack: they share the rules the scanner holds
+itself to.
+
+- **Secrets are files, never environment variables.** The scanner refuses a
+  client secret, a Slack token or an Atlassian token in its environment.
+- **A workload identity where the vendor takes one** (Microsoft 365, Google
+  Workspace): no secret exists to leak.
+- **One run at a time**, no retries, a timeout below the schedule's interval.
+- **The container runs as a non-root user** (65532), with a read-only root
+  file system where the platform allows it; it writes only its state.
+- **Outbound HTTPS only**: to the vendors' APIs and the collector.
+
+| Platform | Example | Identity | Secrets as files | State |
+|---|---|---|---|---|
+| AWS ECS (Fargate) | `deploy/saas/ecs.yaml` (CloudFormation), scheduled by EventBridge Scheduler | the task role: `sts:GetWebIdentityToken` for Microsoft 365 (`M365_FEDERATED_TOKEN=aws`) | a first container (the scanner's own image, boto3) copies named Secrets Manager secrets to a task-local volume, then exits; the task role may read only those secrets | `s3://` object; the task role may get and put only that key |
+| Azure Container Apps | `deploy/saas/azure-container-apps.yaml` (`az containerapp job create --yaml`), a scheduled job | the job's managed identity (`M365_FEDERATED_TOKEN=azure`) | Key Vault references mounted as a secret volume | a file on an Azure Files share |
+| Google Cloud Run | `deploy/saas/cloud-run.yaml` (`gcloud run jobs replace`), scheduled by Cloud Scheduler | the job's service account: `GWS_CREDENTIAL=gcp` signs Google Workspace's delegation keylessly | Secret Manager secrets mounted as files | a file on a Cloud Storage volume |
+| Kubernetes | `deploy/saas/kubernetes.yaml`, a CronJob (`concurrencyPolicy: Forbid`) | a projected service account token for Entra (`M365_FEDERATED_TOKEN=file:…`) | a Secret volume | a file on a persistent volume |
+
+A strict test (`scanner/tests/test_saas_scopes.py`) holds the package, these
+docs and the examples to read-only grants: every permission or scope the
+scanner requests, or that any of them names, is on its vendor's list of scopes
+that only read (below); the package sends only GETs to the vendors except the
+named token exchanges, and Slack only its read methods; the examples set no
+secret in the environment and only settings the code reads; and the ECS
+template's roles hold only their own actions.
+
+### Every grant, by vendor
+
+| Vendor | Read-only scopes and permissions (the complete list) |
+|---|---|
+| Microsoft 365 (Graph, application) | `User.Read.All`, `GroupMember.Read.All`, `Mail.Read` (scoped by Exchange), `Files.Read.All`, `Sites.Selected`, `Sites.Read.All`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read.All` |
+| Google Workspace (domain-wide delegation) | `https://www.googleapis.com/auth/gmail.readonly`, `https://www.googleapis.com/auth/drive.readonly`, `https://www.googleapis.com/auth/admin.directory.user.readonly`, `https://www.googleapis.com/auth/admin.directory.group.member.readonly`; and the keyless signer's own token, `https://www.googleapis.com/auth/iam` (IAM Credentials' `signJwt` only) |
+| Slack (the app's bot) | `channels:read`, `groups:read`, `channels:history`, `groups:history`, `files:read`; `discovery:read` (Enterprise Grid, opt-in) |
+| Atlassian (OAuth 2.0 3LO) | `read:jira-work`, `read:confluence-content.all`, `read:confluence-space.summary`, `readonly:content.attachment:confluence`, `offline_access`; or an API token of an account with *Browse projects* and *View* only |
+
 ## Running it
 
 ```sh

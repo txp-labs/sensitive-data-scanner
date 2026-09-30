@@ -1,0 +1,233 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  The SaaS scanner (docs/SAAS.md) as a scheduled ECS Fargate task in your own
+  AWS account: read-only grants to your SaaS tenants, findings only to the
+  HTTPS collector, never a value. An example to adapt: it signs in to
+  Microsoft 365 with the task role's web identity (no secret), keeps its state
+  in an S3 object, and reads any token it needs (Slack, Atlassian, the push
+  key) from Secrets Manager into a task-local volume, never the environment.
+
+Parameters:
+  Image:
+    Type: String
+    Description: ghcr.io/txp-labs/sensitive-data-scanner-saas@sha256:<digest> (SAAS_IMAGE_DIGEST)
+  Cluster:
+    Type: String
+    Description: The ECS cluster's name or ARN.
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets with outbound HTTPS to the vendors and the collector.
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: A security group allowing outbound HTTPS only.
+  AssignPublicIp:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: DISABLED
+  ScheduleExpression:
+    Type: String
+    Default: cron(0 6 * * ? *)
+  ScannerSite:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9._-]{0,62}$"
+  M365TenantId:
+    Type: String
+  M365ClientId:
+    Type: String
+  M365Users:
+    Type: String
+    Default: ""
+    Description: Principal names or object ids, comma-separated.
+  M365Groups:
+    Type: String
+    Default: ""
+  M365MailScopeCheck:
+    Type: String
+    Default: ""
+    Description: A mailbox outside the Exchange scope (docs/SAAS.md, Mail).
+  M365Sites:
+    Type: String
+    Default: ""
+  StateBucket:
+    Type: String
+    Description: A bucket of yours for the scanner's state object.
+  StateKey:
+    Type: String
+    Default: sds-saas/state.json
+  FindingsHttpsUrl:
+    Type: String
+    Description: The collector's URL (https://...).
+  PushKeySecretArn:
+    Type: String
+    Description: A Secrets Manager secret holding the push's HMAC key (32 characters or more).
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt LogGroup.Arn
+
+  # What the task itself may do: read its secrets, keep its state object, and get a
+  # web identity token for Microsoft Entra (IAM outbound identity federation).
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sds-saas
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadOwnSecrets
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref PushKeySecretArn
+              - Sid: OwnState
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucket}/${StateKey}
+              - Sid: WebIdentityForEntra
+                Effect: Allow
+                Action: sts:GetWebIdentityToken
+                Resource: "*"
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "1024"
+      Memory: "4096"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: X86_64 }
+      Volumes:
+        - Name: secrets
+      ContainerDefinitions:
+        # Writes each secret to a file on the task-local volume, then exits. The scanner's
+        # own image (it carries boto3), as the task role.
+        - Name: secrets
+          Image: !Ref Image
+          Essential: false
+          EntryPoint: [python, -c]
+          Command:
+            - >-
+              import boto3,os;c=boto3.client('secretsmanager');
+              [open('/run/secrets/sds/'+n,'w').write(c.get_secret_value(SecretId=a)['SecretString'])
+              for n,a in (x.split('=',1) for x in os.environ['SDS_SECRETS'].split(','))]
+          Environment:
+            - Name: SDS_SECRETS
+              Value: !Sub push-key=${PushKeySecretArn}
+          MountPoints:
+            - SourceVolume: secrets
+              ContainerPath: /run/secrets/sds
+          # Root only to write the task-local volume Fargate creates root-owned; it exits
+          # before the scanner (a non-root user) starts, and reads nothing else.
+          User: "0"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: secrets
+        - Name: scanner
+          Image: !Ref Image
+          Essential: true
+          Command: [scan]
+          ReadonlyRootFilesystem: true
+          User: "65532:65532"
+          DependsOn:
+            - ContainerName: secrets
+              Condition: SUCCESS
+          MountPoints:
+            - SourceVolume: secrets
+              ContainerPath: /run/secrets/sds
+              ReadOnly: true
+          Environment:
+            - { Name: SCANNER_SITE, Value: !Ref ScannerSite }
+            - { Name: M365_TENANT_ID, Value: !Ref M365TenantId }
+            - { Name: M365_CLIENT_ID, Value: !Ref M365ClientId }
+            - { Name: M365_FEDERATED_TOKEN, Value: aws }
+            - { Name: M365_USERS, Value: !Ref M365Users }
+            - { Name: M365_GROUPS, Value: !Ref M365Groups }
+            - { Name: M365_MAIL_SCOPE_CHECK, Value: !Ref M365MailScopeCheck }
+            - { Name: M365_SITES, Value: !Ref M365Sites }
+            - { Name: STATE_LOCATION, Value: !Sub "s3://${StateBucket}/${StateKey}" }
+            - { Name: FINDINGS_HTTPS_URL, Value: !Ref FindingsHttpsUrl }
+            - { Name: FINDINGS_HMAC_KEY_FILE, Value: /run/secrets/sds/push-key }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: scanner
+
+  ScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run-task
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref TaskDefinition
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: [!GetAtt ExecutionRole.Arn, !GetAtt TaskRole.Arn]
+
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      ScheduleExpression: !Ref ScheduleExpression
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${Cluster}
+        RoleArn: !GetAtt ScheduleRole.Arn
+        RetryPolicy: { MaximumRetryAttempts: 0 }
+        EcsParameters:
+          TaskDefinitionArn: !Ref TaskDefinition
+          TaskCount: 1
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              Subnets: !Ref Subnets
+              SecurityGroups: [!Ref SecurityGroup]
+              AssignPublicIp: !Ref AssignPublicIp
+
+Outputs:
+  TaskRoleArn:
+    Description: >-
+      The subject of the federated identity credential on the Entra app
+      (docs/SAAS.md, Signing in: aws).
+    Value: !GetAtt TaskRole.Arn
