@@ -107,6 +107,7 @@ RUN cd scanner \
  && uv export --frozen --package sensitive-data-scanner-azure --no-default-groups --extra all --no-emit-workspace -o /tmp/requirements.txt \
  && uv pip install --python /usr/local/bin/python --target /opt/app --require-hashes -r /tmp/requirements.txt \
  && uv build --wheel --package sensitive-data-scanner-core --out-dir /tmp/dist \
+ && uv build --wheel --package sensitive-data-scanner-db --out-dir /tmp/dist \
  && uv build --wheel --package sensitive-data-scanner-azure --out-dir /tmp/dist \
  && uv pip install --python /usr/local/bin/python --target /opt/app --no-deps /tmp/dist/*.whl \
  && /src/scripts/slim-site-packages.sh /opt/app \
