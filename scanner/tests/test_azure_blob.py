@@ -114,7 +114,7 @@ def tenant() -> Tenant:
             "exports/pay.csv": Blob(csv_body(), encryption_scope="pay-scope"),
             "exports/cards.csv.gz": Blob(gzip.compress(csv_body())),
             "lake/part-0.parquet": Blob(parquet_body()),
-            "media/call.wav": Blob(b"RIFF...."),
+            "media/call.wav": Blob(b"RIFF\x24\x00\x00\x00WAVEfmt made up"),
             "cold/old.csv": Blob(csv_body(), blob_tier="Archive"),
             "cpk/secret.csv": Blob(csv_body(), cpk=True),
             "dir/": Blob(b""),

@@ -9,6 +9,8 @@ authors = [{ name = "txp-labs, LLC" }]
 # No cloud SDK: a platform's package (AWS: sensitive-data-scanner) brings its own.
 dependencies = [
     "presidio-analyzer>=2.2.364,<2.3",
+    # PDF text (#65): pure Python, no dependencies of its own.
+    "pypdf>=6.0",
     "pyyaml>=6.0.3",
 ]
 

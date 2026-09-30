@@ -112,7 +112,7 @@ def test_ecr_layers_are_sampled_from_the_latest_image(env: Env) -> None:
             {
                 "app/config.json": json.dumps({"test_card": CARDS["visa"]}).encode(),
                 "usr/share/doc/x.txt": f"card {CARDS['amex']}".encode(),
-                "app/logo.png": b"\x89PNG....",
+                "app/logo.png": b"\x89PNG\r\n\x1a\n made up",
                 "app/data.bin": b"\x00\x01\x02" * 10,
             }
         ),

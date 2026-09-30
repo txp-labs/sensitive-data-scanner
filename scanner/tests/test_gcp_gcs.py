@@ -84,7 +84,7 @@ def cloud() -> Cloud:
             "exports/pay.csv": Obj(csv_body(), kms=KEY),
             "exports/cards.csv.gz": Obj(gzip.compress(csv_body())),
             "lake/part-0.parquet": Obj(parquet_body()),
-            "media/call.wav": Obj(b"RIFF...."),
+            "media/call.wav": Obj(b"RIFF\x24\x00\x00\x00WAVEfmt made up"),
             "cold/old.csv": Obj(csv_body(), storage_class="ARCHIVE"),
             "csek/secret.csv": Obj(csv_body(), csek=True),
             "dir/": Obj(b""),

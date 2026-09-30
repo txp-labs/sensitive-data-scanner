@@ -464,6 +464,36 @@ bumps the minor version. Spec changes are listed under **Spec**.
   (Azure Blob Storage and Files, Cloud Storage, the SaaS scanner) now reads
   them instead of counting them as `document`; the AWS S3 source still counts
   them. PDFs and the older binary formats are still counted.
+- **Content, not name, decides the reader; archives and PDFs are read** ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)):
+  - Every object's first bytes are sniffed (`scan/sniff.py`, one small
+    ranged read, the object's only read when it is small): zip, and Word,
+    Excel and PowerPoint told apart by their parts; OLE; PDF; gzip, bzip2,
+    xz, zstd; tar; 7z; Parquet, ORC, Avro; images, audio and video; text by
+    a printable UTF-8 ratio. A `.docx` renamed `.fff` or `.jpg` used to be
+    read as compressed text or skipped; it is now read as Word, and its
+    findings carry `disguised: true`, `declaredType` and `detectedType`
+    (kinds, never a name). Mismatches are counted in coverage and the run
+    summary even when nothing is found. Genuine images, audio and video are
+    still counted, not read, after the sniff.
+  - Archives are read entry by entry, in memory, never extracted: zip, tar,
+    and gzip, bzip2, xz and zstd streams, nested up to three levels (a
+    `.tar.gz` is one), each entry sniffed and routed like an object. Caps:
+    `MAX_INFLATED_BYTES` per object, 1,000 entries per archive, 200 times an
+    entry's compressed size (the zip-bomb guard); a capped read is
+    `partial`. An encrypted entry or archive is `encrypted`; 7z is
+    `archive_unsupported` (py7zr brings compiled codecs). Findings name the
+    entry (`archivePath`, masked like a key, with its position when masked).
+  - PDFs are read as their text layer and document information with pypdf
+    (pure Python, no dependencies; about 4 MB), up to 500 pages; a PDF with
+    no text layer is `pdf_image_only`, one behind a user password
+    `encrypted`.
+  - Everywhere objects are read: S3 (every object now goes through the core's
+    reader), Azure Blob Storage and Files, Cloud Storage, SaaS files and
+    attachments (OneDrive, SharePoint, Google Drive, Gmail, Slack, Jira and
+    Confluence), CodeCommit files and ECR layer files. Callers share the
+    core's `record` for coverage and findings; the listing no longer skips by
+    extension (`skip_kind` is gone), and a name that says image, audio or
+    video is charged to the budget as its sniff only.
 
 ### Changed
 - **The RDS Data API mode refuses a user that can write** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21)):
@@ -587,7 +617,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
 
 ### Findings schema
-- `schemaVersion` is now **1.8**, additive: the SaaS scanner's
+- `schemaVersion` is now **1.9**, additive ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)): `disguised`,
+  `declaredType` and `detectedType` on a finding; `archivePath`,
+  `archivePathMasked` and `archiveEntry` on an `s3_object`, `blob_object`,
+  `azure_file`, `gcs_object`, `saas_item` or `store_field` resource; the
+  `pdf` format; the `archive_unsupported` and `pdf_image_only` skip kinds;
+  `disguised` in coverage and the `disguised` gap on a store.
+- Version **1.8**, additive: the SaaS scanner's
   `platform: saas`, the `saas_item` resource (`vendor`, `service`,
   `tenantHash`, `ownerHash`, `container`, `channel`, `itemId`, `itemHash`,
   `part`, `name`, `column`), `vendor`, `tenantHash` and `ownerHash` on a
@@ -639,6 +675,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `writeGrants`.
 
 ### Docs
+- `docs/FINDINGS.md` (Archives, PDFs and disguised files), `docs/ARCHITECTURE.md`
+  (What an object is: content, archives and PDFs), and `docs/AZURE.md`,
+  `docs/GCP.md` and `docs/SAAS.md`: objects are read by content, archives by
+  entry, PDFs as text ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)).
 - `docs/GCP.md`: the Google Cloud scanner, its stores and permissions,
   findings and settings.
 - `docs/AZURE.md`: the Azure scanner, its stores and roles, findings,

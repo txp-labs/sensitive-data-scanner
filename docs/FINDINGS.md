@@ -1,4 +1,4 @@
-# Findings, schema version 1.8
+# Findings, schema version 1.9
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.8"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.9"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -100,6 +100,15 @@ value shows up in findings, events, logs, exception messages or object reprs.
   `vendorCoverage`, and the store reasons `vendor_mode` and
   `vendor_not_covered` ([Sources and modes](#sources-and-modes-18)). All
   additive: an AWS document is 1.7's with a new version.
+- Version 1.9 ([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65))
+  reads objects by what their bytes are, not their names, and reads archives
+  and PDFs ([Archives, PDFs and disguised files](#archives-pdfs-and-disguised-files-19)):
+  the finding fields `disguised`, `declaredType` and `detectedType`,
+  `archivePath`, `archivePathMasked` and `archiveEntry` on an `s3_object`,
+  `blob_object`, `azure_file`, `gcs_object`, `saas_item` or `store_field`
+  resource, the `pdf` format, the skip kinds `archive_unsupported` and
+  `pdf_image_only`, `disguised` in coverage and the `disguised` gap on a
+  store. All additive.
 
 ## Sources and modes (1.8)
 
@@ -294,7 +303,7 @@ One class of data at one location.
 | `id` | A stable hash of the resource and class. It stays the same across runs for the same location (and object version). Key triage decisions on it. |
 | `resource` | `s3_object`: `bucket`, `key` and the `versionId` that was read (`"null"` when versioning is off). `log_event`: `logGroup`, `logStream` and the event `timestamp` (ms). `dynamodb_item`: `table`, `keyHash`, `key` and `attributePath` (below). |
 | `connect` | The Amazon Connect contact and instance, when the item names one: a chat or Contact Lens transcript, or a flow log event. |
-| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`, `sql`, or (1.3) `block` (raw EBS blocks), `cql` (Keyspaces) and `rdb` (a Redis snapshot file in S3, read as its text runs; no offsets), or (1.6) `kql` (rows of a Log Analytics query). |
+| `format` | How the item was read: `contact_lens`, `connect_chat`, `lex_v2_log`, `connect_flow_log`, `lambda_log`, `json`, `csv`, `text`, `dynamodb_item`, or (1.2) `parquet`, `orc`, `avro`, `sql`, or (1.3) `block` (raw EBS blocks), `cql` (Keyspaces) and `rdb` (a Redis snapshot file in S3, read as its text runs; no offsets), or (1.6) `kql` (rows of a Log Analytics query), or (1.8) `docx`, `xlsx`, `pptx`, or (1.9) `pdf` (a PDF's text layer and document information). |
 | `class`, `severity` | The spec class (`card`, `us_ssn`, `us_itin`, `dob`, `cvv`, `pin`, `account_number`, `us_ssn_last4`) and its severity. |
 | `count` | Distinct values of the class in the item. The same card read out by a caller and read back by the agent counts once. |
 | `occurrences` | Every place a value appears in the item. |
@@ -592,6 +601,62 @@ One class of data in one attribute path of one item:
 The DynamoDB resource, format and coverage kind are new in schema 1.1
 (additive): they appear only when a DynamoDB source is configured.
 
+### Archives, PDFs and disguised files (1.9)
+
+An object is read by what its first bytes are, not by what its name says
+([#65](https://github.com/txp-labs/sensitive-data-scanner/issues/65)). A
+Word document renamed `notes.fff` or `photo.jpg` is read as Word; a zip, a
+tar, or a gzip, bzip2 or xz stream is read entry by entry (nested up to three
+levels; a `.tar.gz` is one); a PDF is read as its text layer. A finding in an
+archive entry names the entry, and a finding in a file whose name claims
+another kind says so:
+
+```json
+{
+  "resource": {
+    "type": "s3_object",
+    "bucket": "example-drop",
+    "key": "exports/holiday.jpg",
+    "versionId": "null",
+    "archivePath": "hr/#########.zip!/people.csv",
+    "archivePathMasked": true,
+    "archiveEntry": "3/0"
+  },
+  "format": "csv",
+  "class": "us_ssn",
+  "disguised": true,
+  "declaredType": "image",
+  "detectedType": "zip"
+}
+```
+
+(Other fields as above.)
+
+| Field | Meaning |
+|---|---|
+| `archivePath` | On the resource of a finding inside an archive: the entry's path in it, with `!/` between nested archives (`backup.zip!/inner.zip!/x.csv` names `x.csv` in `inner.zip` in `backup.zip`'s entry), masked like a key. A single compressed stream (`x.csv.gz`) is the file it holds: no `archivePath`. Two entries are two locations, so two findings |
+| `archivePathMasked`, `archiveEntry` | When masking changed the path: `true`, and the entry's position in its archive, one number per level (`3/0`: the first entry of the fourth entry), so two entries whose paths mask alike stay apart. Nothing derived from the path (no hash: a number in a name is quickly guessed from its hash) is written. A masked `archivePath` does not drop the link, which names the object |
+| `disguised` | `true` when the object's name (or the entry's, or an archive's holding it) claims one kind and its bytes are another. Absent otherwise |
+| `declaredType` | What the name's extension claims: `text`, `zip`, `docx`, `xlsx`, `pptx`, `ole`, `pdf`, `gzip`, `bzip2`, `xz`, `zstd`, `tar`, `7z`, `parquet`, `orc`, `avro`, `rdb`, `image`, `audio`, `video`, `binary`, or `unknown` (an extension the scanner does not know). A kind, never the name. A name with no extension claims nothing |
+| `detectedType` | What the bytes are, in the same terms (and `parquet_encrypted`) |
+
+Not a disguise: a zip named as a Word file's kind, or a rights-managed Word
+file (an OLE container) named `.docx`; audio in a video container; content
+the scanner cannot name (`binary`); text under an unknown extension. A
+mismatch is counted in coverage (`disguised`) and in the run summary's
+`gaps`, whether or not anything was found in the file.
+
+The caps: all that is inflated from one object stops at
+`MAX_INFLATED_BYTES`, an archive's entries at 1,000, and an entry at 200
+times its compressed size (past 1 MiB), the zip-bomb guard; a PDF at 500
+pages. An object a cap cut is `partial`. An entry whose first bytes say it
+is audio, video, an image or binary is counted without inflating the rest.
+Nothing is ever written to disk. What is not read is counted in `skipped` by
+kind ([Coverage](#coverage)): a 7z archive is `archive_unsupported`, a PDF
+with no text layer `pdf_image_only` (OCR is out of scope), a
+password-protected zip, zip entry or PDF `encrypted`. A PDF encrypted only
+for its permissions (an empty user password) opens for anyone, so it is read.
+
 ### Names are masked
 
 In a bucket name or key, log group or log stream name, DynamoDB table name,
@@ -711,7 +776,7 @@ One entry per source says what was, and was not, read:
 | `partial` | Read only in part: the head of a large object, or a log window cut short by the run's budget |
 | `unreadable` | Listed but could not be read (a KMS key the scanner may not use, or an object deleted mid-run) |
 | `bytesScanned` | Bytes read |
-| `skipped` | Not read, by kind: audio, video, image, document, archive, binary, or (1.2) `columnar`: a Parquet, ORC, zstd or snappy/zstandard Avro file this build cannot read (the Lambda zip; the container image reads them), or one whose byte cap fell before its first rows, or (1.6) `archive_tier`: an Azure blob in the Archive tier, which only a rehydration (a write) could read, and `billed_plan`: a Log Analytics table on the Basic or Auxiliary plan, billed per query, or (1.7) `private_log`: a Cloud Logging Data Access audit log, read only with Private Logs Viewer (opt-in), or (1.8) `encrypted`: a rights-managed (encrypted) Office file, `too_large`: an attachment over `MAX_OBJECT_BYTES`, and `linked_item`: an attached item or a link to a file another store reads |
+| `skipped` | Not read, by kind: audio, video, image, document, archive, binary, or (1.2) `columnar`: a Parquet, ORC, zstd or snappy/zstandard Avro file this build cannot read (the Lambda zip; the container image reads them), or one whose byte cap fell before its first rows, or (1.6) `archive_tier`: an Azure blob in the Archive tier, which only a rehydration (a write) could read, and `billed_plan`: a Log Analytics table on the Basic or Auxiliary plan, billed per query, or (1.7) `private_log`: a Cloud Logging Data Access audit log, read only with Private Logs Viewer (opt-in), or (1.8) `encrypted`: a rights-managed (encrypted) Office file, `too_large`: an attachment over `MAX_OBJECT_BYTES`, and `linked_item`: an attached item or a link to a file another store reads, or (1.9) `archive_unsupported`: a 7z archive, or a zip entry in a compression method the standard library lacks, and `pdf_image_only`: a PDF with pages and no text layer (a scan; OCR is out of scope). The kind is what the bytes are, whatever the name says (1.9); `encrypted` is also a password-protected zip (or an entry of one) or PDF, and a Parquet file under modular encryption, `document` an older binary Office file or a PDF that cannot be parsed, `archive` an archive nested past three levels or a damaged stream. An archive's entries that are not read are counted here too |
 | `formats` | Items by format |
 | `testValues` | Published test card numbers and sample SSNs, set apart and never findings |
 | `suppressed` | Numbers next to a word like "order" or "phone", with no card word |
@@ -719,6 +784,7 @@ One entry per source says what was, and was not, read:
 | `passComplete`, `backlog` | Whether everything eligible has been read, or work carries over to the next run |
 | `error` | The AWS error name when the source could not be read (`AccessDenied`, `NoSuchBucket`), else `null` |
 | `kmsDenied` | Items not read because the scanner may not use their KMS key (1.2; present when not zero) |
+| `disguised` | Objects and archive entries whose name claims another kind than their bytes are, read by content (1.9; present when not zero). Counted whether or not anything was found in them |
 
 ### Discovery: the run summary (1.2)
 
@@ -753,7 +819,7 @@ coverage gap is visible rather than silent.
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
-| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat` |
+| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat`; and (1.9) `disguised`, the store's objects and entries named as another kind than they are (read, by content) |
 | `backlog` | More to read on the next run |
 | `logGroupClass`, `tableStatus`, `catalogObject` | Why an `unsupported` store is unsupported (`catalogObject`: `view`, `not_s3`, `resource_link`) |
 | `location` | A Glue table's S3 location, `bucket/prefix`, masked |

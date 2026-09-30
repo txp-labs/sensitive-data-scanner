@@ -79,7 +79,7 @@ def tenant() -> tuple[Tenant, dict[str, Share]]:
                 "exports/cards.csv": File(csv_body()),
                 "exports/2026/cards.csv.gz": File(gzip.compress(csv_body())),
                 "notes/readme.txt": File(b"nothing here"),
-                "media/call.wav": File(b"RIFF...."),
+                "media/call.wav": File(b"RIFF\x24\x00\x00\x00WAVEfmt made up"),
                 "broken.txt": File(b"x", fail=AzureError("InternalError", "failed")),
             }
         ),

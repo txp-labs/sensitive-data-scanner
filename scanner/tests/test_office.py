@@ -12,7 +12,7 @@ import pytest
 
 from aws_fixtures import shared_detector
 from office_fixtures import OLE, docx, pptx, with_dtd, xlsx
-from sensitive_data_core.scan.objects import read_object, skip_kind
+from sensitive_data_core.scan.objects import read_object
 from sensitive_data_core.scan.office import OfficeUnreadable, office_kind, office_text
 from synthetic import CARDS, SSN_A, dashed, printed
 
@@ -46,13 +46,13 @@ def classes(got: object) -> set[str]:
     return set(item.findings)
 
 
-def test_office_files_are_read_not_skipped() -> None:
+def test_office_files_are_read_by_content_whatever_the_name() -> None:
     for name in ("a.docx", "b.XLSX", "c.pptx", "d.docm", "e.xlsm"):
         assert office_kind(name) is not None
-        assert skip_kind(name) is None
     for name in ("a.doc", "b.xls", "c.ppt", "d.pdf"):
         assert office_kind(name) is None
-        assert skip_kind(name) == "document"
+    # An older binary Office file (OLE, no EncryptedPackage stream) is counted, not read.
+    assert read("a.doc", OLE).skipped == "document"  # type: ignore[attr-defined]
 
 
 def test_word_excel_and_powerpoint_give_their_text() -> None:
@@ -80,8 +80,10 @@ def test_a_dtd_is_never_expanded_and_encryption_is_counted() -> None:
     assert got.item is not None and got.item.findings == {}  # type: ignore[attr-defined]
     enc = read("locked.docx", OLE)
     assert enc.skipped == "encrypted"  # type: ignore[attr-defined]
+    # Text named .xlsx is text: read as such, and the name is a disguise.
     bad = read("not-a-zip.xlsx", b"just some text, not a zip at all")
-    assert bad.skipped == "document"  # type: ignore[attr-defined]
+    assert bad.skipped is None and bad.item.format == "text"  # type: ignore[attr-defined]
+    assert bad.disguised == 1  # type: ignore[attr-defined]
 
 
 def test_the_zip_is_read_through_ranged_fetches_within_the_caps() -> None:

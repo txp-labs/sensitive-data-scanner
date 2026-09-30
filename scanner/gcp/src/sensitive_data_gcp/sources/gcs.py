@@ -41,10 +41,10 @@ from typing import Any
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, apply_rules
 from sensitive_data_core.detect.analyzer import Detector
-from sensitive_data_core.findings import Coverage, finding_json
+from sensitive_data_core.findings import Coverage
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import pyarrow_available
-from sensitive_data_core.scan.objects import read_object, sample_point, skip_kind
+from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
 
 from ..clients import STORAGE_API, Rest
 from ..resources import Located, console_link, gcs_object_resource
@@ -294,10 +294,6 @@ class GcsSource:
         if sample_point(name) >= self.sample_percent:
             cov.sampled_out += 1
             return cur_dir, cur_n, None
-        kind = skip_kind(name)
-        if kind is not None:
-            cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
-            return cur_dir, cur_n, None
         directory = name.rsplit("/", 1)[0] if "/" in name else ""
         if self.max_per_prefix:
             if directory != cur_dir:
@@ -305,7 +301,7 @@ class GcsSource:
             if cur_n >= self.max_per_prefix:
                 cov.sampled_out += 1
                 return cur_dir, cur_n, None
-        want = min(size, self.max_object_bytes)
+        want = planned_bytes(name, size, self.max_object_bytes)
         if not budget.has(want):
             return None
         budget.take(want)
@@ -355,12 +351,6 @@ class GcsSource:
             max_rows=self.max_rows,
             columnar=self.columnar,
         )
-        cov.partial += int(got.partial)
-        if got.skipped is not None:
-            cov.skipped[got.skipped] = cov.skipped.get(got.skipped, 0) + 1
-            return
-        cov.scanned += 1
-        cov.bytes_scanned += got.read
         facts = kms_facts(str(obj.get("kmsKeyName") or "") or None)
         where = self.t.where
         link = console_link(
@@ -368,35 +358,19 @@ class GcsSource:
             {"project": where.project},
             self.t.bucket,
         )
+        findings = record(
+            got,
+            cov,
+            resource_for=lambda column: gcs_object_resource(
+                where, self.t.bucket, name, generation, column=column
+            ),
+            link=link,
+            seen_at=seen_at,
+            facts=facts,
+        )
+        if findings is None:
+            return
         location = f"{self.id}\n{name}"
-        findings: list[dict[str, Any]] = []
-        if got.table is not None:
-            table = got.table
-            cov.formats[table.format] = cov.formats.get(table.format, 0) + 1
-            cov.redaction_markers += table.redaction_markers
-            cov.test_values += table.test_values
-            cov.suppressed += table.suppressed
-            for column, item in sorted(table.by_column.items()):
-                resource = gcs_object_resource(
-                    where, self.t.bucket, name, generation, column=column
-                )
-                findings.extend(
-                    finding_json(resource, link, table.format, cf, seen_at, facts=facts)
-                    for cf in item.findings.values()
-                    if cf.count or cf.occurrences
-                )
-        elif got.item is not None:
-            item = got.item
-            cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
-            cov.redaction_markers += item.redaction_markers
-            cov.test_values += item.test_values
-            cov.suppressed += item.suppressed
-            resource = gcs_object_resource(where, self.t.bucket, name, generation)
-            findings = [
-                finding_json(resource, link, item.format, cf, seen_at, facts=facts)
-                for cf in item.findings.values()
-                if cf.count or cf.occurrences
-            ]
         store.replace_location(location, findings)
 
     def prune(self, store: FindingStore, budget: Budget, limit: int = 200) -> int:

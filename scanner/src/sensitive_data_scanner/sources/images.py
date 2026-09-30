@@ -11,12 +11,14 @@ for it (`GetDownloadUrlForLayer`), at most `ECR_MAX_LAYER_BYTES`, and read as
 a stream: gzip or plain tar (a zstd layer is counted, not read). Up to
 `ECR_MAX_FILES_PER_LAYER` regular files per layer are read, outside the
 operating system's own directories (`usr/`, `lib/`, `bin/`, ...), each to
-`MAX_OBJECT_BYTES`, with the kinds S3 skips counted instead; Word, Excel and
-PowerPoint's Open XML files are read as their text by the core's reader, as S3
-reads them (`scan/office.py`), from the member's first `MAX_OBJECT_BYTES` (a
-larger one's zip directory is past the cap, so it is counted as `document`).
-A finding names
-the repository, the layer (its digest, a hash) and the file's path. An image
+`MAX_OBJECT_BYTES`, by the core's reader (`scan/objects.py`), as S3 reads
+them: each member's first bytes say what it is, so audio, video, images and
+binaries (whatever their names) are counted, not read, and do not count
+toward the files cap; Word, Excel and PowerPoint files, PDFs and archives (a
+`.jar`, a `.whl`, a `.tar.gz`) are read as their text and by entry, from the
+member's first `MAX_OBJECT_BYTES` (a larger zip's directory is past the cap,
+so it is counted). A finding names the repository, the layer (its digest, a
+hash) and the file's path (and, in an archive, the entry's: `archivePath`). An image
 is read once; a newer push starts a new pass. Nothing is pushed, tagged or
 deleted; the role denies it.
 """
@@ -35,20 +37,30 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from typing import IO, Any
 
-from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, class_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
 from sensitive_data_core.safety import error_name, log_event
-from sensitive_data_core.scan.item import ItemResult, classify_key, looks_binary, scan_item_text
-from sensitive_data_core.scan.objects import read_object
-from sensitive_data_core.scan.office import office_kind
+from sensitive_data_core.scan.objects import read_object, record
+from sensitive_data_core.scan.sniff import MEDIA, SNIFF_BYTES, compatible, declared, sniff
 
 from ..discovery import decide, needs_tags
 from ..resources import console_link
 from .base import Context
 from .encryption import classifier
 from .exports import drop_other_passes, merge
+
+
+def _bytes_fetch(data: bytes) -> Callable[[int, int], bytes]:
+    """A ranged fetch over a member's bytes already read from the layer's stream."""
+    return lambda start, end: data[start : end + 1]
+
+
+def _same(resource: dict[str, Any]) -> Callable[[str | None], dict[str, Any]]:
+    """The member's resource for every column: a layer's files are named by path only."""
+    return lambda _column: resource
+
 
 # The services this module calls (test_template.py checks every call against them).
 AWS_SERVICES = ("ecr",)
@@ -276,28 +288,6 @@ class EcrSource:
                 if f is not None:
                     yield m.name, f, int(m.size)
 
-    def _office(
-        self, path: str, data: bytes, cov: Coverage, detector: Detector
-    ) -> ItemResult | None:
-        """A `.docx`, `.xlsx` or `.pptx` member's text, by the core's reader over the bytes
-        read from the layer (a tar stream cannot seek). None when it was counted instead."""
-        got = read_object(
-            path,
-            len(data),
-            lambda start, end: data[start : end + 1],
-            detector,
-            max_object_bytes=self.max_file_bytes,
-            max_inflated_bytes=self.max_inflated_bytes,
-            max_rows=0,
-            columnar=False,
-        )
-        if got.skipped is not None or got.item is None:
-            kind = got.skipped or "document"
-            cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
-            return None
-        cov.partial += int(got.partial)
-        return got.item
-
     def _layer(  # noqa: PLR0917 - one layer of the pass
         self,
         layer: dict[str, Any],
@@ -322,34 +312,29 @@ class EcrSource:
                 path = name.lstrip("./")
                 if path.split("/", 1)[0] in SYSTEM_DIRS:
                     continue
-                read_it, _, kind = classify_key(path)
-                office = office_kind(path) is not None
-                if not read_it and not office:
-                    cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
+                head = f.read(SNIFF_BYTES)
+                kind = sniff(head)
+                if kind in MEDIA or kind == "binary":
+                    # Counted by what its bytes are; the stream passes over the rest.
+                    cov.disguised += int(not compatible(declared(path), kind))
+                    cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
                     continue
                 if files >= self.max_files or not budget.has(size):
                     cov.sampled_out += 1
                     continue
-                data = f.read(self.max_file_bytes)
+                data = head + f.read(max(0, self.max_file_bytes - len(head)))
                 cov.partial += int(size > self.max_file_bytes)
                 budget.take(len(data))
-                item: ItemResult | None
-                if office:
-                    item = self._office(path, data, cov, detector)
-                    if item is None:
-                        continue
-                elif looks_binary(data):
-                    cov.skipped["binary"] = cov.skipped.get("binary", 0) + 1
-                    continue
-                else:
-                    item = scan_item_text(path, data.decode("utf-8", "replace"), detector)
-                files += 1
-                cov.scanned += 1
-                cov.bytes_scanned += len(data)
-                cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
-                cov.test_values += item.test_values
-                cov.suppressed += item.suppressed
-                cov.redaction_markers += item.redaction_markers
+                got = read_object(
+                    path,
+                    len(data),
+                    _bytes_fetch(data),
+                    detector,
+                    max_object_bytes=self.max_file_bytes,
+                    max_inflated_bytes=self.max_inflated_bytes,
+                    max_rows=0,
+                    columnar=False,
+                )
                 resource = store_field_resource(
                     service="ecr",
                     store=self.repository,
@@ -357,9 +342,19 @@ class EcrSource:
                     field=path,
                     read_by="layer_sample",
                 )
-                for fnd in class_findings(
-                    item.findings, resource, link, item.format, seen_at, facts=self.facts
-                ):
+                findings = record(
+                    got,
+                    cov,
+                    resource_for=_same(resource),
+                    link=link,
+                    seen_at=seen_at,
+                    facts=self.facts,
+                    offsets=False,
+                )
+                if findings is None:
+                    continue
+                files += 1
+                for fnd in findings:
                     merge(store, f"{self.id}\n{digest}\n{path}", fnd, pass_id)
         except NotImplementedError:
             cov.skipped["archive"] = cov.skipped.get("archive", 0) + 1  # a zstd layer

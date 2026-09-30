@@ -119,8 +119,9 @@ it:
 (`/users/{id}/mailFolders/{folder}/messages/delta`): the first run reads the
 last `LOOKBACK_DAYS` (`receivedDateTime ge`), later runs only what changed. A
 message's subject and body (as text) are read together; each file attachment
-with the core's readers (Word, Excel and PowerPoint files, CSV, JSON, text,
-Parquet, ORC and Avro by column). An attachment larger than `MAX_OBJECT_BYTES`
+with the core's readers, by what its bytes are (Word, Excel and PowerPoint
+files, PDFs, CSV, JSON, text, Parquet, ORC and Avro by column, and zip, tar,
+gzip, bzip2 and xz archives entry by entry). An attachment larger than `MAX_OBJECT_BYTES`
 is counted as `too_large`; an attached item or a link to a cloud file as
 `linked_item` (the file's own store reads it). A deleted message drops its
 findings.
@@ -152,9 +153,12 @@ library) and each OneDrive is read from its delta query
 (`/drives/{id}/root/delta`): the first run lists every file, later runs only
 what changed. A file is read with ranged GETs of its content (Graph redirects
 to a pre-authenticated download URL; the app's token is not sent there), by
-the core's readers. Media, PDFs, archives and the older binary Office formats
-are counted by kind; a rights-managed (sensitivity-label encrypted) Office
-file is `encrypted`. A deleted file drops its findings. At most
+the core's readers, by what its bytes are, not its name (a renamed file is
+read by content and its findings say `disguised`): Office files and PDFs as
+their text, zip, tar, gzip, bzip2 and xz archives entry by entry (7z is
+`archive_unsupported`); media and the older binary Office formats are counted
+by kind; a rights-managed (sensitivity-label encrypted) Office file is
+`encrypted`. A deleted file drops its findings. At most
 `FILES_MAX_PER_DRIVE` files a drive a run.
 
 ### Teams (opt-in)
@@ -464,6 +468,7 @@ A SaaS document says `"platform": "saas"` and names its `site`
 | `part` | `message` (a subject and body), `attachment`, `file`, `reply`, `issue` (a Jira issue's text and comments), `page` (a Confluence page's text and comments) |
 | `name` | A file's or attachment's name, masked like a key |
 | `column` | For a table file, the column |
+| `archivePath`, `archivePathMasked`, `archiveEntry` | (1.9) In an archive, the entry's path, masked like a key, and its position when the mask changed it ([FINDINGS.md](FINDINGS.md#archives-pdfs-and-disguised-files-19)) |
 
 A store in the run summary carries `vendor`, `tenantHash` and, for a person's
 store, `ownerHash`. A finding's `link` opens the item in the vendor's own web

@@ -53,7 +53,7 @@ def seed(env: Env) -> None:
     env.put("lex/PaymentBot/2026/09/28/log.jsonl", DOCS["lex-v2-card-spoken"]["content"])
     env.put("export/customers.csv", "name,card_number\n" + "\n".join(CARDS.values()))
     env.put("notes/clean.txt", "Nothing sensitive here. Order 12345 shipped.")
-    env.put("recordings/call.wav", b"RIFF\x00\x00fake-audio")
+    env.put("recordings/call.wav", b"RIFF\x24\x00\x00\x00WAVEfmt fake-audio")
 
 
 def recent(minutes: int) -> int:

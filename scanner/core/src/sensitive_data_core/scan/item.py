@@ -9,7 +9,8 @@ Works out what the item is and reads it the right way:
   its key path and the document's own labels as context.
 - CSV: the header row is context for every row. Plain text and log lines as
   they are.
-- Binary formats are not read; the caller counts them by kind.
+- What an object is (binary, an archive, a document) is decided by its bytes
+  before it gets here (`scan/sniff.py`, `scan/objects.py`).
 
 The result is counts and offsets per class. Values exist only in memory for
 the item being scanned; distinct values are counted by keyed hash.
@@ -35,15 +36,6 @@ from ..parsers import (
     parse_lex_records,
 )
 
-SKIP_BY_EXT = {
-    **dict.fromkeys(["wav", "mp3", "ogg", "opus", "flac", "m4a", "aac"], "audio"),
-    **dict.fromkeys(["webm", "mp4", "mov", "mkv"], "video"),
-    **dict.fromkeys(["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp"], "image"),
-    **dict.fromkeys(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"], "document"),
-    **dict.fromkeys(["zip", "tar", "tgz", "7z", "bz2"], "archive"),
-    **dict.fromkeys(["parquet", "avro", "orc", "bin", "exe", "so", "class", "jar"], "binary"),
-}
-
 REDACTION_MARKER = re.compile(
     r"\[(?:PII|SSN|CREDIT_DEBIT_NUMBER|CREDIT_DEBIT_CVV|CREDIT_DEBIT_EXPIRY|PIN"
     r"|BANK_ACCOUNT_NUMBER|BANK_ROUTING|NAME|ADDRESS|EMAIL|PHONE|DATE_TIME|AGE|USERNAME"
@@ -54,18 +46,6 @@ _HAS_CANDIDATE = re.compile(
 )
 MAX_LEAVES = 20_000
 MAX_DOC_CONTEXT = 2_000
-
-
-def classify_key(key: str) -> tuple[bool, bool, str | None]:
-    """(read it, gunzip it, else the kind of file it is)."""
-    lower = key.lower()
-    gz = lower.endswith(".gz")
-    base = lower[:-3] if gz else lower
-    ext = base.rsplit(".", 1)[1] if "." in base.rsplit("/", 1)[-1] else ""
-    kind = SKIP_BY_EXT.get(ext)
-    if kind:
-        return False, False, kind
-    return True, gz, None
 
 
 def looks_binary(data: bytes) -> bool:

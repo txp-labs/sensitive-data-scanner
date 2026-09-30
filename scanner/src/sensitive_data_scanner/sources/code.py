@@ -5,11 +5,13 @@
 default branch's head (`GetBranch`) is walked folder by folder (`GetFolder`,
 at most `CODECOMMIT_MAX_FOLDERS`), and a stable sample of its files, spread
 across the tree by a hash of the path, is read (`GetFile`, at most
-`CODECOMMIT_MAX_FILES`, each up to `MAX_OBJECT_BYTES`). Binary files and the
-kinds S3 skips (images, archives, ...) are counted, not read; Word, Excel and
-PowerPoint's Open XML files are read as their text by the core's reader, as
-S3 reads them (`scan/office.py`), up to `MAX_INFLATED_BYTES`. A finding names
-the repository and the file's path. A pass resumes across runs, and starts
+`CODECOMMIT_MAX_FILES`, each up to `MAX_OBJECT_BYTES`), by the core's reader
+(`scan/objects.py`), as S3 reads them: by what the file's bytes are, not its
+name, so audio, video, images and binary files are counted, not read; Word,
+Excel and PowerPoint files, PDFs and archives (zip, tar, gzip, bzip2, xz) are
+read as their text and by entry, up to `MAX_INFLATED_BYTES` inflated. A
+finding names the repository and the file's path (and, in an archive, the
+entry's: `archivePath`). A pass resumes across runs, and starts
 over when the branch moves. Nothing is pushed or merged; the role denies it.
 
 **S3 directory buckets** (`s3_directory`): `ListDirectoryBuckets`, then each
@@ -26,14 +28,12 @@ import secrets
 import urllib.parse
 from typing import Any
 
-from sensitive_data_core.adapter import Budget, FindingStore, SourceRun, class_findings
+from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.coverage import Discovery, Store, reason_for
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, store_field_resource
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
-from sensitive_data_core.scan.item import ItemResult, classify_key, looks_binary, scan_item_text
-from sensitive_data_core.scan.objects import read_object, sample_point
-from sensitive_data_core.scan.office import office_kind
+from sensitive_data_core.scan.objects import planned_bytes, read_object, record, sample_point
 
 from ..discovery import decide, needs_tags
 from ..resources import console_link
@@ -173,13 +173,8 @@ class CodeCommitSource:
             after = int(cursor.get("after") or 0) if same else 0
             paths = self._files(commit, cov)
             cov.listed = len(paths)
-            readable = []
-            for p in paths:
-                read_it, _, kind = classify_key(p)
-                if read_it or office_kind(p) is not None:
-                    readable.append(p)
-                else:
-                    cov.skipped[kind or "binary"] = cov.skipped.get(kind or "binary", 0) + 1
+            # Every file is a candidate: what it is is decided by its bytes, not its name.
+            readable = paths
             # A stable sample spread across the tree: the same files every pass.
             sample = sorted(readable, key=lambda p: (sample_point(p), p))[: self.max_files]
             cov.eligible = len(sample)
@@ -240,49 +235,7 @@ class CodeCommitSource:
             log_event("item.unreadable", source=self.target, error=error_name(err))
             return
         data = bytes(r.get("fileContent") or b"")
-        if office_kind(path) is not None:
-            item = self._office(path, data, cov=cov, budget=budget, detector=detector)
-            if item is None:
-                return
-            read = min(len(data), self.max_bytes)
-        else:
-            if len(data) > self.max_bytes:
-                data = data[: self.max_bytes]
-                cov.partial += 1
-            budget.take(len(data))
-            if looks_binary(data):
-                cov.skipped["binary"] = cov.skipped.get("binary", 0) + 1
-                return
-            text = data.decode("utf-8", errors="replace")
-            item = scan_item_text(path, text, detector)
-            read = len(data)
-        cov.scanned += 1
-        cov.bytes_scanned += read
-        cov.formats[item.format] = cov.formats.get(item.format, 0) + 1
-        cov.test_values += item.test_values
-        cov.suppressed += item.suppressed
-        cov.redaction_markers += item.redaction_markers
-        resource = store_field_resource(
-            service="codecommit", store=self.repository, field=path, read_by="get_file"
-        )
-        for f in class_findings(
-            item.findings, resource, link, item.format, seen_at, facts=self.facts
-        ):
-            merge(store, f"{self.id}\n{path}", f, pass_id)
-
-    def _office(
-        self,
-        path: str,
-        data: bytes,
-        *,
-        cov: Coverage,
-        budget: Budget,
-        detector: Detector,
-    ) -> ItemResult | None:
-        """A `.docx`, `.xlsx` or `.pptx` file's text, by the core's reader over the bytes
-        `GetFile` returned: the zip's directory and text parts, up to `MAX_OBJECT_BYTES`
-        read and `MAX_INFLATED_BYTES` inflated. None when it was counted instead."""
-        budget.take(min(len(data), self.max_bytes))
+        budget.take(planned_bytes(path, len(data), self.max_bytes))
         got = read_object(
             path,
             len(data),
@@ -293,12 +246,19 @@ class CodeCommitSource:
             max_rows=0,
             columnar=False,
         )
-        cov.partial += int(got.partial)
-        if got.skipped is not None or got.item is None:
-            kind = got.skipped or "document"
-            cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
-            return None
-        return got.item
+        findings = record(
+            got,
+            cov,
+            resource_for=lambda _column: store_field_resource(
+                service="codecommit", store=self.repository, field=path, read_by="get_file"
+            ),
+            link=link,
+            seen_at=seen_at,
+            facts=self.facts,
+            offsets=False,
+        )
+        for f in findings or []:
+            merge(store, f"{self.id}\n{path}", f, pass_id)
 
 
 # ------------------------------------------------------------------ S3 directory buckets

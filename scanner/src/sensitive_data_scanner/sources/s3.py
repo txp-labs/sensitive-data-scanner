@@ -15,27 +15,28 @@ coverage says how many were left out. With `max_per_prefix`, at most that
 many objects are read per "directory" (the key up to its last `/`) in a
 pass, and the rest are counted as sampled out: a data lake's thousand
 partition files are represented by the first few of each. An object larger than
-`max_object_bytes` is read up to that size and counted as partial. Audio,
-video, images, PDFs, the older binary Office formats and archives are not
-read; they are counted by kind.
+`max_object_bytes` is read up to that size and counted as partial.
 
-Word, Excel and PowerPoint's Open XML files (`.docx`, `.xlsx`, `.pptx`, and
-`.docm`, `.xlsm`) are read as their text by the core's reader
-(`sensitive_data_core.scan.objects.read_object`, `scan/office.py`), the same
-one the Azure, Google Cloud and SaaS scanners use: the zip's central
-directory and the parts that hold text, through ranged GETs of one object
+Every object is read by the core's reader
+(`sensitive_data_core.scan.objects.read_object`), the same one the Azure,
+Google Cloud and SaaS scanners use, through ranged GETs of one object
 version, up to `max_object_bytes` fetched and `max_inflated_bytes` inflated.
-A rights-managed (encrypted) file is counted as `encrypted`; one that is not
-a readable zip, or whose directory lies past the byte cap, as `document`.
+**What an object is comes from its first bytes, not its key** (#65): a
+Word file named `.jpg` is read as Word and its findings say `disguised`.
+Audio, video and images are counted by kind after one small ranged GET;
+Word, Excel and PowerPoint as their text (a rights-managed one is
+`encrypted`, an older binary one `document`); PDFs as their text layer
+(`pdf_image_only` without one, `encrypted` behind a password); zip, tar,
+gzip, bzip2 and xz archives entry by entry, in memory, nested up to three
+levels, each entry routed like an object and named in its findings
+(`archivePath`); 7z is `archive_unsupported`.
 
-Columnar and data-lake files (Parquet, ORC, Avro, by extension or by magic
-bytes) are read by column (scan/columnar.py): Parquet and ORC through
-ranged GETs, so a large file's footer and first row groups are read without
-the rest, up to `max_rows` rows and `max_object_bytes` bytes. A finding
-names the column. Text compressed with gzip or zstd (`.gz`, `.zst`) is
-inflated first. Parquet, ORC, zstd, and Avro's snappy and zstandard codecs
-need pyarrow (the container image); the Lambda zip counts them as skipped
-`columnar`.
+Columnar and data-lake files (Parquet, ORC, Avro, by magic bytes) are read by
+column (scan/columnar.py): Parquet and ORC through ranged GETs, so a large
+file's footer and first row groups are read without the rest, up to
+`max_rows` rows and `max_object_bytes` bytes. A finding names the column.
+Parquet, ORC, zstd, and Avro's snappy and zstandard codecs need pyarrow (the
+container image); the Lambda zip counts them as skipped `columnar`.
 
 A **catalog table** (a Glue table, `catalog` set) is this source over the
 table's S3 location: its findings also name the database and table, and a
@@ -64,26 +65,25 @@ from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.findings import Coverage, finding_json
 from sensitive_data_core.safety import error_name, is_kms_denial, log_event
-from sensitive_data_core.scan.avro import UnsupportedCodec
 from sensitive_data_core.scan.columnar import (
     TableResult,
-    columnar_kind,
     csv_rows,
     json_rows,
-    needs_pyarrow,
     pyarrow_available,
     scan_rows,
-    scan_table,
-    sniff,
     zstd_text,
 )
 from sensitive_data_core.scan.item import ItemResult, looks_binary, scan_item_text
-from sensitive_data_core.scan.objects import RangeCut, is_rdb, read_object, sample_point, skip_kind
+from sensitive_data_core.scan.objects import (
+    RangeCut,
+    planned_bytes,
+    read_object,
+    record,
+    sample_point,
+)
 from sensitive_data_core.scan.objects import compression as _compression
 from sensitive_data_core.scan.objects import gunzip as _gunzip
 from sensitive_data_core.scan.objects import inner_name as _inner_name
-from sensitive_data_core.scan.office import office_kind
-from sensitive_data_core.scan.raw import printable_text
 
 from ..resources import s3_link, s3_resource
 from .encryption import KeyClassifier, s3_object_facts
@@ -276,49 +276,6 @@ class S3Source:
             return None
         return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
 
-    def _table(
-        self,
-        kind: str,
-        key: str,
-        *,
-        size: int,
-        cov: Coverage,
-        detector: Detector,
-        head: bytes | None,
-    ) -> tuple[TableResult, int, str | None] | None:
-        """Read one columnar object by column. None when this build cannot read it."""
-        if needs_pyarrow(kind) and not self.columnar:
-            self._skip(cov, "columnar")
-            return None
-        if head is not None and len(head) >= size:
-            f: Any = io.BytesIO(head)
-            raw = None
-        else:
-            raw = S3RangeFile(
-                self.client, self.bucket, key, size=size, max_bytes=self.max_object_bytes
-            )
-            f = io.BufferedReader(raw, buffer_size=256 * 1024)
-        try:
-            result = scan_table(kind, f, detector, self.max_rows, self.columnar)
-        except UnsupportedCodec:
-            self._skip(cov, "columnar")
-            return None
-        except Exception:
-            if raw is not None and raw.cut:
-                cov.partial += 1
-                self._skip(cov, "columnar")  # the cap fell before a single batch
-                return None
-            raise
-        if raw is not None:
-            self._headers(raw.headers)
-        if raw is not None and raw.cut:
-            result.partial = True
-        if result.partial:
-            cov.partial += 1
-        read = raw.bytes_read if raw is not None else len(head or b"")
-        version = raw.version_id if raw is not None else None
-        return result, read, version
-
     def run(
         self,
         cursor: dict[str, Any],
@@ -373,12 +330,6 @@ class S3Source:
                         cov.sampled_out += 1
                         start_after = key
                         continue
-                    # Columnar and Office Open XML files are read; the other kinds are counted.
-                    kind = skip_kind(key)
-                    if kind is not None:
-                        cov.skipped[kind] = cov.skipped.get(kind, 0) + 1
-                        start_after = key
-                        continue
                     directory = key.rsplit("/", 1)[0] if "/" in key else ""
                     if self.max_per_prefix:
                         if directory != cur_dir:
@@ -387,7 +338,7 @@ class S3Source:
                             cov.sampled_out += 1
                             start_after = key
                             continue
-                    size = min(obj.get("Size", 0), self.max_object_bytes)
+                    size = planned_bytes(key, obj.get("Size", 0), self.max_object_bytes)
                     if not budget.has(size):
                         cov.backlog = True
                         stop = True
@@ -458,75 +409,14 @@ class S3Source:
         store: FindingStore,
         seen_at: str,
     ) -> None:
+        """One object, read by the core's reader (`read_object`) through ranged GETs of one
+        version: the first GET's version is pinned for the rest, and its encryption headers
+        are the object's. A catalog table's CSV or JSON files are read by its columns."""
         self._object_facts = None
-        if office_kind(key) is not None:
-            self._office(key, size=size, cov=cov, detector=detector, store=store, seen_at=seen_at)
+        if self.serde == "json" or (self.serde == "csv" and self.columns):
+            self._catalog_text(key, size=size, cov=cov, detector=detector, store=store,
+                               seen_at=seen_at)  # fmt: skip
             return
-        kind = columnar_kind(key)
-        head: bytes | None = None
-        version: str | None = None
-        if kind is None:
-            head, read, version, partial = self._read(key, size, cov)
-            kind = sniff(head) if _compression(key) is None else None
-            if kind is None and is_rdb(key, head):
-                # A Redis snapshot (an ElastiCache or MemoryDB export): its text runs.
-                cov.partial += int(partial)
-                self._record_text(
-                    key,
-                    printable_text(head),
-                    read=read,
-                    version=version,
-                    cov=cov,
-                    detector=detector,
-                    store=store,
-                    seen_at=seen_at,
-                    fmt="rdb",
-                )
-                return
-            if kind is None:
-                if partial:
-                    cov.partial += 1
-                text = self._text(key, head, cov)
-                if text is None:
-                    return
-                self._record_text(
-                    key,
-                    text,
-                    read=read,
-                    version=version,
-                    cov=cov,
-                    detector=detector,
-                    store=store,
-                    seen_at=seen_at,
-                )
-                return
-        got = self._table(kind, key, size=size, cov=cov, detector=detector, head=head)
-        if got is None:
-            return
-        table, read, range_version = got
-        self._record_table(
-            key,
-            table,
-            read=read,
-            version=version or range_version,
-            cov=cov,
-            store=store,
-            seen_at=seen_at,
-        )
-
-    def _office(
-        self,
-        key: str,
-        *,
-        size: int,
-        cov: Coverage,
-        detector: Detector,
-        store: FindingStore,
-        seen_at: str,
-    ) -> None:
-        """A `.docx`, `.xlsx` or `.pptx` object, read as its text by the core's reader through
-        ranged GETs of one version: the first GET's version is pinned for the rest, and its
-        encryption headers are the object's."""
         version: str | None = None
         headers: dict[str, Any] | None = None
 
@@ -557,17 +447,46 @@ class S3Source:
             max_rows=self.max_rows,
             columnar=self.columnar,
         )
-        cov.partial += int(got.partial)
-        if got.skipped is not None or got.item is None:
-            self._skip(cov, got.skipped or "document")
-            return
         self._headers(headers)
-        self._record_item(
+        findings = record(
+            got,
+            cov,
+            resource_for=lambda column: s3_resource(
+                self.bucket, key, version, column=column, catalog=self.catalog
+            ),
+            link=s3_link(self.region, self.bucket, key, version, directory=self.express),
+            seen_at=seen_at,
+            facts=self._facts(),
+            connect=True,
+        )
+        if findings is None:
+            return
+        store.replace_location(f"{self.id}\n{key}", findings)
+
+    def _catalog_text(
+        self,
+        key: str,
+        *,
+        size: int,
+        cov: Coverage,
+        detector: Detector,
+        store: FindingStore,
+        seen_at: str,
+    ) -> None:
+        """A CSV or JSON file of a catalog table, read by the table's columns."""
+        head, read, version, partial = self._read(key, size, cov)
+        if partial:
+            cov.partial += 1
+        text = self._text(key, head, cov)
+        if text is None:
+            return
+        self._record_text(
             key,
-            got.item,
-            read=got.read,
+            text,
+            read=read,
             version=version,
             cov=cov,
+            detector=detector,
             store=store,
             seen_at=seen_at,
         )
