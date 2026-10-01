@@ -8,7 +8,7 @@
 #
 # Synthetic and public values only. Never put a real card number, SSN or any
 # other personal value in this file.
-specVersion: "0.6"
+specVersion: "0.7"
 
 classes:
   us_ssn:
@@ -245,6 +245,20 @@ promptCarryover:
 # many turns before it (any speaker).
 contextWindow:
   turnsBefore: 2
+
+# Timestamps (0.7). A timestamp is never a value, of any class, prompted or not:
+# only a bare date can be a date of birth. Both are matched case-insensitively
+# on the normalized turn (spec/README.md, "Timestamps").
+timestamps:
+  # A date token followed at once by this is a timestamp: T or spaces, a time of
+  # day (h:mm or hh:mm), then optionally seconds (with any fraction, which
+  # normalization has joined to them), am or pm, and a zone (Z, UTC, GMT or an
+  # offset). "2026-09-29T14:36:01.123Z", "09/29/2026 14:36", and RFC 2822's
+  # "Tue, 29 Sep 2026 14:36:01 +0000" once its date is ISO. No digit may follow.
+  timeOfDay: '(?:t|[ \t]+)[0-9]{1,2}:[0-9]{2}(?::[0-9]{2,})*(?:[ \t]*(?:am|pm))?(?:z|[ \t]*(?:utc|gmt)|[ \t]*[+-][0-9]{2}:?[0-9]{2})?(?![0-9])'
+  # A run of this many digits is an epoch time (seconds, milliseconds), never a
+  # dob: it does not take a dob prompt's low-confidence fallback.
+  epochDigits: [10, 13]
 
 # Issuer identification number ranges. The first rule with a matching prefix
 # decides the brand; the number's length must then be one of that rule's

@@ -6,7 +6,7 @@
  * a caller that loads a newer spec itself.
  */
 import { CLASSES_RAW, NORMALIZE_RAW } from './spec.generated.js';
-export const SPEC_VERSION = '0.6';
+export const SPEC_VERSION = '0.7';
 const WS = '[ \\t\\r\\n]+';
 /** What may separate the words of a retry prefix in a turn: whitespace and . , ! ? ; : */
 const RETRY_SEP = '[ \\t\\r\\n.,!?;:]';
@@ -155,6 +155,9 @@ export function parseSpec(classesRaw, normalizeRaw) {
     const carry = isRecord(classesRaw.promptCarryover) ? classesRaw.promptCarryover : {};
     const window = isRecord(classesRaw.contextWindow) ? classesRaw.contextWindow : {};
     const retryPrefixes = strings(classesRaw.retryPrefixes).map((p) => p.toLowerCase());
+    if (!isRecord(classesRaw.timestamps))
+        throw new Error('spec is missing timestamps');
+    const stamps = classesRaw.timestamps;
     return {
         specVersion: SPEC_VERSION,
         classes,
@@ -166,6 +169,8 @@ export function parseSpec(classesRaw, normalizeRaw) {
         contextTurnsBefore: Number(window.turnsBefore ?? 2),
         brands: (classesRaw.cardBrands ?? []).map((b) => parseBrand(b)),
         normalize: parseNormalize(normalizeRaw),
+        timeOfDayRe: new RegExp(String(stamps.timeOfDay), 'iy'),
+        epochDigits: new Set((stamps.epochDigits ?? []).map(Number)),
     };
 }
 let cached = null;

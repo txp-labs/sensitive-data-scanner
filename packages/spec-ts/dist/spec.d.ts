@@ -1,4 +1,4 @@
-export declare const SPEC_VERSION = "0.6";
+export declare const SPEC_VERSION = "0.7";
 export interface Shape {
     digitsMin: number | null;
     digitsMax: number | null;
@@ -66,6 +66,10 @@ export interface Spec {
     contextTurnsBefore: number;
     brands: readonly BrandRule[];
     normalize: NormalizeSpec;
+    /** (0.7) A date token followed at once by a match of this (sticky) is a timestamp: no value. */
+    timeOfDayRe: RegExp;
+    /** (0.7) Digit-run lengths that are epoch times: never dob. */
+    epochDigits: ReadonlySet<number>;
 }
 /** Escape a literal for a RegExp (the same characters Python's re.escape needs here). */
 export declare function escapeRegExp(s: string): string;

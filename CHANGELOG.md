@@ -7,6 +7,21 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Spec
+- **Spec 0.7** ([#101](https://github.com/txp-labs/sensitive-data-scanner/issues/101); every change is listed for
+  consumers in `spec/README.md`, "Changes from 0.6"):
+  - A **timestamp is no value**: a date token followed by a time of day
+    (`timestamps.timeOfDay`: `2026-09-29T14:36:01.123Z`, `2026-09-29 14:36`,
+    RFC 2822 once its date is ISO) is neither a date nor digits to class,
+    prompted or not. In 0.6 "2026-09-29 14:36" after a DOB prompt was `dob`
+    at `high`.
+  - An **epoch time is never `dob`**: a prompted value of 10 or 13 digits
+    (`timestamps.epochDigits`) does not take `dob`'s low-confidence fallback.
+  - `specVersion` is `"0.7"`; the JSON Schemas follow, and the classes schema
+    requires `timestamps`. An implementation of 0.6 refuses the files.
+  - Vectors: sixteen in `vectors/timestamps.jsonl`, near-misses included,
+    passed by the Python engine, the Presidio path and the TypeScript package.
+  - `@txp-labs/sensitive-data-spec`: `SPEC_VERSION` is `'0.7'`; `dist/` is
+    rebuilt. Stugum, which mirrors the spec, needs both rules.
 - **Spec 0.6** ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), from Stugum's adoption of 0.5;
   every change is listed for consumers in `spec/README.md`, "Changes from
   0.5"):
@@ -650,6 +665,33 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
 
 ### Fixed
+- **Timestamps were classed as dates of birth**
+  ([#101](https://github.com/txp-labs/sensitive-data-scanner/issues/101), found by a real-account run over Stugum's
+  DynamoDB run items: about 590 `dob` findings at `high`, every one an
+  ISO-8601 timestamp in `createdAt`, `updatedAt`, `estimatedCostUpdatedAt`,
+  `stepResults[].startedAt`, `stepResults[].endedAt` or
+  `assertions[].evaluatedAt`).
+  - The cause: a DynamoDB attribute took every short string and key name of
+    its map as context. A step's `observedText` ("please enter your date of
+    birth"), a top-level `lastHeardText` and an assertion's name gave DOB
+    context to every timestamp beside them, and a date followed by a time
+    was still a date.
+  - A full timestamp is never `dob`, in stored text or a conversation (spec
+    0.7): a date with a time of day or zone, RFC 2822, epoch seconds or
+    milliseconds.
+  - A field named like a timestamp (ending in `At`, `_at`, `Time`,
+    `timestamp`, `created`, `updated` or `date`, unless a birth name such as
+    `birthDate`) holds no `dob`: DynamoDB attributes, JSON keys, CSV headers
+    and table columns.
+  - Context stays local. A label is at most four words, so a prompt sentence
+    labels no sibling; a configured prompt reaches only its paired keypad
+    entry; a DynamoDB attribute no longer takes its siblings' key names
+    (#84's rule for JSON).
+  - Tests: `tests/test_dob_timestamps.py` reproduces the report with
+    made-up values. The benchmark gains the run items as hard negatives
+    (DynamoDB items and JSON Lines): `dob` precision in stored text at `high`
+    was 0.491 on them before the fix and is 1.000 after (0.486 to 0.978 at
+    `low`).
 - **`M365_SITES` can name a site id and the root site**
   ([#83](https://github.com/txp-labs/sensitive-data-scanner/issues/83), found by the first live SharePoint run).
   - Entries are separated by spaces, newlines or `;`. Commas still work,

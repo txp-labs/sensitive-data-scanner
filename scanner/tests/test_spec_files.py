@@ -43,9 +43,22 @@ def test_spec_file_follows_schema(yaml_name: str, schema_name: str) -> None:
     assert errors == []
 
 
-def test_spec_version_is_0_6() -> None:
-    assert load_yaml("classes.yaml")["specVersion"] == "0.6"
-    assert load_yaml("normalize.yaml")["specVersion"] == "0.6"
+def test_spec_version_is_0_7() -> None:
+    assert load_yaml("classes.yaml")["specVersion"] == "0.7"
+    assert load_yaml("normalize.yaml")["specVersion"] == "0.7"
+
+
+def test_the_time_of_day_makes_a_timestamp_and_no_digit_may_follow() -> None:
+    """Spec 0.7 (#101): what follows a date token to make it a timestamp, on normalized text
+    (a fraction joined to the seconds, a "-05" offset joined to them too)."""
+    stamps = load_yaml("classes.yaml")["timestamps"]
+    rx = re.compile(stamps["timeOfDay"], re.IGNORECASE | re.ASCII)
+    for after in ("T14:36:01123Z", "t14:36", " 14:36", " 2:36 pm", "T14:36:0112305:00",
+                  "T14:36:01+00:00", " 14:36:01 +0000", " 14:36:01 GMT", "T14:36:01"):  # fmt: skip
+        assert rx.match(after), after
+    for after in ("", " at home", " 14", " 14:3", "T", " 14:364111", ":14:36", "-14:36"):
+        assert rx.match(after) is None, after
+    assert sorted(stamps["epochDigits"]) == [10, 13]
 
 
 def test_the_last_four_exclusion_is_one_shared_string() -> None:

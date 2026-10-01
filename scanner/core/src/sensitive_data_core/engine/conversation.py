@@ -137,11 +137,23 @@ def _glued(norm: str, start: int, end: int) -> bool:
     return any(c == "_" or ("a" <= c.lower() <= "z") for c in (before, after) if c)
 
 
-def _tokens(norm: str) -> list[_Token]:
-    dates = date_spans(norm)
+def timestamp_spans(norm: str, time_of_day: re.Pattern[str]) -> list[tuple[int, int]]:
+    """Each date token followed at once by a time of day, with the time (spec 0.7)."""
+    out = []
+    for s, e in date_spans(norm):
+        m = time_of_day.match(norm, e)
+        if m:
+            out.append((s, m.end()))
+    return out
+
+
+def _tokens(norm: str, time_of_day: re.Pattern[str]) -> list[_Token]:
+    stamps = timestamp_spans(norm, time_of_day)
+    dates = [(s, e) for s, e in date_spans(norm) if not any(a <= s and e <= b for a, b in stamps)]
     out = [_Token(s, e, norm[s:e], True) for s, e in dates if not _glued(norm, s, e)]
     for m in re.finditer(r"[0-9]+", norm, re.A):
-        if any(s < m.end() and m.start() < e for s, e in dates):
+        # Inside a date, or a timestamp: no digit of a timestamp is a value.
+        if any(s < m.end() and m.start() < e for s, e in (*dates, *stamps)):
             continue
         if not _glued(norm, m.start(), m.end()):
             out.append(_Token(m.start(), m.end(), m[0], False))
@@ -387,7 +399,12 @@ class _Classifier:
         if other is not None:
             self.result.matches.append(other)
             return
-        self.result.matches.append(self._match(chain.prompted[0], "prompt", "low", chain, None))
+        # The first prompted class, low; never dob for an epoch time's digits (0.7).
+        for name in chain.prompted:
+            if name == "dob" and len(d) in spec.epoch_digits:
+                continue
+            self.result.matches.append(self._match(name, "prompt", "low", chain, None))
+            return
 
     # -------------------------------------------------------- driver
 
@@ -419,7 +436,7 @@ class _Classifier:
             for sp in [s for s, c in self.open.items() if s != turn.speaker and c.answer_window]:
                 self._finish(sp)
             norm = self.norms[idx].text
-            toks = _tokens(norm)
+            toks = _tokens(norm, spec.time_of_day_re)
             begin = turn.begin_ms
             end_ms = turn.end_ms if turn.end_ms is not None else turn.begin_ms
             in_window = turn.channel in n.join_answer_window

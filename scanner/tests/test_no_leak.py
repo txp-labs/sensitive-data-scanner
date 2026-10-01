@@ -1739,7 +1739,9 @@ def test_exceptions_quote_nothing(env: Env, capsys: pytest.CaptureFixture[str]) 
     env.put("stored/a.txt", f"card {CARDS['visa']}")
 
     class Boom(Detector):
-        def analyze_text(self, text: str, context: list[str] | None = None) -> Any:
+        def analyze_text(
+            self, text: str, context: list[str] | None = None, *, name: str | None = None
+        ) -> Any:
             raise ValueError(f"cannot read {text}")
 
     env.detector = Boom.__new__(Boom)

@@ -3,7 +3,7 @@
 How well the scanner finds what it claims to find, and what it reports that it
 should not. Issue [#75](https://github.com/txp-labs/sensitive-data-scanner/issues/75).
 
-- **Corpus:** `scanner/tests/bench_corpus.py` builds 367 realistic, made-up
+- **Corpus:** `scanner/tests/bench_corpus.py` builds 375 realistic, made-up
   documents from one seed, the same bytes every time. No real data, and every
   name is obviously fake ("Testy McTestface").
 - **Scoring:** `scanner/tests/bench_score.py` reads them and scores the result
@@ -33,7 +33,7 @@ The whole benchmark runs in about a second.
 | Office files | 6 each | Word, Excel, PowerPoint |
 | Logs | 10 each, plus 9 archives | app and access logs, Lambda JSON lines, `.tar.gz`, `.gz`, `.bz2` |
 | Data lake | 6 | Parquet (strings, integers, dates, timestamps) |
-| Hard negatives | 17 kinds × 4 | text |
+| Hard negatives | 19 kinds × 4 | text; DynamoDB items and JSON Lines (the run items) |
 
 **Positives** are labeled only where the scanner claims to find them:
 
@@ -57,7 +57,13 @@ into the realistic documents, and each kind also has documents of its own
 - ZIP+4 codes;
 - dates that are not birth dates;
 - masked cards and published test cards;
-- nine-digit ids next to "social media".
+- nine-digit ids next to "social media";
+- call-test run items as Stugum stores them in DynamoDB (#101): ISO-8601
+  timestamps in `createdAt`, `updatedAt`, `stepResults[].startedAt` and the
+  like, an epoch TTL and epoch milliseconds, an HTTP date, and a bot's "please
+  enter your date of birth" beside the step timestamps. Each kind twice: as
+  DynamoDB items (`neg:ddb_item_timestamps`) and as plain JSON Lines
+  (`neg:json_item_timestamps`).
 
 Calls hold the hard cases a real call does:
 
@@ -76,7 +82,9 @@ Calls hold the hard cases a real call does:
   object is read. That is `read_object` (sniffing, archives, PDF, Office,
   Parquet, JSON, CSV, text and the transcript parsers), then `record`, which
   writes the findings. Counts come from each finding's `confidenceCounts`,
-  exactly what a consumer sees.
+  exactly what a consumer sees. A `.ddb.jsonl` document is DynamoDB items,
+  one per line, read as the DynamoDB source reads a table's items
+  (`scan_attributes`, every attribute, nothing configured).
 - **conversation**: every conversation in the corpus, as its parser reads it,
   through the spec's conversation engine (`classify`). This is what Stugum's
   call engine, which implements the same spec, would report.
@@ -168,6 +176,33 @@ beside a value. The change shows in the vectors instead.
 A precision of 1.000 means only that this corpus holds no other false
 positive of the class. Not every trap is in it. The "social media" negatives
 were added on purpose, after a probe of hard negatives turned the bug up.
+
+### After spec 0.7: timestamps are never dates of birth
+
+Issue [#101](https://github.com/txp-labs/sensitive-data-scanner/issues/101).
+A real-account run over Stugum's run items classed about 590 timestamps as
+`dob` at high confidence. The corpus gained the run items above as hard
+negatives; read by the code before the fix, they were 740 `dob` false
+positives at `high` (270 as DynamoDB items, 470 as JSON Lines):
+
+| `dob`, objects | P @low | R @low | F1 @low | P @high | R @high | F1 @high |
+|---|---:|---:|---:|---:|---:|---:|
+| Before (spec 0.6 code, the new corpus) | 0.486 | 1.000 | 0.654 | 0.491 | 1.000 | 0.659 |
+| After | 0.978 | 1.000 | 0.989 | 1.000 | 1.000 | 1.000 |
+
+The causes, all fixed:
+
+- a DOB prompt was a label for its siblings: a DynamoDB attribute took its
+  map's short strings and key names as context, and a JSON value the short
+  strings of every object holding it. A label is now at most four words, a
+  configured prompt reaches only its paired keypad entry, and a DynamoDB
+  attribute no longer takes its siblings' keys;
+- a date followed by a time of day was a date (spec 0.7, `timestamps`);
+- a field named like a timestamp (`createdAt`, `hire_date`) could hold a date
+  of birth; it no longer can, unless its name is a birth name.
+
+Every other class, and the conversation runner, is unchanged; the 16 `dob`
+at `low` are the conversation case below ("born in 1985").
 
 ## Findings
 

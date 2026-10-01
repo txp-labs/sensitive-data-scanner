@@ -123,15 +123,29 @@ function glued(norm: string, start: number, end: number): boolean {
   return isLetterOrUnderscore(norm[start - 1]) || isLetterOrUnderscore(norm[end]);
 }
 
-function tokensOf(norm: string): Token[] {
-  const dates = dateSpans(norm);
+/** Each date token followed at once by a time of day, with the time (spec 0.7). */
+export function timestampSpans(norm: string, timeOfDay: RegExp): [number, number][] {
+  const out: [number, number][] = [];
+  const rx = new RegExp(timeOfDay.source, 'iy');
+  for (const [s, e] of dateSpans(norm)) {
+    rx.lastIndex = e;
+    const m = rx.exec(norm);
+    if (m) out.push([s, e + m[0].length]);
+  }
+  return out;
+}
+
+function tokensOf(norm: string, timeOfDay: RegExp): Token[] {
+  const stamps = timestampSpans(norm, timeOfDay);
+  const dates = dateSpans(norm).filter(([s, e]) => !stamps.some(([a, b]) => a <= s && e <= b));
   const out: Token[] = dates
     .filter(([s, e]) => !glued(norm, s, e))
     .map(([s, e]) => ({ start: s, end: e, text: norm.slice(s, e), isDate: true }));
   for (const m of norm.matchAll(/[0-9]+/g)) {
     const s = m.index;
     const e = s + m[0].length;
-    if (dates.some(([a, b]) => a < e && s < b)) continue;
+    // Inside a date, or a timestamp: no digit of a timestamp is a value.
+    if ([...dates, ...stamps].some(([a, b]) => a < e && s < b)) continue;
     if (!glued(norm, s, e)) out.push({ start: s, end: e, text: m[0], isDate: false });
   }
   return out.sort((a, b) => a.start - b.start);
@@ -394,7 +408,12 @@ class Classifier {
       this.result.matches.push(other);
       return;
     }
-    this.result.matches.push(this.match(chain.prompted[0]!, 'prompt', 'low', chain, null));
+    // The first prompted class, low; never dob for an epoch time's digits (0.7).
+    for (const name of chain.prompted) {
+      if (name === 'dob' && spec.epochDigits.has(d.length)) continue;
+      this.result.matches.push(this.match(name, 'prompt', 'low', chain, null));
+      return;
+    }
   }
 
   private finish(speaker: string): void {
@@ -430,7 +449,7 @@ class Classifier {
       // A keypad answer ends at the next turn of another speaker.
       for (const [sp, c] of [...this.open.entries()]) if (sp !== turn.speaker && c.answerWindow) this.finish(sp);
       const norm = this.norms[idx]!.text;
-      const toks = tokensOf(norm);
+      const toks = tokensOf(norm, spec.timeOfDayRe);
       const begin = turn.beginMs ?? null;
       const endMs = turn.endMs ?? turn.beginMs ?? null;
       const channel = turn.channel ?? null;

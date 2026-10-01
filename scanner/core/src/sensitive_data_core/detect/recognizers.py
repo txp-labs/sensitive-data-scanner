@@ -353,7 +353,10 @@ _MONTH_NUM = {
 
 
 class DateOfBirthRecognizer(EntityRecognizer):
-    """Dates that could be a birth date; kept only next to a DOB word (see SpecContextEnhancer)."""
+    """Dates that could be a birth date; kept only next to a DOB word (see SpecContextEnhancer).
+
+    A date followed by a time of day is a timestamp, never a birth date (spec 0.7's
+    `timestamps.timeOfDay`, here on the stored text as written; #101)."""
 
     _PATTERNS: ClassVar[list[re.Pattern[str]]] = [
         re.compile(r"(?<![0-9])([0-9]{1,2})[/.-]([0-9]{1,2})[/.-]([0-9]{4}|[0-9]{2})(?![0-9])"),
@@ -365,7 +368,8 @@ class DateOfBirthRecognizer(EntityRecognizer):
         ),
     ]
 
-    def __init__(self, now: _dt.date | None = None) -> None:
+    def __init__(self, spec: Spec | None = None, now: _dt.date | None = None) -> None:
+        self.spec = spec or load_spec()
         self.now = now
         super().__init__(supported_entities=[CLASS_TO_ENTITY["dob"]], name="DateOfBirthRecognizer")
 
@@ -396,6 +400,8 @@ class DateOfBirthRecognizer(EntityRecognizer):
         out: list[RecognizerResult] = []
         for idx, rx in enumerate(self._PATTERNS):
             for m in rx.finditer(text):
+                if self.spec.time_of_day_re.match(text, m.end()):
+                    continue  # a timestamp
                 if self._plausible(idx, m):
                     out.append(
                         _result(

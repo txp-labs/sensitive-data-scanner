@@ -134,9 +134,10 @@ SPEC_CONVERSATION_CODE = [
 ]
 # Keys of `spec/classes.yaml`: a class's prompts, and the conversation settings.
 CONVERSATION_CLASS_KEYS = frozenset({"promptPhrases"})
-CONVERSATION_KEYS = ("retryPrefixes", "promptCarryover", "contextWindow")
-# Top-level keys that belong to one class's standalone rules.
-CLASS_EXTRAS = {"card": ("cardBrands",)}
+CONVERSATION_KEYS = ("retryPrefixes", "promptCarryover", "contextWindow", "timestamps")
+# Top-level keys that belong to one class's standalone rules. `timestamps` (0.7) is also
+# the stored-text date-of-birth recognizer's: a date followed by a time of day is none.
+CLASS_EXTRAS = {"card": ("cardBrands",), "dob": ("timestamps",)}
 
 # Where each platform's adapters live.
 SOURCE_DIRS = (

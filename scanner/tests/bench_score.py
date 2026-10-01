@@ -6,6 +6,8 @@ Two runners read the corpus (`bench_corpus.py`):
   read: `read_object` (sniffing, archives, PDF, Office, Parquet, JSON, CSV, text, the
   transcript parsers) and `record`, which writes the findings. Counts come from the
   findings' `confidenceCounts`, exactly what a consumer sees.
+  A `.ddb.jsonl` document is DynamoDB items, one per line, read as the DynamoDB source
+  reads a table's items (`scan_attributes`, every attribute, nothing configured).
 - **conversation**: every conversation in the corpus, as its parser reads it, through
   the spec's conversation engine (`classify`) directly: what Stugum's call engine, which
   implements the same spec, would see.
@@ -42,6 +44,7 @@ from bench_corpus import NOW, SPEC, Doc, build_corpus
 from sensitive_data_core.detect.analyzer import Detector
 from sensitive_data_core.engine.conversation import classify
 from sensitive_data_core.findings import Coverage
+from sensitive_data_core.scan.attributes import AttributeRules, scan_attributes
 from sensitive_data_core.scan.objects import read_object, record
 
 BASELINE = Path(__file__).resolve().parents[2] / "benchmark" / "baseline.json"
@@ -120,9 +123,27 @@ def _resource(name: str) -> Callable[[str | None], dict[str, Any]]:
     return resource
 
 
+def _items(doc: Doc, detector: Detector, out: RunnerResult) -> None:
+    """DynamoDB items, one per line, through the DynamoDB source's attribute reader."""
+    found: Counter[tuple[str, str]] = Counter()
+    blob = ""
+    for line in doc.data.decode().splitlines():
+        result = scan_attributes(json.loads(line), detector, AttributeRules())
+        for path, item in result.by_path.items():
+            for f in item.findings.values():
+                for conf, n in f.confidence_counts.items():
+                    found[(f.cls, conf)] += n
+            blob += path + repr(item)
+    out.leaks += _leaks(doc, blob)
+    out.score(doc, found)
+
+
 def run_objects(docs: list[Doc], detector: Detector) -> RunnerResult:
     out = RunnerResult()
     for doc in docs:
+        if doc.name.endswith(".ddb.jsonl"):
+            _items(doc, detector, out)
+            continue
         data = doc.data
 
         def fetch(start: int, end: int, data: bytes = data) -> bytes:

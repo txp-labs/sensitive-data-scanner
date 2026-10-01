@@ -4,9 +4,9 @@
   "title": "Sensitive-data classes (spec/classes.yaml)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["specVersion", "classes", "retryPrefixes", "promptCarryover", "contextWindow", "cardBrands"],
+  "required": ["specVersion", "classes", "retryPrefixes", "promptCarryover", "contextWindow", "timestamps", "cardBrands"],
   "properties": {
-    "specVersion": { "const": "0.6" },
+    "specVersion": { "const": "0.7" },
     "classes": {
       "type": "object",
       "minProperties": 1,
@@ -31,6 +31,19 @@
       "additionalProperties": false,
       "required": ["turnsBefore"],
       "properties": { "turnsBefore": { "type": "integer", "minimum": 0 } }
+    },
+    "timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeOfDay", "epochDigits"],
+      "properties": {
+        "timeOfDay": { "type": "string", "minLength": 1 },
+        "epochDigits": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "uniqueItems": true
+        }
+      }
     },
     "cardBrands": {
       "type": "array",

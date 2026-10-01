@@ -1,4 +1,4 @@
-# The sensitive-data spec, version 0.6
+# The sensitive-data spec, version 0.7
 
 This directory is a **contract**. Three implementations follow it:
 
@@ -123,8 +123,28 @@ are not matches.
 
 In each normalized turn, the candidate values are:
 
-- the date tokens (ISO and slashed dates, as above); and
-- every maximal run of digits that is not inside a date token.
+- the date tokens (ISO and slashed dates, as above) that do not start a
+  timestamp; and
+- every maximal run of digits that is not inside a date token or a timestamp.
+
+### Timestamps
+
+A **timestamp** (0.7) is a date token followed at once by a match of
+`timestamps.timeOfDay` (case-insensitive, ASCII): `T` or spaces, a time of day
+(`h:mm` or `hh:mm`), then optionally seconds, `am`/`pm` and a zone (`Z`, `UTC`,
+`GMT` or an offset), with no digit after it. It is matched on the normalized
+turn, where a fraction has been joined to the seconds (`01.123` is `01123`)
+and so has a `-05` offset. A timestamp is **no value** of any class, prompted
+or not: neither its date nor any digit in it is a candidate. Only a bare date
+can be a date of birth.
+
+- `2026-09-29T14:36:01.123Z`, `2026-09-29T14:36:01.123-05:00`,
+  `2026-09-29 14:36`, `09/29/2026 2:36 pm` and RFC 2822's
+  `Tue, 29 Sep 2026 14:36:01 +0000` (whose date `spoken_dates_to_iso` has made
+  ISO) are timestamps.
+- `03/14/1985 at home` is a date token: "at" is not a time of day.
+- A run of `timestamps.epochDigits` digits (10 or 13: epoch seconds or
+  milliseconds) is never `dob`: see [Prompted values](#prompted-values).
 
 A token with a letter or `_` directly before or after it is **not** a
 candidate (it is part of an id or a word, like `deadbeef4539…`).
@@ -247,7 +267,9 @@ A value that starts in the prompted customer turn:
   - else, if the unprompted rules below give it another class, that match
     (a valid card after an SSN prompt is a card);
   - else the first prompted class: `low`. This holds for **every** class;
-    there is no per-class setting for it.
+    there is no per-class setting for it. One exception (0.7): a value of
+    `timestamps.epochDigits` digits is never `dob`, so it takes the next
+    prompted class, or nothing when `dob` is the only one.
 - The span is the **whole value**.
 - Test numbers and dummy values are **not** excluded from prompted values.
   A known test card keyed after a card prompt is still a card.
@@ -319,10 +341,10 @@ classed.
 
 ## Stability
 
-- `specVersion` is `"0.6"`.
+- `specVersion` is `"0.7"`.
 - A version has two parts, `major.minor`, and no patch. The findings schema
   requires `specVersion` to match `^[0-9]+\.[0-9]+$`.
-- Before 1.0, a **breaking change bumps the minor version** (0.5 to 0.6).
+- Before 1.0, a **breaking change bumps the minor version** (0.6 to 0.7).
   A change is breaking if it can change the matches for any input, or if it
   changes a file's shape. Every change is listed in the repository
   CHANGELOG.
@@ -333,6 +355,51 @@ classed.
   change to the contract.
 - An implementation declares the `specVersion` it implements and refuses to
   load a spec file with any other version.
+
+## Changes from 0.6
+
+Version 0.7 settles txp-labs/sensitive-data-scanner#101. A real-account run
+over Stugum's call-test run items classed about 590 ISO-8601 timestamps
+(`createdAt`, `stepResults[].startedAt`, ...) as `dob` at high confidence,
+because a bot's "please enter your date of birth" sat beside them. That was the
+stored-text readers (fixed reader-side, outside the spec), but the spec too
+classed a timestamp as a date of birth: "2026-09-29 14:36" after a DOB prompt
+was `dob` at `high`, and the digits of "2026-09-29T14:36:01Z" were `dob` at
+`low`.
+
+Both changes can alter matches, so under [Stability](#stability) this is a
+minor bump. Every rule has vectors, near-misses included, in
+`vectors/timestamps.jsonl`.
+
+1. **A timestamp is no value.**
+   - What changed: a new top-level `timestamps.timeOfDay` in `classes.yaml`.
+     A date token followed by a time of day is a timestamp (see
+     [Timestamps](#timestamps)); neither its date nor its digits are
+     candidates.
+   - "2026-09-29 14:36" after a DOB prompt matches nothing. In 0.6 the date
+     was `dob`, via `prompt`, `high`, and "14" and "36" were `dob` at `low`.
+     RFC 2822's "Tue, 29 Sep 2026 14:36:01 +0000" was the same, with two
+     more `low` matches.
+   - "2026-09-29T14:36:01.123Z" after a DOB prompt matches nothing. In 0.6
+     its date was glued to the `T`, and "36" was `dob` at `low`.
+   - An agent's "I updated your date of birth" (which arms `dob`), then
+     "the change shows 2026-09-29T14:36:01Z", matches nothing.
+   - A bare date is unchanged: "1985-03-14", "03/14/1985" and "03141985"
+     after a DOB prompt are still `dob` at `high`, and in "03/14/1985, it is
+     2026-09-29 14:36 now" the first date is.
+   - A card after a timestamp in the same turn is still a card.
+2. **An epoch time is never `dob`.**
+   - What changed: a new `timestamps.epochDigits` (`[10, 13]`). A prompted
+     value of that many digits that fits no shape does not fall back to
+     `dob` at `low`; it takes the next prompted class, or nothing.
+   - "1759156561123" (epoch milliseconds) and "1759156561" (seconds) after a
+     DOB prompt match nothing. Twelve digits are still `dob` at `low`.
+3. **`specVersion` is `"0.7"`** in both spec files and schemas; the classes
+   schema requires `timestamps`. An implementation of 0.6 refuses them.
+
+For consumers that mirror the spec (Stugum): drop timestamp spans from the
+candidates, and skip `dob` in the low-confidence fallback for epoch-length
+values. `@txp-labs/sensitive-data-spec` does both from `0.7`.
 
 ## Changes from 0.5
 
