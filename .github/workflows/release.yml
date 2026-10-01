@@ -442,8 +442,12 @@ jobs:
       # empty one signs with the region's active version and warns.
       SIGNING_PROFILE_VERSIONS: >-
         {"us-west-2": "arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5",
-        "us-east-1": "", "us-east-2": "", "ca-central-1": "",
-        "eu-west-1": "", "eu-central-1": "", "ap-southeast-2": ""}
+        "us-east-1": "arn:aws:signer:us-east-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/L7DIb2ZBZ4",
+        "us-east-2": "arn:aws:signer:us-east-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/PZV2WCi3TQ",
+        "ca-central-1": "arn:aws:signer:ca-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/3YaXTvD8mv",
+        "eu-west-1": "arn:aws:signer:eu-west-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/EH6K7imV1D",
+        "eu-central-1": "arn:aws:signer:eu-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/DQh5YhLR1O",
+        "ap-southeast-2": "arn:aws:signer:ap-southeast-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/5k6TE113EL"}
       ECR_REPOSITORY: sensitive-data-scanner
     steps:
       - id: gate

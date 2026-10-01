@@ -119,12 +119,12 @@ region**:
 | Region | Signing profile version ARN |
 |---|---|
 | us-west-2 | `arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5` |
-| us-east-1 | filled in after the first deploy of `deploy/artifacts` |
-| us-east-2 | filled in after the first deploy of `deploy/artifacts` |
-| ca-central-1 | filled in after the first deploy of `deploy/artifacts` |
-| eu-west-1 | filled in after the first deploy of `deploy/artifacts` |
-| eu-central-1 | filled in after the first deploy of `deploy/artifacts` |
-| ap-southeast-2 | filled in after the first deploy of `deploy/artifacts` |
+| us-east-1 | `arn:aws:signer:us-east-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/L7DIb2ZBZ4` |
+| us-east-2 | `arn:aws:signer:us-east-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/PZV2WCi3TQ` |
+| ca-central-1 | `arn:aws:signer:ca-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/3YaXTvD8mv` |
+| eu-west-1 | `arn:aws:signer:eu-west-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/EH6K7imV1D` |
+| eu-central-1 | `arn:aws:signer:eu-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/DQh5YhLR1O` |
+| ap-southeast-2 | `arn:aws:signer:ap-southeast-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/5k6TE113EL` |
 
 Each release's `releases/<version>/signing.json` in a region gives the same
 ARN, machine-readably:
