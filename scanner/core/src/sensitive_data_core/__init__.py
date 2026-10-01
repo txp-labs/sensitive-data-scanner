@@ -8,4 +8,4 @@ rule in code (`safety`). Nothing here names a cloud; each platform's package
 (`sensitive_data_scanner` for AWS) plugs its stores in through `adapter.Adapter`.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
