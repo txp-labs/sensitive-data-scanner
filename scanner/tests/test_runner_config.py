@@ -433,27 +433,31 @@ def test_the_azure_job_pulls_before_it_reads_its_settings(
     )
 
 
-# ------------------------------------------------------------------ the AWS key in SSM (#109)
+# ------------------------------------------------------------------ the AWS key's secret (#109)
 
-PARAM = "/sensitive-data-scanner/sds-stack/findings-hmac-key"
+STACK_KEY_ARN = (
+    "arn:aws:secretsmanager:us-west-2:111122223333:secret:"
+    "/sensitive-data-scanner/sds-stack/findings-hmac-key-AbC123"
+)
 
 
-class Ssm:
-    """`ssm:GetParameter` on the one parameter the template grants; anything else is denied."""
+class SecretsManager:
+    """`secretsmanager:GetSecretValue` on the one secret the template grants; anything else
+    is denied."""
 
     def __init__(self, value: str = KEY, fail: str | None = None) -> None:
         self.value = value
         self.fail = fail
         self.calls: list[dict[str, Any]] = []
 
-    def get_parameter(self, **kw: Any) -> dict[str, Any]:
+    def get_secret_value(self, **kw: Any) -> dict[str, Any]:
         self.calls.append(kw)
-        if self.fail or kw["Name"] != PARAM:
+        if self.fail or kw["SecretId"] != STACK_KEY_ARN:
             from botocore.exceptions import ClientError
 
             code = self.fail or "AccessDeniedException"
-            raise ClientError({"Error": {"Code": code, "Message": "made up"}}, "GetParameter")
-        return {"Parameter": {"Name": PARAM, "Type": "SecureString", "Value": self.value}}
+            raise ClientError({"Error": {"Code": code, "Message": "made up"}}, "GetSecretValue")
+        return {"ARN": STACK_KEY_ARN, "SecretString": self.value}
 
 
 @pytest.fixture
@@ -463,18 +467,27 @@ def fresh_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aws_config, "_KEYS", {})
 
 
-def test_the_function_reads_its_key_from_ssm_once_and_signs_with_it(
+def _env(**extra: str) -> dict[str, str]:
+    return {
+        "RESULTS_BUCKET": "r",
+        "FINDINGS_HTTPS_URL": URL,
+        "FINDINGS_HMAC_KEY_SECRET": STACK_KEY_ARN,
+        **extra,
+    }
+
+
+def test_the_function_reads_its_key_secret_once_and_signs_with_it(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fresh_keys: None
 ) -> None:
     m = Mermera({"CONFIG_CONTRACT": "1", "S3_READ_GLACIER_IR": "on"})
     monkeypatch.setattr("urllib.request.urlopen", m)
-    ssm = Ssm()
-    env = {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL, "FINDINGS_HMAC_KEY_PARAM": PARAM}
+    sm = SecretsManager()
+    env = _env()
     for _ in range(2):  # two invokes of one execution environment
-        c = load_config(None, lambda service: ssm, env)
-        assert c.mermera_pull and c.s3_read_glacier_ir
+        c = load_config(None, lambda service: sm, env)
+        assert c.mermera_pull and c.s3_read_glacier_ir and c.own_secret_arn == STACK_KEY_ARN
         assert c.settings_report["configPull"]["status"] == "ok"
-    assert ssm.calls == [{"Name": PARAM, "WithDecryption": True}]  # once per cold start
+    assert sm.calls == [{"SecretId": STACK_KEY_ARN}]  # once per cold start
     header = m.requests[-1].get_header("X-sds-signature")
     t = int(header.split(",")[0].removeprefix("t="))
     assert verify(KEY.encode(), header, f"config:{SITE}".encode(), now=t)
@@ -487,29 +500,39 @@ def test_the_function_reads_its_key_from_ssm_once_and_signs_with_it(
     assert KEY not in capsys.readouterr().out
 
 
-def test_a_key_the_function_cannot_read_fails_the_pull_by_name_only(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fresh_keys: None
+@pytest.mark.parametrize(
+    ("sm", "error"),
+    [
+        (SecretsManager(fail="AccessDeniedException"), "key:AccessDeniedException"),
+        (SecretsManager(fail="ResourceNotFoundException"), "key:ResourceNotFoundException"),
+        (SecretsManager(value="tiny-value"), "key:key_too_short"),
+    ],
+)
+def test_a_key_the_function_cannot_use_fails_the_pull_by_name_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fresh_keys: None,
+    sm: SecretsManager,
+    error: str,
 ) -> None:
     m = Mermera({"S3_READ_GLACIER_IR": "on"})
     monkeypatch.setattr("urllib.request.urlopen", m)
-    env = {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL, "FINDINGS_HMAC_KEY_PARAM": PARAM}
-    c = load_config(None, lambda service: Ssm(fail="AccessDeniedException"), env)
+    c = load_config(None, lambda service: sm, _env())
     assert not c.s3_read_glacier_ir and m.requests == []
-    assert c.settings_report["configPull"] == {
-        "status": "failed",
-        "contract": "1",
-        "error": "key:AccessDeniedException",
-    }
+    assert c.settings_report["configPull"] == {"status": "failed", "contract": "1", "error": error}
     out = capsys.readouterr().out
-    assert '"event":"config.pull_failed"' in out and "made up" not in out
+    assert (
+        '"event":"config.pull_failed"' in out and "made up" not in out and "tiny-value" not in out
+    )
 
 
-def test_the_key_parameter_is_the_templates_own_name_only(fresh_keys: None) -> None:
+def test_the_key_secret_is_the_templates_own_arn_only(fresh_keys: None) -> None:
     env = {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL}
-    with pytest.raises(ValueError, match="FINDINGS_HMAC_KEY_PARAM"):
-        read_config({**env, "FINDINGS_HMAC_KEY_PARAM": "/other/team/secret"})
+    other = "arn:aws:secretsmanager:us-west-2:111122223333:secret:team/db-password-AbC123"
+    with pytest.raises(ValueError, match="FINDINGS_HMAC_KEY_SECRET"):
+        read_config({**env, "FINDINGS_HMAC_KEY_SECRET": other})
     with pytest.raises(ValueError, match="may not set"):
-        load_config({"config": {"FINDINGS_HMAC_KEY_PARAM": PARAM}}, None, env)
+        load_config({"config": {"FINDINGS_HMAC_KEY_SECRET": STACK_KEY_ARN}}, None, env)
 
 
 def test_a_plain_key_still_works_outside_the_template(
@@ -520,4 +543,4 @@ def test_a_plain_key_still_works_outside_the_template(
     c = load_config(
         None, None, {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL, "FINDINGS_HMAC_KEY": KEY}
     )
-    assert c.s3_read_glacier_ir
+    assert c.s3_read_glacier_ir and c.own_secret_arn is None

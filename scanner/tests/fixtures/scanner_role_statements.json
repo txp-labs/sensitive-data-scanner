@@ -1,5 +1,5 @@
 {
- "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request. Changed since fb9097a, deliberately: #94 (iam:PassedToService on the RDS export role also rds.amazonaws.com, which StartExportTask evaluates; kms:Decrypt also through logs.<region>, for log groups under a customer managed key); #105 (an optional allow-list of keys for every kms:Decrypt through a service, KmsAllowedKeyArns; timestream:Select and cassandra:Select under TimestreamRead and KeyspacesRead; the network interfaces Lambda places in the customer's VPC under VpcSubnetIds, as AWSLambdaVPCAccessExecutionRole grants them). #109: with FindingsHmacKey, ssm:GetParameter on the stack's own Mermera key parameter only, and kms:Decrypt through SSM for that parameter only (its PARAMETER_ARN encryption context).",
+ "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request. Changed since fb9097a, deliberately: #94 (iam:PassedToService on the RDS export role also rds.amazonaws.com, which StartExportTask evaluates; kms:Decrypt also through logs.<region>, for log groups under a customer managed key); #105 (an optional allow-list of keys for every kms:Decrypt through a service, KmsAllowedKeyArns; timestream:Select and cassandra:Select under TimestreamRead and KeyspacesRead; the network interfaces Lambda places in the customer's VPC under VpcSubnetIds, as AWSLambdaVPCAccessExecutionRole grants them). #109: with FindingsHmacKey, secretsmanager:GetSecretValue on the stack's own Mermera key secret only, and kms:Decrypt through Secrets Manager for that secret only (its SecretARN encryption context).",
  "statements": [
   {
    "gates": [
@@ -1571,10 +1571,10 @@
     "HasMermeraKey"
    ],
    "statement": {
-    "Action": "ssm:GetParameter",
+    "Action": "secretsmanager:GetSecretValue",
     "Effect": "Allow",
     "Resource": {
-     "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key"
+     "Ref": "MermeraKeySecret"
     },
     "Sid": "ReadOwnMermeraKey"
    }
@@ -1587,17 +1587,17 @@
     "Action": "kms:Decrypt",
     "Condition": {
      "StringEquals": {
-      "kms:EncryptionContext:PARAMETER_ARN": {
-       "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key"
+      "kms:EncryptionContext:SecretARN": {
+       "Ref": "MermeraKeySecret"
       },
       "kms:ViaService": {
-       "Fn::Sub": "ssm.${AWS::Region}.amazonaws.com"
+       "Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"
       }
      }
     },
     "Effect": "Allow",
     "Resource": "*",
-    "Sid": "DecryptOwnMermeraKeyThroughSsm"
+    "Sid": "DecryptOwnMermeraKeyThroughSecretsManager"
    }
   }
  ]

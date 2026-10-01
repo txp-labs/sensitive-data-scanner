@@ -397,10 +397,11 @@ Parameters:
     Description: >-
       The site's HMAC key (32 characters or more), which signs the settings
       pull. It is never put in the function's environment: the stack stores it
-      as an SSM SecureString parameter of its own
-      (/sensitive-data-scanner/<stack>/findings-hmac-key, under the aws/ssm
-      key) and gives the function only that parameter's name
-      (FINDINGS_HMAC_KEY_PARAM) and read access to that one parameter.
+      as a Secrets Manager secret of its own
+      (/sensitive-data-scanner/<stack>/findings-hmac-key, under the
+      aws/secretsmanager key, about $0.40 a month) and gives the function only
+      that secret's ARN (FINDINGS_HMAC_KEY_SECRET) and read access to that one
+      secret.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -429,7 +430,7 @@ Parameters:
     Description: Days to keep findings/runs/<runId>.json documents.
 
 Conditions:
-  # #109: the Mermera site's HMAC key is stored as an SSM SecureString of the stack's own.
+  # #109: the Mermera site's HMAC key is stored as a Secrets Manager secret of the stack's own.
   HasMermeraKey: !Not [!Equals [!Ref FindingsHmacKey, ""]]
   UseImage: !Not [!Equals [!Ref ImageUri, ""]]
   SignedZip: !And
@@ -1606,77 +1607,18 @@ Resources:
                 - !Sub arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbname:*/*
             - !Ref AWS::NoValue
 
-  # The Mermera site's HMAC key (#109, only with FindingsHmacKey): an SSM SecureString under
-  # the aws/ssm key, never an environment variable. CloudFormation cannot make a SecureString
-  # (AWS::SSM::Parameter takes String and StringList only), so a custom resource writes it:
-  # a small function of its own, whose role may put and delete that one parameter and
-  # nothing else. The scanner's role may read that one parameter, and decrypt it only
-  # through SSM and only for it (the PARAMETER_ARN encryption context).
-  MermeraKeyParameter:
-    Type: Custom::SecureStringParameter
+  # The Mermera site's HMAC key (#109, only with FindingsHmacKey): a secret of the stack's own,
+  # under the aws/secretsmanager key, never an environment variable. The scanner's role may
+  # read that one secret, and decrypt it only through Secrets Manager and only for it (its
+  # SecretARN encryption context). The Secrets Manager source never reads it as data
+  # (excluded, scanner_own_credential).
+  MermeraKeySecret:
+    Type: AWS::SecretsManager::Secret
     Condition: HasMermeraKey
     Properties:
-      ServiceToken: !GetAtt MermeraKeyWriter.Arn
       Name: !Sub /sensitive-data-scanner/${AWS::StackName}/findings-hmac-key
-      Value: !Ref FindingsHmacKey
-
-  MermeraKeyWriterRole:
-    Type: AWS::IAM::Role
-    Condition: HasMermeraKey
-    Properties:
-      Description: sensitive-data-scanner - writes the stack's own Mermera key parameter, nothing else
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId }
-      Policies:
-        - PolicyName: own-key-parameter
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: OwnKeyParameterOnly
-                Effect: Allow
-                Action: [ssm:PutParameter, ssm:DeleteParameter]
-                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key
-
-  MermeraKeyWriter:
-    Type: AWS::Lambda::Function
-    Condition: HasMermeraKey
-    Properties:
-      Description: Stores the stack's Mermera key as an SSM SecureString (custom resource)
-      Role: !GetAtt MermeraKeyWriterRole.Arn
-      Runtime: python3.12
-      Handler: index.handler
-      Timeout: 60
-      MemorySize: 128
-      Code:
-        # Logs nothing: its role cannot write logs, and the key is never printed.
-        ZipFile: |
-          import boto3
-          import cfnresponse
-
-          def handler(event, context):
-              props = event.get("ResourceProperties") or {}
-              name = props.get("Name", "")
-              try:
-                  ssm = boto3.client("ssm")
-                  if event["RequestType"] == "Delete":
-                      try:
-                          ssm.delete_parameter(Name=name)
-                      except ssm.exceptions.ParameterNotFound:
-                          pass
-                  else:
-                      ssm.put_parameter(
-                          Name=name, Value=props["Value"], Type="SecureString", Overwrite=True
-                      )
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Name": name}, name, noEcho=True)
-              except Exception as err:
-                  reason = type(err).__name__
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {}, name or "none", reason=reason)
+      Description: sensitive-data-scanner - the Mermera site's HMAC key (signs the settings pull)
+      SecretString: !Ref FindingsHmacKey
 
   MermeraKeyReadPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -1687,16 +1629,16 @@ Resources:
         Statement:
           - Sid: ReadOwnMermeraKey
             Effect: Allow
-            Action: ssm:GetParameter
-            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key
-          - Sid: DecryptOwnMermeraKeyThroughSsm
+            Action: secretsmanager:GetSecretValue
+            Resource: !Ref MermeraKeySecret
+          - Sid: DecryptOwnMermeraKeyThroughSecretsManager
             Effect: Allow
             Action: kms:Decrypt
             Resource: "*"
             Condition:
               StringEquals:
-                kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
-                kms:EncryptionContext:PARAMETER_ARN: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key
+                kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
+                kms:EncryptionContext:SecretARN: !Ref MermeraKeySecret
 
   # The function in the customer's VPC (#105, opt-in): what Lambda needs to place and remove
   # its network interfaces there, as AWSLambdaVPCAccessExecutionRole grants it. Nothing else.
@@ -1810,8 +1752,8 @@ Resources:
           S3_READ_GLACIER_IR: !Ref S3ReadGlacierIr
           S3_RESTORE_ARCHIVED: !Ref S3RestoreArchived
           FINDINGS_HTTPS_URL: !Ref FindingsHttpsUrl
-          # The key's parameter name only (#109): the key itself is never in the environment.
-          FINDINGS_HMAC_KEY_PARAM: !If [HasMermeraKey, !GetAtt MermeraKeyParameter.Name, ""]
+          # The key's secret ARN only (#109): the key itself is never in the environment.
+          FINDINGS_HMAC_KEY_SECRET: !If [HasMermeraKey, !Ref MermeraKeySecret, ""]
           # #109: what this role was granted, so a setting Mermera turns on that needs more
           # is reported gate: iam with its parameter, never tried (docs/mermera-config.md).
           IAM_GRANTS: !Join

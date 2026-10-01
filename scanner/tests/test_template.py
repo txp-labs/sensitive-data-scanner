@@ -254,7 +254,6 @@ def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
         "ReadOwnConfigParameter",
         "ListConfigStores",
         "ReadParameters",
-        "ReadOwnMermeraKey",  # #109: below
     ]
     own = ssm[0]
     assert actions(own) == ["ssm:GetParameter"]
@@ -266,48 +265,68 @@ def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
     assert env["CONFIG_LOCATION"] == {"Ref": "ConfigLocation"}
 
 
-KEY_ARN = {
-    "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter"
-    "/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key"
-}
-
-
-def test_the_mermera_key_is_one_securestring_the_role_alone_reads() -> None:
-    """#109: the Mermera site's HMAC key is the stack's own SSM SecureString. The scanner's
-    role may GetParameter that one parameter (and no other GetParameter but its own config
-    path), and decrypt it only through SSM and only for that parameter."""
+def test_the_mermera_key_is_one_secret_the_role_alone_reads() -> None:
+    """#109: the Mermera site's HMAC key is a Secrets Manager secret of the stack's own, under
+    the aws/secretsmanager key. The scanner's role may read that one secret and decrypt it
+    only through Secrets Manager and only for it; no Deny blocks that read, and no other
+    Allow reads a secret unless SecretsRead is on."""
+    secret = RES["MermeraKeySecret"]
+    assert secret["Type"] == "AWS::SecretsManager::Secret"
+    assert secret["Condition"] == "HasMermeraKey"
+    props = secret["Properties"]
+    assert props["SecretString"] == {"Ref": "FindingsHmacKey"}
+    assert props["Name"] == {
+        "Fn::Sub": "/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key"
+    }
+    assert "KmsKeyId" not in props  # the aws/secretsmanager key
     by_sid = {s["Sid"]: s for s in statements() if "Sid" in s}
     read = by_sid["ReadOwnMermeraKey"]
-    assert actions(read) == ["ssm:GetParameter"] and read["Resource"] == KEY_ARN
+    assert actions(read) == ["secretsmanager:GetSecretValue"]
+    assert read["Resource"] == {"Ref": "MermeraKeySecret"}
     assert gates()["ReadOwnMermeraKey"] == ["HasMermeraKey"]
-    decrypt = by_sid["DecryptOwnMermeraKeyThroughSsm"]
+    decrypt = by_sid["DecryptOwnMermeraKeyThroughSecretsManager"]
     assert actions(decrypt) == ["kms:Decrypt"]
     assert decrypt["Condition"] == {
         "StringEquals": {
-            "kms:ViaService": {"Fn::Sub": "ssm.${AWS::Region}.amazonaws.com"},
-            "kms:EncryptionContext:PARAMETER_ARN": KEY_ARN,
+            "kms:ViaService": {"Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"},
+            "kms:EncryptionContext:SecretARN": {"Ref": "MermeraKeySecret"},
         }
     }
-    assert gates()["DecryptOwnMermeraKeyThroughSsm"] == ["HasMermeraKey"]
-    singular = [
+    readers = [
         s["Sid"]
         for s in statements()
-        if s["Effect"] == "Allow" and "ssm:GetParameter" in actions(s)
+        if s["Effect"] == "Allow" and "secretsmanager:GetSecretValue" in actions(s)
     ]
-    assert singular == ["ReadOwnConfigParameter", "ReadOwnMermeraKey"]
-    # The Denies stay as they were: the role still never writes a parameter.
-    denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
-    assert {"ssm:PutParameter", "ssm:DeleteParameter*"} <= denied
-    assert not [a for a in ALLOWED if a in ("ssm:PutParameter", "ssm:DeleteParameter")]
+    assert sorted(readers) == [
+        "NamedSecretsOnly",
+        "ReadMqUserSecrets",
+        "ReadOwnMermeraKey",
+        "ReadSecretValues",
+    ]
+    assert gates()["ReadSecretValues"] == ["SecretsValues"]
+    assert gates()["NamedSecretsOnly"] == ["DataApi"]
+    assert gates()["ReadMqUserSecrets"] == ["MqReads"]
+    # The Denies stay as they were, and none of them touches the scanner's own read.
+    denies = [s for s in statements() if s["Effect"] == "Deny"]
+    denied = {a for s in denies for a in actions(s)}
+    assert {"secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret"} <= denied
+    for s in denies:
+        for a in actions(s):
+            assert not re.fullmatch(a.replace("*", ".*"), "secretsmanager:GetSecretValue"), a
+            assert not re.fullmatch(a.replace("*", ".*"), "kms:Decrypt"), a
+    # Nothing else is made for it: no custom resource, no function or role of its own.
+    kinds = {r["Type"] for r in RES.values()}
+    assert not [k for k in kinds if k.startswith("Custom::")]
+    assert [n for n, r in RES.items() if r["Type"] == "AWS::Lambda::Function"] == ["Function"]
 
 
 def test_the_mermera_key_never_reaches_the_functions_environment() -> None:
     env = RES["Function"]["Properties"]["Environment"]["Variables"]
     assert "FINDINGS_HMAC_KEY" not in env
-    assert env["FINDINGS_HMAC_KEY_PARAM"] == {
-        "Fn::If": ["HasMermeraKey", {"Fn::GetAtt": ["MermeraKeyParameter", "Name"]}, ""]
+    assert env["FINDINGS_HMAC_KEY_SECRET"] == {
+        "Fn::If": ["HasMermeraKey", {"Ref": "MermeraKeySecret"}, ""]
     }
-    # The key parameter is used by the custom resource and the condition, nothing else.
+    # The key parameter is used by the secret and the condition, nothing else.
     refs: list[str] = []
 
     def walk(node: Any, where: str) -> None:
@@ -324,31 +343,9 @@ def test_the_mermera_key_never_reaches_the_functions_environment() -> None:
         walk(r, name)
     walk(SCANNER["Conditions"], "Conditions")
     walk(SCANNER["Outputs"], "Outputs")
-    assert sorted(refs) == ["Conditions", "MermeraKeyParameter"]
-    assert SCANNER["Parameters"]["FindingsHmacKey"]["NoEcho"] is True
-    resource = RES["MermeraKeyParameter"]
-    assert resource["Type"] == "Custom::SecureStringParameter"
-    assert resource["Properties"]["Value"] == {"Ref": "FindingsHmacKey"}
-    assert resource["Properties"]["Name"] == {
-        "Fn::Sub": "/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key"
-    }
-
-
-def test_the_key_writer_writes_that_one_parameter_and_logs_nothing() -> None:
-    role = RES["MermeraKeyWriterRole"]
-    assert role["Condition"] == "HasMermeraKey"
-    props = role["Properties"]
-    assert "ManagedPolicyArns" not in props and "RoleName" not in props
-    (policy,) = props["Policies"]
-    (stmt,) = policy["PolicyDocument"]["Statement"]
-    assert stmt["Effect"] == "Allow"
-    assert sorted(actions(stmt)) == ["ssm:DeleteParameter", "ssm:PutParameter"]
-    assert stmt["Resource"] == KEY_ARN
-    fn = RES["MermeraKeyWriter"]["Properties"]
-    assert fn["Role"] == {"Fn::GetAtt": ["MermeraKeyWriterRole", "Arn"]}
-    code = fn["Code"]["ZipFile"]
-    assert 'Type="SecureString"' in code and "KeyId" not in code  # the aws/ssm key
-    assert "print(" not in code and "logging" not in code and "noEcho=True" in code
+    assert sorted(refs) == ["Conditions", "MermeraKeySecret"]
+    param = SCANNER["Parameters"]["FindingsHmacKey"]
+    assert param["NoEcho"] is True and param["AllowedPattern"] == "^$|^.{32,}$"
 
 
 def test_the_export_role_writes_only_the_exports_prefix() -> None:

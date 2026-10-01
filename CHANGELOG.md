@@ -35,12 +35,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   Mermera's value, then the default; the document records each setting's value
   and source (`settingsSource`) and how the pull went (`configPull`). The AWS
   function pulls too when `FindingsHttpsUrl` and `FindingsHmacKey` are set (its
-  findings still go to the bus); the template stores that key as an SSM
-  SecureString of the stack's own (a custom resource whose role writes that
-  one parameter only), the function's role may read and decrypt that one
-  parameter only, and the function gets only its name
-  (`FINDINGS_HMAC_KEY_PARAM`), reading the key once per cold start into
-  memory. A setting whose read needs a grant the
+  findings still go to the bus); the template stores that key as a Secrets
+  Manager secret of the stack's own (about $0.40 a month), the function's role
+  may read and decrypt that one secret only, the function gets only its ARN
+  (`FINDINGS_HMAC_KEY_SECRET`) and reads the key once per cold start into
+  memory, and the Secrets Manager source never reads that secret as data
+  (`excluded.scanner_own_credential`). A setting whose read needs a grant the
   template did not make (`IAM_GRANTS`) stays off and is reported `gate: iam`
   with the template parameter to set, never silently and never tried.
 

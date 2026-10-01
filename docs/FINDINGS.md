@@ -957,7 +957,7 @@ coverage gap is visible rather than silent.
 | `api` | (1.6) Cosmos DB: the account's API, `sql` (NoSQL), `mongodb`, `cassandra`, `gremlin` or `table`; only NoSQL and a MongoDB vCore cluster are read |
 | `networkRestricted` | (1.6) An Azure store that admits only selected networks or private endpoints; when the scanner is not among them it is the `network` gap |
 | `writeGrants` | (1.4) The databases runner: the write privileges the database user holds, by name (`superuser`, `table_write`, `INSERT`, `db_datawriter`, `MODIFY`, ...), when the store is refused as `db_user_can_write`; (1.5) for Amazon MQ, `console_access`, `queue_write`, `queue_admin`, `no_authorization_map` or `configuration_unreadable`, when refused as `user_can_write` |
-| `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`) |
+| `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`; (1.13) `scanner_own_credential`, the secret holding the scanner's own Mermera key, never read as data and not a gap) |
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind

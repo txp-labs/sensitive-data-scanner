@@ -406,7 +406,7 @@ def apply_mermera(
     """Pull Mermera's settings for this runner (when it pushes to Mermera) and apply them.
     The push URL and key are read as the runner reads them (`FINDINGS_HTTPS_URL`, and
     `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE`); the runner still checks them itself.
-    A runner that holds its key elsewhere (AWS: an SSM SecureString, read once per cold
+    A runner that holds its key elsewhere (AWS: a Secrets Manager secret, read once per cold
     start) passes it as `key`, or the name of the error that kept it from it (`key_error`:
     the pull is then `failed`, never silently skipped)."""
     url = (env.get("FINDINGS_HTTPS_URL") or "").strip() or None

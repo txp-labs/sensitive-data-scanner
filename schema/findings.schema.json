@@ -958,10 +958,10 @@
                 "additionalProperties": { "type": "integer", "minimum": 0 }
               },
               "excluded": {
-                "description": "Parameters or secrets not read, by reason: the deny or allow rules, unreadable tags, or SecureString with SSM_DECRYPT off (1.3).",
+                "description": "Parameters or secrets not read, by reason: the deny or allow rules, unreadable tags, or SecureString with SSM_DECRYPT off (1.3); self, the scanner's own configuration parameters; (1.13, #109) scanner_own_credential, the secret holding the scanner's own Mermera key, never read as data and never a gap.",
                 "type": "object",
                 "propertyNames": {
-                  "enum": ["denied", "not_allowed", "tags_unreadable", "secure_string", "self"]
+                  "enum": ["denied", "not_allowed", "tags_unreadable", "secure_string", "self", "scanner_own_credential"]
                 },
                 "additionalProperties": { "type": "integer", "minimum": 1 }
               },
