@@ -15,8 +15,8 @@ leave it**: where, what kind, how many and how sure. Never a value.
   anywhere, and SaaS (Microsoft 365, Google Workspace, Slack, Jira and
   Confluence).
 
-> **Status: early.** Released: **v0.4.0** (1 Oct 2026), which includes the
-> 0.3.0 that was prepared and never published. Proven on real accounts so
+> **Status: early.** Released: **v0.4.1** (1 Oct 2026), the first signed
+> release (v0.4.0 included the 0.3.0 that was prepared and never published). Proven on real accounts so
 > far: whole-account runs in two development AWS accounts (S3, CloudWatch
 > Logs, Lambda configuration, SSM, X-Ray, Step Functions and DynamoDB read
 > for real, with no values in the output), and one SharePoint site in a test
@@ -115,7 +115,10 @@ Jira and Confluence have no detection of their own to import: scanner only.
   a SaaS secret is read from a mounted file, never an environment variable.
 - **Reproducible releases.** Dependencies are locked with hashes, base images
   are pinned by digest, and each release carries SBOMs and SHA-256 checksums.
-  **Releases are not yet signed** ([docs/RELEASING.md](docs/RELEASING.md)).
+  **Releases are signed** from 0.4.1: the images with cosign (keyless, with
+  signed SBOM attestations), the Lambda zip with AWS Signer, so Lambda can
+  enforce code signing, and the npm package with provenance
+  ([Verifying a release](docs/RELEASING.md#verifying-a-release)).
 - A threat model is being written; it will be linked here.
 
 ## Efficiency
@@ -155,10 +158,15 @@ long enough for the CLI to retry it
 
 Every release publishes the images (`ghcr.io/txp-labs/sensitive-data-scanner`,
 and `-databases`, `-azure`, `-gcp` and `-saas`) and a Lambda zip
-([docs/RELEASING.md](docs/RELEASING.md)).
+([docs/RELEASING.md](docs/RELEASING.md)). The signed zip and the Lambda image
+are also in every approved AWS region, where Lambda can take them directly:
+`s3://txp-labs-sensitive-data-scanner-<region>/releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip`
+and `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:<version>`
+([Where the code is](docs/RELEASING.md#where-the-code-is)).
 The detection is also a Python library, and the spec a zero-dependency
 TypeScript package for redacting a live call in memory
-([packages/spec-ts](packages/spec-ts/README.md), not on npm yet):
+([packages/spec-ts](packages/spec-ts/README.md), on npm as
+`@txp-labs/sensitive-data-spec`):
 
 ```python
 from sensitive_data_core.detect.analyzer import Detector
@@ -188,7 +196,7 @@ All the documentation: [docs/README.md](docs/README.md).
 | Detection | Every vector in `vectors/`, through the spec engine, through Presidio, and through the TypeScript package, which must agree |
 
 Not yet measured: throughput and cold start at scale. Not yet built: the
-event-driven mode, and signed releases. Release notes:
+event-driven mode. Release notes:
 [CHANGELOG.md](CHANGELOG.md) and [docs/release-notes/](docs/release-notes).
 
 ## Contributing

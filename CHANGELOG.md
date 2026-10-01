@@ -6,7 +6,31 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-01
+
 ### Feature
+- **Signed releases, hosted in every approved AWS region** ([#108](https://github.com/txp-labs/sensitive-data-scanner/issues/108)):
+  - The Lambda zip is signed with AWS Signer (profile
+    `TxpLabsSensitiveDataScanner`, version ARN
+    `arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5`)
+    and published, write-once, at
+    `s3://txp-labs-sensitive-data-scanner-<region>/releases/<version>/` in
+    us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-central-1
+    and ap-southeast-2; the signed zip is also attached to the GitHub
+    Release.
+  - The Lambda image is copied, same digest, to ECR in the txp-labs-artifacts
+    account and replicated to the same regions, pullable by any account's
+    Lambda.
+  - Every GHCR image is signed with cosign (keyless, GitHub OIDC) and its
+    SPDX SBOM attached as a signed attestation.
+  - `@txp-labs/sensitive-data-spec` is published from the release workflow by
+    npm trusted publishing, with provenance and no npm token.
+  - `deploy/scanner.yaml` (and `estate-stackset.yaml`) take
+    `CodeSigningProfileVersionArn`: with the zip, the function gets a code
+    signing config that enforces that profile version.
+  - `deploy/artifacts/`: the hosting itself (buckets, access logs, ECR and
+    its replication, the GitHub OIDC provider and the release role, which
+    only `release.yml` at a `v*` tag can assume), with `deploy.sh`.
 - **Every deliberate limitation is documented, with a setting**
   ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)):
   [docs/limitations.md](docs/limitations.md) lists, on every platform, what is
@@ -70,6 +94,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
 - [docs/limitations.md](docs/limitations.md), and each guide's settings and
   coverage tables name the new settings and defaults
   ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)).
+- [docs/RELEASING.md](docs/RELEASING.md): where the code is in each region,
+  the signing profile ARN for Lambda code signing, and how to verify the
+  cosign signatures, the zip and the npm provenance ([#108](https://github.com/txp-labs/sensitive-data-scanner/issues/108)).
 
 ## 0.4.0 — 2026-10-01
 

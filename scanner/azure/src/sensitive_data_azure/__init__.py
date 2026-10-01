@@ -9,4 +9,4 @@ contract, budgets, sampling and the readers are the core's
 (`sensitive_data_core`); Azure's SDKs are imported here and nowhere else.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"

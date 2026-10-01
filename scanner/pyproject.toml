@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner"
-version = "0.4.0"
+version = "0.4.1"
 description = "Find card numbers, US SSNs and other sensitive data in your own cloud storage and logs, reporting findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"

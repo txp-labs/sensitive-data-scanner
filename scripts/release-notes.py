@@ -8,6 +8,7 @@ then the images' digests.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -21,6 +22,33 @@ def section(version: str) -> str:
     if not m:
         raise SystemExit("no CHANGELOG section for this version")
     return m[1].strip()
+
+
+REGIONS = (
+    "us-east-1",
+    "us-east-2",
+    "us-west-2",
+    "ca-central-1",
+    "eu-west-1",
+    "eu-central-1",
+    "ap-southeast-2",
+)
+SIGNING_PROFILE_VERSION_ARN = (
+    "arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5"
+)
+
+
+def signed_zip(version: str) -> str:
+    """The AWS line, only when the release workflow's aws-publish job ran (AWS_PUBLISHED=true)."""
+    if os.environ.get("AWS_PUBLISHED") != "true":
+        return "- The Lambda zip was not signed or published to S3 in this release (AWS publishing not configured)\n"
+    name = f"sensitive-data-scanner-{version}-lambda-python3.12-x86_64.zip"
+    return (
+        f"- The Lambda zip signed with AWS Signer (`{SIGNING_PROFILE_VERSION_ARN}`), "
+        f"attached as `...-signed.zip` and at `s3://txp-labs-sensitive-data-scanner-<region>/releases/{version}/{name}` "
+        f"in {', '.join(REGIONS)}; the Lambda image in ECR at "
+        f"`895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:{version}` in the same regions\n"
+    )
 
 
 def main() -> None:
@@ -77,7 +105,10 @@ def main() -> None:
         "Azure scanner, Google Cloud scanner, SaaS scanner) "
         "attached below\n"
         "- SPDX SBOMs for the zip and the images, and `SHA256SUMS` for every file\n"
-        "- Not signed yet: see docs/RELEASING.md"
+        "- Every image signed with cosign (keyless, this repository's release workflow) "
+        "and its SPDX SBOM attached as a signed attestation\n"
+        f"{signed_zip(version)}"
+        "- How to verify: docs/RELEASING.md, Verifying a release"
     )
     sys.stdout.write("\n\n".join(parts) + "\n")
 

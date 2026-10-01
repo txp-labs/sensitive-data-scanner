@@ -30,7 +30,7 @@ from cfn_templates import (
 from conftest import REPO
 
 DEPLOY = REPO / "deploy"
-TEMPLATES = ["scanner.yaml", "estate-stackset.yaml", "saas/ecs.yaml"]
+TEMPLATES = ["scanner.yaml", "estate-stackset.yaml", "saas/ecs.yaml", "artifacts/artifacts.yaml"]
 SNAPSHOT = Path(__file__).parent / "fixtures" / "scanner_role_statements.json"
 
 P, R, A = Resolver.PARTITION, Resolver.REGION, Resolver.ACCOUNT
@@ -84,6 +84,9 @@ SCENARIOS: dict[str, dict[str, dict[str, Any]]] = {
         "every opt-in off": ALL_OFF,
     },
     "estate-stackset.yaml": {"defaults": {}},
+    # Release hosting (#108): the release role exists in the home region only, so the
+    # resolver's region is made the home region.
+    "artifacts/artifacts.yaml": {"home region": {"HomeRegion": R}},
     "saas/ecs.yaml": {
         "defaults": {
             "PushKeySecretArn": SECRETS.split(",")[0],

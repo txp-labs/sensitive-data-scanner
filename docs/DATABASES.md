@@ -330,7 +330,7 @@ spec:
           securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
           containers:
             - name: scanner
-              image: registry.example.com/sensitive-data-scanner-db:0.4.0
+              image: registry.example.com/sensitive-data-scanner-db:0.4.1
               args: ["scan"]
               env:
                 - {name: SCANNER_SITE, value: prod-cluster-1}
@@ -375,7 +375,7 @@ EventBridge Scheduler (`ecs:RunTask`), in the databases' VPC.
   "containerDefinitions": [
     {
       "name": "scanner",
-      "image": "111122223333.dkr.ecr.us-west-2.amazonaws.com/sensitive-data-scanner-db:0.4.0",
+      "image": "111122223333.dkr.ecr.us-west-2.amazonaws.com/sensitive-data-scanner-db:0.4.1",
       "command": ["scan"],
       "environment": [
         {"name": "SCANNER_SITE", "value": "aws-us-west-2"},
@@ -401,7 +401,7 @@ them only); the task role needs only `events:PutEvents` on the bus.
 ```sh
 az container create \
   --resource-group sds --name sensitive-data-scanner-db \
-  --image registry.example.com/sensitive-data-scanner-db:0.4.0 \
+  --image registry.example.com/sensitive-data-scanner-db:0.4.1 \
   --restart-policy Never --os-type Linux --cpu 1 --memory 2 \
   --vnet sds-vnet --subnet scanner \
   --environment-variables SCANNER_SITE=azure-eastus FINDINGS_HTTPS_URL=https://collector.example.com/findings \

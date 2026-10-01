@@ -3181,7 +3181,7 @@ wheels = [
 
 [[package]]
 name = "sensitive-data-scanner"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -3254,7 +3254,7 @@ lambda = [{ name = "awslambdaric", specifier = ">=4.1.0" }]
 
 [[package]]
 name = "sensitive-data-scanner-azure"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "azure" }
 dependencies = [
     { name = "azure-core" },
@@ -3325,7 +3325,7 @@ provides-extras = ["columnar", "eventgrid", "sql", "postgresql", "mysql", "mongo
 
 [[package]]
 name = "sensitive-data-scanner-core"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "core" }
 dependencies = [
     { name = "presidio-analyzer" },
@@ -3342,7 +3342,7 @@ requires-dist = [
 
 [[package]]
 name = "sensitive-data-scanner-db"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "db" }
 dependencies = [
     { name = "sensitive-data-scanner-core" },
@@ -3401,7 +3401,7 @@ provides-extras = ["postgresql", "mysql", "sqlserver", "oracle", "mongodb", "sno
 
 [[package]]
 name = "sensitive-data-scanner-gcp"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "gcp" }
 dependencies = [
     { name = "google-auth" },
@@ -3441,7 +3441,7 @@ provides-extras = ["columnar", "postgresql", "mysql", "all"]
 
 [[package]]
 name = "sensitive-data-scanner-saas"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "saas" }
 dependencies = [
     { name = "cryptography" },

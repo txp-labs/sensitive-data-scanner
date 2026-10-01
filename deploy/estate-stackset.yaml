@@ -46,6 +46,10 @@ Parameters:
   CodeS3Key:
     Type: String
     Default: ""
+  CodeSigningProfileVersionArn:
+    Type: String
+    Default: ""
+    Description: For the zip, the signing profile version scanner.yaml enforces (empty for none).
   Discover:
     Type: String
     Default: all
@@ -98,6 +102,8 @@ Resources:
           ParameterValue: !Ref CodeS3BucketPrefix
         - ParameterKey: CodeS3Key
           ParameterValue: !Ref CodeS3Key
+        - ParameterKey: CodeSigningProfileVersionArn
+          ParameterValue: !Ref CodeSigningProfileVersionArn
         - ParameterKey: Discover
           ParameterValue: !Ref Discover
         - ParameterKey: DiscoverDeny

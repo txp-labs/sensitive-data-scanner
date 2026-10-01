@@ -2044,11 +2044,25 @@ management or delegated-admin account
    ```
 
 2. **The code, in every region.** Lambda pulls images only from ECR in the
-   function's own region. Push the release image to an ECR repository,
-   replicate it to every region scanned, and give the organization pull
-   access (the repository policy with `aws:PrincipalOrgID`). Pass it as
-   `ImageUri`. The image is recommended because it reads Parquet and ORC.
-   For the zip instead, put it in one bucket per region, named
+   function's own region, and reads a zip only from S3 in its own region.
+   txp-labs hosts both in each approved region (us-east-1, us-east-2,
+   us-west-2, ca-central-1, eu-west-1, eu-central-1, ap-southeast-2;
+   [RELEASING.md, Where the code is](RELEASING.md#where-the-code-is)):
+   - the image, `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner`,
+     which any account's Lambda may pull. Pass it as `ImageUri` (by digest).
+     The image is recommended because it reads Parquet and ORC;
+   - the zip, signed with AWS Signer: `CodeS3BucketPrefix`
+     `txp-labs-sensitive-data-scanner` and `CodeS3Key`
+     `releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip`.
+     To have Lambda refuse any other code, also pass
+     `CodeSigningProfileVersionArn`
+     `arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5`:
+     the template then attaches a code signing config that enforces it.
+
+   To host the code yourself instead, push the release image to your own
+   ECR repository, replicate it to every region scanned, and give the
+   organization pull access (the repository policy with
+   `aws:PrincipalOrgID`); or put the zip in one bucket per region, named
    `<CodeS3BucketPrefix>-<region>`, readable by the organization.
 3. **Trusted access.** Turn on trusted access for CloudFormation StackSets
    in AWS Organizations. To deploy from a delegated administrator, register

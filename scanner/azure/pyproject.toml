@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner-azure"
-version = "0.4.0"
+version = "0.4.1"
 description = "The Azure scanner of the sensitive data scanner: a Container Apps job with a managed identity that discovers and samples a management group's data stores read-only, and reports findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"
