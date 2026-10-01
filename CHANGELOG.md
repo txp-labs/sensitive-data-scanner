@@ -7,6 +7,103 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Feature
+- **Storage classes and tiers, decided from the listing** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)): S3
+  Standard-IA and One Zone-IA are read within the byte budget; **Glacier
+  Instant Retrieval is not**, unless `S3_READ_GLACIER_IR` (`S3ReadGlacierIr`)
+  is on (`notAllowed: archive_class`); Glacier Flexible Retrieval, Deep Archive
+  and the Intelligent-Tiering archive tiers are the gap `needs_restore`, never
+  `unreadable` (a restored copy, from the listing's `RestoreStatus`, is read),
+  with the hook `S3_RESTORE_ARCHIVED` (`s3:RestoreObject` stays denied). Azure
+  Hot and Cool are read; **Cold is not** unless `AZURE_READ_COLD_TIER`
+  (`readColdTier`) is on (`notAllowed: cold_tier`); Archive is the gap
+  `needs_rehydration`, with the hook `AZURE_REHYDRATE_ARCHIVE`
+  (`rehydrateArchive`). Cloud Storage keeps #105's rule (Archive with
+  `GCS_READ_ARCHIVE`). An object left out is never fetched.
+- **A storage-class inventory and a cost-to-scan estimate per store** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)):
+  every S3 bucket, Azure container and Cloud Storage bucket in the run summary
+  has `storageClasses` (objects and bytes per class over the last complete
+  listing pass, whether read and why not) and `costEstimate` (retrieval per GB
+  of the bytes a read fetches, plus one GET per object, for the classes that
+  charge per byte), priced from a dated in-repo table
+  (`storage_prices.json`, written by `scripts/storage_prices.py` from the AWS
+  Price List API, the Azure Retail Prices API and Google's pricing page, per
+  region with a fallback region), never a pricing API at run time.
+- **Settings from Mermera** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)): a runner that pushes to Mermera pulls its
+  settings first (`GET .../config`, signed over `<t>.config:<siteId>`), under
+  the contract in [docs/mermera-config.md](docs/mermera-config.md) (contract 1).
+  Precedence: an explicit environment variable or template parameter, then
+  Mermera's value, then the default; the document records each setting's value
+  and source (`settingsSource`) and how the pull went (`configPull`). The AWS
+  function pulls too when `FindingsHttpsUrl` and `FindingsHmacKey` are set (its
+  findings still go to the bus). A setting whose read needs a grant the
+  template did not make (`IAM_GRANTS`) stays off and is reported `gate: iam`
+  with the template parameter to set, never silently and never tried.
+
+### Changed
+- **The settings Mermera may set are unset by default in the templates** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)):
+  their CloudFormation parameters default to `""` (`ScanMode`, `SsmDecrypt`,
+  `SecretsRead`, `TimestreamRead`, `KeyspacesRead`, `GlueLakeFormation`,
+  `FilesystemTaskEnabled`, `EbsDirectRead`, `SqsDlqRead`, `MskRead`,
+  `EcrRead`, `SageMakerRead`, `OpenSearchServerlessRead`), their Bicep
+  parameters are nullable (`readKeyVaultSecrets`, `readFileShares`,
+  `readLogAnalytics`, `readDiskSnapshots`, `assignCosmosReaderPolicy`), their
+  Terraform variables default to null (`read_spanner`, `read_alloydb`,
+  `read_archive_objects`, `read_sqlserver`, `read_pubsub_dead_letters`,
+  `read_private_logs`, `read_secrets`, `scan_mode`), and the SaaS examples
+  leave `M365_MAIL`, `GWS_ALERT_CENTER` and `LINK_VENDOR_ALERTS_BY_LOCATION`
+  empty. Left unset, Mermera's setting applies, else the same default as
+  before; the grants follow the parameter alone (Timestream, Keyspaces,
+  Spanner and AlloyDB are granted unless set to false; Macie and SDP only with
+  `vendor` or `both`). A value set explicitly keeps working as before.
+- An Azure **Archive-tier blob** is counted as `archived.needs_rehydration`
+  (the store's `gaps.needsRehydration`) instead of `skipped.archive_tier`
+  ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)).
+- How S3, Azure Blob and Cloud Storage stores are listed changed
+  (`listing:s3`, `listing:azure_blob`, `listing:gcs`): the first run after the
+  upgrade lists each store again from the start and reads only what changed.
+
+### Findings schema
+- `schemaVersion` is now **1.13**, additive ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)): on a store,
+  `storageClasses`, `storageClassesPartial`, `costEstimate`, and the gaps
+  `needsRestore` and `needsRehydration`; in coverage, `archived` and the
+  `notAllowed` reason `cold_tier` (and `archive_class` for S3 Glacier Instant
+  Retrieval); on the document, `settingsSource` and `configPull`.
+
+### Docs
+- [docs/mermera-config.md](docs/mermera-config.md): the runner config
+  contract (request, response, precedence, IAM gating, what the run reports,
+  versioning) ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)). [docs/COST.md](docs/COST.md#reading-cold-storage-classes)
+  gains *Reading cold storage classes* (the rules, the prices and their dates,
+  how the estimate is worked out); limitations.md rows A8, A9, B6 and B7, and
+  the guides' settings tables.
+
+## 0.5.0 — pending
+
+### Feature
+- **Signed releases, hosted in every approved AWS region** ([#108](https://github.com/txp-labs/sensitive-data-scanner/issues/108)):
+  - The Lambda zip is signed with AWS Signer in each of us-east-1,
+    us-east-2, us-west-2, ca-central-1, eu-west-1, eu-central-1 and
+    ap-southeast-2, by that region's profile `TxpLabsSensitiveDataScanner`,
+    and published there, write-once, at
+    `s3://txp-labs-sensitive-data-scanner-<region>/releases/<version>/`, with
+    its `.sha256` and a `signing.json` naming the region's profile version
+    ARN (us-west-2:
+    `arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5`).
+  - The Lambda image is copied, same digest, to ECR in the txp-labs-artifacts
+    account and replicated to the same regions, pullable by any account's
+    Lambda.
+  - Every GHCR image is signed with cosign (keyless, GitHub OIDC) and its
+    SPDX SBOM attached as a signed attestation.
+  - `@txp-labs/sensitive-data-spec` is published from the release workflow by
+    npm trusted publishing, with provenance and no npm token.
+  - `deploy/scanner.yaml` (and `estate-stackset.yaml`) take
+    `CodeSigningProfileVersionArn`: with the zip, the function gets a code
+    signing config that enforces that profile version (the function's own
+    region's).
+  - `deploy/artifacts/`: the hosting itself (buckets, access logs, ECR and
+    its replication, a signing profile in each region but us-west-2, the
+    GitHub OIDC provider and the release role, which
+    only `release.yml` at a `v*` tag can assume), with `deploy.sh`.
 - **Every deliberate limitation is documented, with a setting**
   ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)):
   [docs/limitations.md](docs/limitations.md) lists, on every platform, what is
@@ -43,37 +140,6 @@ bumps the minor version. Spec changes are listed under **Spec**.
     `AZURE_FILES_READ`).
   - SaaS `both` mode links a Slack DLP event, which names no kind of data, to
     the scanner's findings at the same item (`linkedBy: location`).
-- **Storage classes and tiers, decided from the listing** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)): S3
-  Standard-IA and One Zone-IA are read within the byte budget; **Glacier
-  Instant Retrieval is not**, unless `S3_READ_GLACIER_IR` (`S3ReadGlacierIr`)
-  is on (`notAllowed: archive_class`); Glacier Flexible Retrieval, Deep Archive
-  and the Intelligent-Tiering archive tiers are the gap `needs_restore`, never
-  `unreadable` (a restored copy, from the listing's `RestoreStatus`, is read),
-  with the hook `S3_RESTORE_ARCHIVED` (`s3:RestoreObject` stays denied). Azure
-  Hot and Cool are read; **Cold is not** unless `AZURE_READ_COLD_TIER`
-  (`readColdTier`) is on (`notAllowed: cold_tier`); Archive is the gap
-  `needs_rehydration`, with the hook `AZURE_REHYDRATE_ARCHIVE`
-  (`rehydrateArchive`). Cloud Storage keeps #105's rule (Archive with
-  `GCS_READ_ARCHIVE`). An object left out is never fetched.
-- **A storage-class inventory and a cost-to-scan estimate per store** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)):
-  every S3 bucket, Azure container and Cloud Storage bucket in the run summary
-  has `storageClasses` (objects and bytes per class over the last complete
-  listing pass, whether read and why not) and `costEstimate` (retrieval per GB
-  of the bytes a read fetches, plus one GET per object, for the classes that
-  charge per byte), priced from a dated in-repo table
-  (`storage_prices.json`, written by `scripts/storage_prices.py` from the AWS
-  Price List API, the Azure Retail Prices API and Google's pricing page, per
-  region with a fallback region), never a pricing API at run time.
-- **Settings from Mermera** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)): a runner that pushes to Mermera pulls its
-  settings first (`GET .../config`, signed over `<t>.config:<siteId>`), under
-  the contract in [docs/mermera-config.md](docs/mermera-config.md) (contract 1).
-  Precedence: an explicit environment variable or template parameter, then
-  Mermera's value, then the default; the document records each setting's value
-  and source (`settingsSource`) and how the pull went (`configPull`). The AWS
-  function pulls too when `FindingsHttpsUrl` and `FindingsHmacKey` are set (its
-  findings still go to the bus). A setting whose read needs a grant the
-  template did not make (`IAM_GRANTS`) stays off and is reported `gate: iam`
-  with the template parameter to set, never silently and never tried.
 
 ### Changed
 - **Defaults that changed** ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)),
@@ -89,26 +155,6 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - Atlassian signs in with an API token unless `ATLASSIAN_AUTH_MODE=oauth`:
     a deployment using OAuth (3LO) must now set it, or the run stops with
     `atlassian_auth_mode`.
-- **The settings Mermera may set are unset by default in the templates** ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)):
-  their CloudFormation parameters default to `""` (`ScanMode`, `SsmDecrypt`,
-  `SecretsRead`, `TimestreamRead`, `KeyspacesRead`, `GlueLakeFormation`,
-  `FilesystemTaskEnabled`, `EbsDirectRead`, `SqsDlqRead`, `MskRead`,
-  `EcrRead`, `SageMakerRead`, `OpenSearchServerlessRead`), their Bicep
-  parameters are nullable (`readKeyVaultSecrets`, `readFileShares`,
-  `readLogAnalytics`, `readDiskSnapshots`, `assignCosmosReaderPolicy`), their
-  Terraform variables default to null (`read_spanner`, `read_alloydb`,
-  `read_archive_objects`, `read_sqlserver`, `read_pubsub_dead_letters`,
-  `read_private_logs`, `read_secrets`, `scan_mode`), and the SaaS examples
-  leave `M365_MAIL`, `GWS_ALERT_CENTER` and `LINK_VENDOR_ALERTS_BY_LOCATION`
-  empty. Left unset, Mermera's setting applies, else the same default as
-  before; the grants follow the parameter alone (Timestream, Keyspaces,
-  Spanner and AlloyDB are granted unless set to false; Macie and SDP only with
-  `vendor` or `both`). A value set explicitly keeps working as before.
-- An Azure **Archive-tier blob** is counted as `archived.needs_rehydration`
-  (the store's `gaps.needsRehydration`) instead of `skipped.archive_tier`.
-- How S3, Azure Blob and Cloud Storage stores are listed changed
-  (`listing:s3`, `listing:azure_blob`, `listing:gcs`): the first run after the
-  upgrade lists each store again from the start and reads only what changed.
 
 ### Findings schema
 - `schemaVersion` is now **1.12**, additive
@@ -116,22 +162,14 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `toggle` on a store (and on a `not_enabled` importer's `vendorCoverage`),
   the store reason `not_implemented`, `linkedBy: location` on a finding, and
   the `notAllowed` reason `archive_class`.
-- `schemaVersion` is now **1.13**, additive ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)): on a store,
-  `storageClasses`, `storageClassesPartial`, `costEstimate`, and the gaps
-  `needsRestore` and `needsRehydration`; in coverage, `archived` and the
-  `notAllowed` reason `cold_tier` (and `archive_class` for S3 Glacier Instant
-  Retrieval); on the document, `settingsSource` and `configPull`.
 
 ### Docs
 - [docs/limitations.md](docs/limitations.md), and each guide's settings and
   coverage tables name the new settings and defaults
   ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)).
-- [docs/mermera-config.md](docs/mermera-config.md): the runner config
-  contract (request, response, precedence, IAM gating, what the run reports,
-  versioning) ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)). [docs/COST.md](docs/COST.md#reading-cold-storage-classes)
-  gains *Reading cold storage classes* (the rules, the prices and their dates,
-  how the estimate is worked out); limitations.md rows A8, A9, B6 and B7, and
-  the guides' settings tables.
+- [docs/RELEASING.md](docs/RELEASING.md): where the code is in each region,
+  each region's signing profile version ARN for Lambda code signing, and how to verify the
+  cosign signatures, the zip and the npm provenance ([#108](https://github.com/txp-labs/sensitive-data-scanner/issues/108)).
 
 ## 0.4.0 — 2026-10-01
 

@@ -1,0 +1,429 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  sensitive-data-scanner release hosting in txp-labs-artifacts (#108). Deployed
+  once per approved region (deploy/artifacts/deploy.sh). Every region gets a
+  release bucket <BucketPrefix>-<region> whose releases/* is publicly readable
+  (s3:GetObject only), its access-log bucket and the Lambda image's ECR
+  repository, and (outside the home region) the AWS Signer profile that signs
+  that region's zip. The home region (us-west-2, whose signing profile was
+  created by hand) also holds the GitHub OIDC provider, the release role and
+  the ECR replication rule.
+
+Parameters:
+  BucketPrefix:
+    Type: String
+    Default: txp-labs-sensitive-data-scanner
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{2,40}$"
+    Description: >-
+      Release buckets are <BucketPrefix>-<region>, the name deploy/scanner.yaml's
+      CodeS3BucketPrefix expects. Access logs go to <BucketPrefix>-logs-<region>.
+  HomeRegion:
+    Type: String
+    Default: us-west-2
+    Description: >-
+      The region of the hand-made signing profile; the role, the OIDC provider
+      and ECR replication live here.
+  SigningProfileName:
+    Type: String
+    Default: TxpLabsSensitiveDataScanner
+    Description: The AWS Signer profile that signs the zip, the same name in every region.
+  CreateSigningProfile:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      true creates the signing profile in this region (never in the home
+      region, where it already exists). false when it was made another way.
+  RepositoryName:
+    Type: String
+    Default: sensitive-data-scanner
+    Description: The Lambda container image's ECR repository, in every region.
+  GitHubOwner:
+    Type: String
+    Default: txp-labs
+  GitHubOwnerId:
+    Type: String
+    Default: "274345004"
+    AllowedPattern: "^[0-9]+$"
+    Description: The organization's numeric id (gh api repos/<owner>/<repo> --jq .owner.id).
+  GitHubRepo:
+    Type: String
+    Default: sensitive-data-scanner
+  GitHubRepoId:
+    Type: String
+    Default: "1395634563"
+    AllowedPattern: "^[0-9]+$"
+    Description: The repository's numeric id (gh api repos/<owner>/<repo> --jq .id).
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: false when the account already has the token.actions.githubusercontent.com provider.
+  PublicImagePull:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      true lets any AWS account's Lambda functions pull the image (pull actions
+      only), as the zip is public. false keeps the repositories private to
+      this account.
+
+Conditions:
+  IsHome: !Equals [!Ref AWS::Region, !Ref HomeRegion]
+  CreateProvider: !And [!Condition IsHome, !Equals [!Ref CreateOidcProvider, "true"]]
+  CreateProfile: !And
+    - !Not [!Condition IsHome]
+    - !Equals [!Ref CreateSigningProfile, "true"]
+  PublicPull: !Equals [!Ref PublicImagePull, "true"]
+
+Resources:
+  # ------------------------------------------------------------------
+  # Every region: access logs, release bucket, ECR repository
+  # ------------------------------------------------------------------
+  AccessLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${BucketPrefix}-logs-${AWS::Region}
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      # Server access logs can only be delivered to an SSE-S3 bucket.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-logs
+            Status: Enabled
+            ExpirationInDays: 400
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  AccessLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3ServerAccessLogs
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${AccessLogBucket.Arn}/*
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::Region}
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt AccessLogBucket.Arn
+              - !Sub ${AccessLogBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  ReleaseBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${BucketPrefix}-${AWS::Region}
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # ACLs stay blocked; only the bucket policy below may be public.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      # SSE-S3: anonymous readers (and Lambda in a customer's account) cannot use a KMS key here.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Versioning: AWS Signer reads its source by version, and nothing published is lost.
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogBucket
+        LogFilePrefix: access/
+        TargetObjectKeyFormat:
+          PartitionedPrefix:
+            PartitionDateSource: EventTime
+      LifecycleConfiguration:
+        Rules:
+          # signing/ holds the unsigned upload and Signer's output in the home region only.
+          - Id: expire-signing-workspace
+            Status: Enabled
+            Prefix: signing/
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  ReleaseBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: AccessLogBucketPolicy
+    Properties:
+      Bucket: !Ref ReleaseBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadReleases
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub ${ReleaseBucket.Arn}/releases/*
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt ReleaseBucket.Arn
+              - !Sub ${ReleaseBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          # A published release is write-once: every put under releases/ must be
+          # conditional (If-None-Match: *), so nothing, the release role
+          # included, can overwrite an object customers already pinned.
+          - Sid: ReleasesWriteOnce
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub ${ReleaseBucket.Arn}/releases/*
+            Condition:
+              "Null":
+                s3:if-none-match: "true"
+
+  ImageRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      # Tags are immutable: a version's tag names one digest forever. In the
+      # other regions, replication writes into this repository.
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      RepositoryPolicyText: !If
+        - PublicPull
+        - Version: "2012-10-17"
+          Statement:
+            # Lambda in another account pulls with both grants: the function's
+            # account, and the Lambda service acting for a function in this region.
+            - Sid: AnyAccountPull
+              Effect: Allow
+              Principal:
+                AWS: "*"
+              Action:
+                - ecr:BatchGetImage
+                - ecr:GetDownloadUrlForLayer
+            - Sid: LambdaServicePull
+              Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action:
+                - ecr:BatchGetImage
+                - ecr:GetDownloadUrlForLayer
+              Condition:
+                StringLike:
+                  aws:sourceArn: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:*:function:*
+        - !Ref AWS::NoValue
+
+  # Each region signs its own zip with its own profile, so a customer's code
+  # signing config names a profile version in the function's region. The home
+  # region's profile (version KFG2ZbbYX5) was created by hand and is not managed here.
+  SigningProfile:
+    Type: AWS::Signer::SigningProfile
+    Condition: CreateProfile
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ProfileName: !Ref SigningProfileName
+      PlatformId: AWSLambda-SHA384-ECDSA
+      SignatureValidityPeriod:
+        Type: MONTHS
+        Value: 135
+
+  # ------------------------------------------------------------------
+  # Home region only: ECR replication, OIDC provider, release role
+  # ------------------------------------------------------------------
+  ImageReplication:
+    Type: AWS::ECR::ReplicationConfiguration
+    Condition: IsHome
+    Properties:
+      ReplicationConfiguration:
+        Rules:
+          - RepositoryFilters:
+              - Filter: !Ref RepositoryName
+                FilterType: PREFIX_MATCH
+            Destinations:
+              - Region: us-east-1
+                RegistryId: !Ref AWS::AccountId
+              - Region: us-east-2
+                RegistryId: !Ref AWS::AccountId
+              - Region: ca-central-1
+                RegistryId: !Ref AWS::AccountId
+              - Region: eu-west-1
+                RegistryId: !Ref AWS::AccountId
+              - Region: eu-central-1
+                RegistryId: !Ref AWS::AccountId
+              - Region: ap-southeast-2
+                RegistryId: !Ref AWS::AccountId
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  ReleaseRole:
+    Type: AWS::IAM::Role
+    Condition: IsHome
+    Properties:
+      RoleName: sensitive-data-scanner-release
+      Description: Assumed by txp-labs/sensitive-data-scanner's release.yml on a v* tag only.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: !Ref GitHubRepoId
+              StringLike:
+                # The repository uses ID-qualified (immutable) subjects:
+                # repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/tags/vX.Y.Z.
+                # Ids, not names, so a renamed or re-created repository cannot match.
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/tags/v*
+                token.actions.githubusercontent.com:ref: refs/tags/v*
+                # Only the release workflow, at a v* tag.
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub ${GitHubOwner}/${GitHubRepo}/.github/workflows/release.yml@refs/tags/v*
+      Policies:
+        - PolicyName: release
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PublishReleases
+                Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-1/releases/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-2/releases/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-west-2/releases/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ca-central-1/releases/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1/releases/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1/releases/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2/releases/*
+              # In each region, Signer reads the unsigned zip by version and
+              # writes the signed one, both under signing/ in that region's
+              # bucket (private, expires in 7 days).
+              - Sid: SigningWorkspace
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-2/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-west-2/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ca-central-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2/signing/*
+              - Sid: SignWithEachRegionsProfile
+                Effect: Allow
+                Action:
+                  - signer:StartSigningJob
+                  - signer:GetSigningProfile
+                Resource:
+                  - !Sub arn:${AWS::Partition}:signer:us-east-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:us-east-2:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:us-west-2:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:ca-central-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:eu-west-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:eu-central-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:ap-southeast-2:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+              - Sid: WatchSigningJobs
+                Effect: Allow
+                Action: signer:DescribeSigningJob
+                Resource:
+                  - !Sub arn:${AWS::Partition}:signer:us-east-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:us-east-2:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:us-west-2:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:ca-central-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:eu-west-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:eu-central-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:ap-southeast-2:${AWS::AccountId}:/signing-jobs/*
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PushTheImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                Resource: !GetAtt ImageRepository.Arn
+
+Outputs:
+  ReleaseBucket:
+    Value: !Ref ReleaseBucket
+  CodeLocation:
+    Description: Where release X.Y.Z's signed Lambda zip is in this region.
+    Value: !Sub s3://${ReleaseBucket}/releases/<X.Y.Z>/sensitive-data-scanner-<X.Y.Z>-lambda-python3.12-x86_64.zip
+  ImageRepositoryUri:
+    Value: !GetAtt ImageRepository.RepositoryUri
+  SigningProfileVersionArn:
+    Condition: CreateProfile
+    Description: >-
+      This region's signing profile version: customers' code signing configs
+      here allow it. Record it in docs/RELEASING.md and release.yml
+      (SIGNING_PROFILE_VERSIONS) after the first deploy.
+    Value: !GetAtt SigningProfile.ProfileVersionArn
+  ReleaseRoleArn:
+    Condition: IsHome
+    Description: Set as the repository variable ARTIFACTS_ROLE_ARN (gh variable set ARTIFACTS_ROLE_ARN -R txp-labs/sensitive-data-scanner --body <arn>).
+    Value: !GetAtt ReleaseRole.Arn

@@ -1,8 +1,12 @@
 # Release on a tag v*: build the Lambda zip, the wheels, the Lambda container
-# image, the databases runner's image, the Azure scanner's image and the Google
-# Cloud scanner's image; attach SPDX
-# SBOMs and SHA-256 checksums to a GitHub Release; push the images to GHCR. No AWS resources, no
-# npm publish, no signing yet (see docs/RELEASING.md).
+# image, the databases runner's image, the Azure scanner's image, the Google
+# Cloud scanner's image and the SaaS scanner's image; push the images to GHCR,
+# signed with cosign (keyless) with their SPDX SBOMs attested; sign the Lambda
+# zip with AWS Signer in every approved region, with that region's profile, and
+# publish it to the region's release bucket, and the Lambda image to ECR
+# (aws-publish, deploy/artifacts/); attach
+# SBOMs and SHA-256 checksums to a GitHub Release; publish the spec package to
+# npm with provenance (docs/RELEASING.md).
 name: Release
 
 on:
@@ -112,6 +116,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # cosign keyless signing: the job's GitHub OIDC token gets a Fulcio certificate.
+      id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -141,6 +147,18 @@ jobs:
           output-file: sensitive-data-scanner-${{ needs.verify.outputs.version }}-image.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image and attest its SBOM (cosign, keyless)
+        # Keyless: a Fulcio certificate for this workflow at this tag, logged in
+        # Rekor. The signature and the SPDX attestation are pushed next to the
+        # image in GHCR (docs/RELEASING.md, Verifying a release).
+        env:
+          IMAGE: ghcr.io/txp-labs/sensitive-data-scanner@${{ steps.push.outputs.digest }}
+          SBOM: sensitive-data-scanner-${{ needs.verify.outputs.version }}-image.spdx.json
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}"
+          cosign attest --yes --type spdxjson --predicate "${SBOM}" "${IMAGE}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-sbom
@@ -158,6 +176,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # cosign keyless signing: the job's GitHub OIDC token gets a Fulcio certificate.
+      id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -188,6 +208,18 @@ jobs:
           output-file: sensitive-data-scanner-databases-${{ needs.verify.outputs.version }}-image.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image and attest its SBOM (cosign, keyless)
+        # Keyless: a Fulcio certificate for this workflow at this tag, logged in
+        # Rekor. The signature and the SPDX attestation are pushed next to the
+        # image in GHCR (docs/RELEASING.md, Verifying a release).
+        env:
+          IMAGE: ghcr.io/txp-labs/sensitive-data-scanner-databases@${{ steps.push.outputs.digest }}
+          SBOM: sensitive-data-scanner-databases-${{ needs.verify.outputs.version }}-image.spdx.json
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}"
+          cosign attest --yes --type spdxjson --predicate "${SBOM}" "${IMAGE}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: db-image-sbom
@@ -205,6 +237,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # cosign keyless signing: the job's GitHub OIDC token gets a Fulcio certificate.
+      id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -235,6 +269,18 @@ jobs:
           output-file: sensitive-data-scanner-azure-${{ needs.verify.outputs.version }}-image.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image and attest its SBOM (cosign, keyless)
+        # Keyless: a Fulcio certificate for this workflow at this tag, logged in
+        # Rekor. The signature and the SPDX attestation are pushed next to the
+        # image in GHCR (docs/RELEASING.md, Verifying a release).
+        env:
+          IMAGE: ghcr.io/txp-labs/sensitive-data-scanner-azure@${{ steps.push.outputs.digest }}
+          SBOM: sensitive-data-scanner-azure-${{ needs.verify.outputs.version }}-image.spdx.json
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}"
+          cosign attest --yes --type spdxjson --predicate "${SBOM}" "${IMAGE}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: azure-image-sbom
@@ -253,6 +299,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # cosign keyless signing: the job's GitHub OIDC token gets a Fulcio certificate.
+      id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -283,6 +331,18 @@ jobs:
           output-file: sensitive-data-scanner-gcp-${{ needs.verify.outputs.version }}-image.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image and attest its SBOM (cosign, keyless)
+        # Keyless: a Fulcio certificate for this workflow at this tag, logged in
+        # Rekor. The signature and the SPDX attestation are pushed next to the
+        # image in GHCR (docs/RELEASING.md, Verifying a release).
+        env:
+          IMAGE: ghcr.io/txp-labs/sensitive-data-scanner-gcp@${{ steps.push.outputs.digest }}
+          SBOM: sensitive-data-scanner-gcp-${{ needs.verify.outputs.version }}-image.spdx.json
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}"
+          cosign attest --yes --type spdxjson --predicate "${SBOM}" "${IMAGE}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gcp-image-sbom
@@ -300,6 +360,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # cosign keyless signing: the job's GitHub OIDC token gets a Fulcio certificate.
+      id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -330,6 +392,18 @@ jobs:
           output-file: sensitive-data-scanner-saas-${{ needs.verify.outputs.version }}-image.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image and attest its SBOM (cosign, keyless)
+        # Keyless: a Fulcio certificate for this workflow at this tag, logged in
+        # Rekor. The signature and the SPDX attestation are pushed next to the
+        # image in GHCR (docs/RELEASING.md, Verifying a release).
+        env:
+          IMAGE: ghcr.io/txp-labs/sensitive-data-scanner-saas@${{ steps.push.outputs.digest }}
+          SBOM: sensitive-data-scanner-saas-${{ needs.verify.outputs.version }}-image.spdx.json
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}"
+          cosign attest --yes --type spdxjson --predicate "${SBOM}" "${IMAGE}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: saas-image-sbom
@@ -337,9 +411,176 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  aws-publish:
+    # The Lambda zip, signed with AWS Signer in every approved region by that
+    # region's profile and published to its bucket at releases/<version>/ (with
+    # its .sha256 and signing.json), and the
+    # Lambda image copied (same digest) to ECR, which replicates it to the same
+    # regions. The account and its role: deploy/artifacts/. Without the
+    # repository variable ARTIFACTS_ROLE_ARN every step after the first is
+    # skipped and the job passes, saying so.
+    name: Sign the Lambda zip, publish it to S3 and the image to ECR
+    needs: [verify, artifacts, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      published: ${{ steps.gate.outputs.enabled }}
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      ARTIFACTS_ACCOUNT: "895544787721"
+      HOME_REGION: us-west-2
+      # Keep in step with deploy/artifacts/deploy.sh and artifacts.yaml.
+      ARTIFACT_REGIONS: us-west-2 us-east-1 us-east-2 ca-central-1 eu-west-1 eu-central-1 ap-southeast-2
+      BUCKET_PREFIX: txp-labs-sensitive-data-scanner
+      SIGNING_PROFILE: TxpLabsSensitiveDataScanner
+      # Each region's profile version, as published in docs/RELEASING.md. us-west-2's
+      # was made by hand; the others come from deploy/artifacts (the stack output
+      # SigningProfileVersionArn) and are pinned here after its first deploy. An
+      # empty one signs with the region's active version and warns.
+      SIGNING_PROFILE_VERSIONS: >-
+        {"us-west-2": "arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5",
+        "us-east-1": "arn:aws:signer:us-east-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/L7DIb2ZBZ4",
+        "us-east-2": "arn:aws:signer:us-east-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/PZV2WCi3TQ",
+        "ca-central-1": "arn:aws:signer:ca-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/3YaXTvD8mv",
+        "eu-west-1": "arn:aws:signer:eu-west-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/EH6K7imV1D",
+        "eu-central-1": "arn:aws:signer:eu-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/DQh5YhLR1O",
+        "ap-southeast-2": "arn:aws:signer:ap-southeast-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/5k6TE113EL"}
+      ECR_REPOSITORY: sensitive-data-scanner
+    steps:
+      - id: gate
+        name: Is AWS publishing configured?
+        env:
+          ROLE_ARN: ${{ vars.ARTIFACTS_ROLE_ARN }}
+        run: |
+          if [ -z "${ROLE_ARN}" ]; then
+            echo "::notice title=AWS publishing skipped::The repository variable ARTIFACTS_ROLE_ARN is not set: the Lambda zip is not signed with AWS Signer or uploaded to the regional buckets, and the image is not copied to ECR (deploy/artifacts/README.md)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "AWS publishing with ${ROLE_ARN}"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: artifacts
+          path: dist
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.ARTIFACTS_ROLE_ARN }}
+          role-session-name: sds-release-${{ github.run_id }}
+          aws-region: ${{ env.HOME_REGION }}
+      - name: Sign the Lambda zip in each region (AWS Signer) and publish it there
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "${ARTIFACTS_ACCOUNT}"
+          name="sensitive-data-scanner-${VERSION}-lambda-python3.12-x86_64.zip"
+          prefix="releases/${VERSION}"
+          work="signing/${VERSION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p signed
+          # releases/ is write-once (the bucket refuses an unconditional put).
+          put_once() { # region bucket key file
+            local out
+            if out=$(aws s3api put-object --region "$1" --bucket "$2" --key "$3" \
+                --body "$4" --if-none-match '*' 2>&1); then
+              echo "s3://$2/$3"
+            elif grep -q PreconditionFailed <<<"${out}"; then
+              echo "::notice::s3://$2/$3 was already published; kept"
+            else
+              echo "${out}"
+              return 1
+            fi
+          }
+          for region in ${ARTIFACT_REGIONS}; do
+            echo "== ${region}"
+            bucket="${BUCKET_PREFIX}-${region}"
+            url="https://${bucket}.s3.${region}.amazonaws.com"
+            # Each region signs with its own profile, the one customers there allow.
+            profile=$(aws signer get-signing-profile --region "${region}" --profile-name "${SIGNING_PROFILE}" --output json)
+            test "$(jq -r .status <<<"${profile}")" = "Active"
+            test "$(jq -r .platformId <<<"${profile}")" = "AWSLambda-SHA384-ECDSA"
+            active=$(jq -r .profileVersionArn <<<"${profile}")
+            expected=$(jq -r --arg r "${region}" '.[$r] // ""' <<<"${SIGNING_PROFILE_VERSIONS}")
+            if [ -z "${expected}" ]; then
+              echo "::warning::${region}: no profile version pinned in SIGNING_PROFILE_VERSIONS; signing with the active ${active}. Pin it here and in docs/RELEASING.md."
+              expected="${active}"
+            elif [ "${expected}" != "${active}" ]; then
+              echo "::error::${region}: the active profile version is ${active}, not the pinned ${expected}"
+              exit 1
+            fi
+            signed="signed/${region}.zip"
+            if curl -fsS -o "${signed}" "${url}/${prefix}/${name}"; then
+              # A re-run keeps what is published, signature and all.
+              echo "::notice::${prefix}/${name} is already published in ${region}; not signing again"
+              continue
+            fi
+            src_version=$(aws s3api put-object --region "${region}" --bucket "${bucket}" \
+              --key "${work}/unsigned.zip" --body "dist/${name}" --query VersionId --output text)
+            source=$(jq -nc --arg b "${bucket}" --arg k "${work}/unsigned.zip" --arg v "${src_version}" \
+              '{s3:{bucketName:$b,key:$k,version:$v}}')
+            destination=$(jq -nc --arg b "${bucket}" --arg p "${work}/signed-" '{s3:{bucketName:$b,prefix:$p}}')
+            job=$(aws signer start-signing-job --region "${region}" --profile-name "${SIGNING_PROFILE}" \
+              --source "${source}" --destination "${destination}" --query jobId --output text)
+            echo "signing job ${job}"
+            aws signer wait successful-signing-job --region "${region}" --job-id "${job}"
+            described=$(aws signer describe-signing-job --region "${region}" --job-id "${job}" --output json)
+            # The job must report the expected profile, version and platform.
+            test "$(jq -r .status <<<"${described}")" = "Succeeded"
+            test "$(jq -r .profileName <<<"${described}")" = "${SIGNING_PROFILE}"
+            test "$(jq -r .profileVersion <<<"${described}")" = "${expected##*/}"
+            test "$(jq -r .platformId <<<"${described}")" = "AWSLambda-SHA384-ECDSA"
+            aws s3api get-object --region "${region}" --bucket "${bucket}" \
+              --key "$(jq -r .signedObject.s3.key <<<"${described}")" "${signed}" > /dev/null
+            sha=$(sha256sum "${signed}" | awk '{print $1}')
+            printf '%s  %s\n' "${sha}" "${name}" > "signed/${region}.sha256"
+            jq -n --arg version "${VERSION}" --arg region "${region}" --arg key "${prefix}/${name}" \
+              --arg sha "${sha}" --arg profile "${SIGNING_PROFILE}" --arg arn "${expected}" --arg job "${job}" \
+              '{version:$version, region:$region, key:$key, sha256:$sha,
+                signingProfileName:$profile, signingProfileVersionArn:$arn,
+                platformId:"AWSLambda-SHA384-ECDSA", signingJobId:$job}' > "signed/${region}.signing.json"
+            cat "signed/${region}.signing.json"
+            put_once "${region}" "${bucket}" "${prefix}/${name}" "${signed}"
+            put_once "${region}" "${bucket}" "${prefix}/${name}.sha256" "signed/${region}.sha256"
+            put_once "${region}" "${bucket}" "${prefix}/signing.json" "signed/${region}.signing.json"
+            # What customers download must be the signed zip, byte for byte.
+            test "$(curl -fsS "${url}/${prefix}/${name}" | sha256sum | awk '{print $1}')" = "${sha}"
+          done
+      - name: Copy the Lambda image to ECR (replicated to every region)
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          registry="${ARTIFACTS_ACCOUNT}.dkr.ecr.${HOME_REGION}.amazonaws.com"
+          existing=$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${VERSION}" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+          if [ -n "${existing}" ] && [ "${existing}" != "None" ]; then
+            if [ "${existing}" = "${DIGEST}" ]; then
+              echo "::notice::${registry}/${ECR_REPOSITORY}:${VERSION} is already ${DIGEST}"
+              exit 0
+            fi
+            # Tags are immutable: a re-run that rebuilt the image cannot replace it.
+            echo "::error::${registry}/${ECR_REPOSITORY}:${VERSION} is ${existing}, not this run's ${DIGEST}"
+            exit 1
+          fi
+          command -v skopeo > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q skopeo; }
+          aws ecr get-login-password --region "${HOME_REGION}" \
+            | skopeo login --username AWS --password-stdin "${registry}"
+          skopeo copy --preserve-digests \
+            "docker://ghcr.io/txp-labs/sensitive-data-scanner@${DIGEST}" \
+            "docker://${registry}/${ECR_REPOSITORY}:${VERSION}"
+          got=$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${VERSION}" --query 'imageDetails[0].imageDigest' --output text)
+          test "${got}" = "${DIGEST}"
+          echo "${registry}/${ECR_REPOSITORY}@${DIGEST}"
+
   release:
     name: GitHub Release
-    needs: [verify, artifacts, image, db-image, azure-image, gcp-image, saas-image]
+    needs: [verify, artifacts, image, db-image, azure-image, gcp-image, saas-image, aws-publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -361,6 +602,8 @@ jobs:
           AZURE_DIGEST: ${{ needs.azure-image.outputs.digest }}
           GCP_DIGEST: ${{ needs.gcp-image.outputs.digest }}
           SAAS_DIGEST: ${{ needs.saas-image.outputs.digest }}
+          # "true" when aws-publish signed the zip and published it to S3 and ECR.
+          AWS_PUBLISHED: ${{ needs.aws-publish.outputs.published }}
         run: |
           set -euo pipefail
           # The estate rollout templates (docs/ARCHITECTURE.md, Estate rollout).
@@ -408,3 +651,47 @@ jobs:
           comm -23 summed served | tee missing
           test ! -s missing
           test "$(comm -13 summed served)" = "SHA256SUMS"
+
+  npm:
+    # @txp-labs/sensitive-data-spec through npm trusted publishing: npm trusts
+    # this repository's release.yml (set on npmjs.com), the job's GitHub OIDC
+    # token stands in for a token, and the package carries provenance. There is
+    # no NPM_TOKEN. Runs once the GitHub Release exists.
+    name: Publish the spec package to npm
+    needs: [verify, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/spec-ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      - name: Install
+        run: |
+          set -euo pipefail
+          # Trusted publishing needs npm 11.5.1 or later.
+          npm --version
+          node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)" \
+            || npm install -g npm@11
+          npm ci --ignore-scripts
+      - name: Publish with provenance
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "@txp-labs/sensitive-data-spec@${VERSION}" version > /dev/null 2>&1; then
+            echo "::notice::@txp-labs/sensitive-data-spec@${VERSION} is already on npm; not publishing again"
+            exit 0
+          fi
+          # prepublishOnly checks the compiled spec, runs every vector and builds dist/.
+          npm publish --provenance --access public

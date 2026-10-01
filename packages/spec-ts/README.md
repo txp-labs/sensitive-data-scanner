@@ -5,9 +5,13 @@ for conversation turns, for **in-memory redaction** in a call engine. It has
 no runtime dependencies. It never logs, stores or returns a detected value:
 results are classes and offsets.
 
-> Not yet published to npm. Until it is, depend on it by git commit. The
-> compiled `dist/` is committed (package managers do not build git
-> dependencies), so pin a commit on `main`, for example with pnpm:
+On npm: `npm install @txp-labs/sensitive-data-spec`. From 0.5.0 every
+release publishes it from this repository's release workflow with npm
+provenance; `npm audit signatures` verifies it.
+
+> Between releases, depend on it by git commit. The compiled `dist/` is
+> committed (package managers do not build git dependencies), so pin a
+> commit on `main`, for example with pnpm:
 >
 > ```json
 > "@txp-labs/sensitive-data-spec": "github:txp-labs/sensitive-data-scanner#<commit>&path:packages/spec-ts"
@@ -68,7 +72,7 @@ These are two separate numbers:
   changes only when a release is cut (`docs/RELEASING.md`). Between
   releases, a commit on `main` keeps the last release's version even when
   the spec under it has moved on. So the package said 0.2.0 at the spec 0.3
-  commit, and it says 0.4.0 from release 0.4.0 on (0.3.0 was prepared and never published).
+  commit, and it says 0.5.0 from release 0.5.0 on (0.3.0 was prepared and never published).
 - **The spec version** (`SPEC_VERSION`, and `specVersion` in the spec files
   and in `loadSpec().specVersion`) follows the **spec**
   (`spec/README.md`, Stability). It changes whenever the contract does, in
