@@ -703,7 +703,7 @@ def run_scan(
         _put_json(clients.s3, bucket, keys.state, new_state)
         _put_json(clients.s3, bucket, f"{keys.runs}{run_id}.json", doc)
         _put_json(clients.s3, bucket, keys.latest, doc)
-        _put_report(clients.s3, bucket, keys.report, doc, config.report_cta)
+        _put_report(clients.s3, bucket, keys.report, doc, config.report_cta_on)
         if config.event_bus_arn and clients.events is not None:
             put_findings_events(clients.events, config.event_bus_arn, doc)
         log_event(

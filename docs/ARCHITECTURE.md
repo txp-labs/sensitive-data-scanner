@@ -133,8 +133,10 @@ One run:
      finding location. The core makes both from the document alone
      (`sensitive_data_core/report.py`, `report_files`), masking every string
      again, so the other runners can write them too; `tests/test_no_leak.py`
-     checks neither holds a value. `REPORT_CTA=false` (`ReportCta`) leaves out
-     the footer's line about Mermera's early access. A report that cannot be
+     checks neither holds a value. The footer's line about Mermera's early
+     access is shown by default and left out automatically when the run is
+     connected to Mermera (`FINDINGS_HTTPS_URL` set, or a settings pull that
+     succeeded); `REPORT_CTA` (`ReportCta`) `true` or `false` overrides both. A report that cannot be
      written is logged (`report.failed`) and does not fail the run. A sample,
      made from the benchmark corpus:
      [docs/sample-report/](sample-report/report.html).

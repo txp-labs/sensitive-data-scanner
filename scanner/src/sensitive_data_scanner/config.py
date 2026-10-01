@@ -598,15 +598,32 @@ class Config:
     # #109: the template's own secret holding the Mermera key (FINDINGS_HMAC_KEY_SECRET): the
     # Secrets Manager source never reads it as data. An ARN, not a value.
     own_secret_arn: str | None = None
-    # #117: the standalone report (findings/report.html and findings.csv) ends with a soft
-    # call to action for Mermera's early access; REPORT_CTA=false leaves it out.
-    report_cta: bool = True
+    # #117: the standalone report (findings/report.html and findings.csv) may end with a soft
+    # call to action for Mermera's early access. REPORT_CTA true or false decides; unset (None)
+    # shows it unless the run is connected to Mermera (`report_cta_on`).
+    report_cta: bool | None = None
     settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def vpc_attached(self) -> bool:
         """Whether the function runs in the customer's VPC (`VPC_SUBNET_IDS`, #105)."""
         return bool(self.vpc_subnet_ids)
+
+    @property
+    def mermera_connected(self) -> bool:
+        """Whether the run is connected to Mermera (#117): `FINDINGS_HTTPS_URL` is set (with
+        its key), or this run's settings pull succeeded."""
+        pull = self.settings_report.get("configPull") or {}
+        return self.mermera_pull or (isinstance(pull, dict) and pull.get("status") == "ok")
+
+    @property
+    def report_cta_on(self) -> bool:
+        """Whether report.html ends with Mermera's early-access line (#117): an explicit
+        `REPORT_CTA` wins; otherwise on, except for a run connected to Mermera, whose
+        customer has no use for an invitation to it."""
+        if self.report_cta is not None:
+            return self.report_cta
+        return not self.mermera_connected
 
     @property
     def exports_prefix(self) -> str:
@@ -794,7 +811,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
             e.get("FINDINGS_HMAC_KEY_SECRET"),
         ),
         own_secret_arn=_own_secret(e.get("FINDINGS_HMAC_KEY_SECRET")),
-        report_cta=_bool(e.get("REPORT_CTA") or "true"),
+        report_cta=_bool(e.get("REPORT_CTA")) if (e.get("REPORT_CTA") or "").strip() else None,
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn

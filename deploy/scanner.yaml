@@ -431,11 +431,13 @@ Parameters:
       ends in a few minutes; what is left is read by the next runs.
   ReportCta:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "true"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
-      REPORT_CTA - findings/report.html ends with a one-line invitation to
-      Mermera's early access. false leaves it out.
+      REPORT_CTA - whether findings/report.html ends with a one-line
+      invitation to Mermera's early access. Empty (the default): yes, unless
+      the scanner is connected to Mermera (FindingsHttpsUrl set, or a settings
+      pull succeeded). true or false: always, or never.
   MemorySize:
     Type: Number
     Default: 3008

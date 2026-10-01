@@ -16,6 +16,7 @@ That neither output holds a value is `test_no_leak.py`'s.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import io
 import json
 import os
@@ -340,11 +341,79 @@ def test_report_cta_false_leaves_the_call_to_action_out(env: Env) -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "on"), [(None, True), ("", True), ("true", True), ("false", False), ("off", False)]
+    ("value", "setting"),
+    [(None, None), ("", None), (" ", None), ("true", True), ("false", False), ("off", False)],
 )
-def test_report_cta_setting(value: str | None, on: bool) -> None:
+def test_report_cta_setting(value: str | None, setting: bool | None) -> None:
     env = {"RESULTS_BUCKET": "b"} | ({"REPORT_CTA": value} if value is not None else {})
-    assert read_config(env).report_cta is on
+    assert read_config(env).report_cta is setting
+
+
+MERMERA_URL = "https://mermera.example/v1/sites/0f0e0d0c-0b0a-4909-8807-060504030201/findings"
+MERMERA_KEY = "k" * 40
+PULL_OK = {"configPull": {"status": "ok", "contract": "1"}}
+PULL_FAILED = {"configPull": {"status": "failed", "contract": "1"}}
+
+
+@pytest.mark.parametrize(
+    ("env", "settings", "on"),
+    [
+        # Not connected: on by default; REPORT_CTA decides when set.
+        ({}, {}, True),
+        ({"REPORT_CTA": "false"}, {}, False),
+        ({"REPORT_CTA": "true"}, {}, True),
+        # FINDINGS_HTTPS_URL set: off by default; an explicit on or off still wins.
+        ({"FINDINGS_HTTPS_URL": MERMERA_URL, "FINDINGS_HMAC_KEY": MERMERA_KEY}, {}, False),
+        (
+            {
+                "FINDINGS_HTTPS_URL": MERMERA_URL,
+                "FINDINGS_HMAC_KEY": MERMERA_KEY,
+                "REPORT_CTA": "true",
+            },
+            {},
+            True,
+        ),
+        (
+            {
+                "FINDINGS_HTTPS_URL": MERMERA_URL,
+                "FINDINGS_HMAC_KEY": MERMERA_KEY,
+                "REPORT_CTA": "false",
+            },
+            {},
+            False,
+        ),
+        # A settings pull that succeeded: off by default; one that failed changes nothing.
+        ({}, PULL_OK, False),
+        ({"REPORT_CTA": "true"}, PULL_OK, True),
+        ({}, PULL_FAILED, True),
+    ],
+)
+def test_the_call_to_action_is_dropped_for_a_run_connected_to_mermera(
+    env: dict[str, str], settings: dict[str, Any], on: bool
+) -> None:
+    config_ = dataclasses.replace(
+        read_config({"RESULTS_BUCKET": "b"} | env), settings_report=settings
+    )
+    assert config_.report_cta_on is on
+
+
+@pytest.mark.parametrize(
+    ("kw", "shown"),
+    [
+        ({}, True),
+        ({"mermera_pull": True}, False),
+        ({"settings_report": PULL_OK}, False),
+        ({"mermera_pull": True, "report_cta": True}, True),
+        ({"report_cta": False}, False),
+    ],
+)
+def test_the_runner_writes_the_call_to_action_only_when_it_should(
+    env: Env, kw: dict[str, Any], shown: bool
+) -> None:
+    env.put("exports/a.csv", f"name,card_number\nx,{CARDS['visa']}\n")
+    assert env.run(config(**kw)) is not None
+    body = env.clients.s3.get_object(Bucket=RESULTS, Key="findings/report.html")["Body"].read()
+    assert (CTA_URL.encode() in body) is shown
 
 
 def test_a_report_that_cannot_be_written_does_not_fail_the_run(

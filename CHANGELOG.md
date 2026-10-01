@@ -29,8 +29,10 @@ bumps the minor version. Spec changes are listed under **Spec**.
     accessibility check (one h1, no skipped heading level, captioned tables
     with scoped headers, link text, WCAG AA contrast in both color schemes
     measured from the page's own CSS).
-  - `REPORT_CTA` (`ReportCta`, on by default) ends the page with one line
-    inviting the reader to Mermera's early access; `false` leaves it out. A
+  - The page ends with one line inviting the reader to Mermera's early
+    access, left out automatically when the run is connected to Mermera
+    (`FINDINGS_HTTPS_URL` set, or a settings pull that succeeded).
+    `REPORT_CTA` (`ReportCta`) `true` or `false` always wins. A
     report that cannot be written is logged (`report.failed`) and does not
     fail the run.
   - `deploy/scanner.yaml` (and `estate-stackset.yaml`) now default to the
