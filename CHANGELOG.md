@@ -11,7 +11,9 @@ bumps the minor version. Spec changes are listed under **Spec**.
   v0.5.0's first release run stopped at `StartSigningJob` with "S3 bucket ...
   not accessible", because Signer checks the source bucket's versioning and
   location, and lists the `signing/` prefix, with the caller's credentials.
-  The role now has those bucket-level reads (the listing only of `signing/`).
+  The role now has those bucket-level reads. The listing is of the whole
+  bucket: Signer's check names no prefix, so an `s3:prefix` condition refused
+  it on the re-run.
 
 ## 0.5.0 — 2026-10-01
 
