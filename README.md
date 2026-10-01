@@ -236,7 +236,7 @@ All the documentation: [docs/README.md](docs/README.md).
 | Azure, Google Cloud | Tested against simulated services; the Bicep and Terraform linted and tested offline. Not yet run in a real tenant or organization |
 | SaaS other than SharePoint (Microsoft 365 mail, OneDrive and Teams; Google Workspace; Slack; Jira; Confluence) | Tested against simulated vendor APIs. Not yet run against a real tenant |
 | SQL Server, Oracle, MongoDB, Snowflake, Databricks | Tested against simulated drivers only |
-| Storage classes and cost to scan (0.5.0), the standalone report and the Launch Stack quick start (0.6.0) | Tested against simulated services only. Not yet proven in a real account: the Launch Stack links work once the v0.6.0 release run has published `scanner.yaml` in each region, and the quick start has not yet been walked end to end in a real account |
+| Storage classes and cost to scan (0.5.0), the standalone report, the Launch Stack quick start and findings retention (0.6.0) | Tested against simulated services only. Not yet proven in a real account: the Launch Stack links work once the v0.6.0 release run has published `scanner.yaml` in each region, and the quick start has not yet been walked end to end in a real account |
 | Detection | Every vector in `vectors/`, through the spec engine, through Presidio, and through the TypeScript package, which must agree |
 
 Not yet measured: throughput and cold start at scale. Not yet built: the
