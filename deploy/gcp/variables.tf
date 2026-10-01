@@ -191,10 +191,14 @@ variable "state_bucket_name" {
   default     = ""
 }
 
-variable "runs_retention_days" {
-  description = "How long findings/runs/<runId>.json documents are kept."
+variable "findings_retention_days" {
+  description = "Days the state bucket keeps per-run files (findings/runs/), including noncurrent versions; 0 keeps them forever (#119; replaces runs_retention_days). Template-only: not settable from Mermera."
   type        = number
   default     = 90
+  validation {
+    condition     = var.findings_retention_days >= 0 && floor(var.findings_retention_days) == var.findings_retention_days
+    error_message = "findings_retention_days is a whole number of days, 0 or more."
+  }
 }
 
 variable "enable_apis" {

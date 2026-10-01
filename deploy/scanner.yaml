@@ -43,7 +43,7 @@ Metadata:
         Parameters: [ScanMode]
       - Label: { default: Delivery and schedule }
         Parameters:
-          [FindingsEventBusArn, ScheduleExpression, MaxBytesPerRun, MemorySize, LogRetentionInDays, RunHistoryDays]
+          [FindingsEventBusArn, ScheduleExpression, MaxBytesPerRun, MemorySize, LogRetentionInDays, FindingsRetentionDays]
       - Label: { default: "The standalone report (findings/report.html, #117)" }
         Parameters: [ReportCta]
       - Label: { default: "Settings from Mermera (docs/mermera-config.md, #109)" }
@@ -447,10 +447,17 @@ Parameters:
     Type: Number
     Default: 30
     AllowedValues: [7, 14, 30, 60, 90, 180, 365]
-  RunHistoryDays:
+  FindingsRetentionDays:
     Type: Number
     Default: 90
-    Description: Days to keep findings/runs/<runId>.json documents.
+    MinValue: 0
+    MaxValue: 36500
+    Description: >-
+      (#119; replaces RunHistoryDays.) Days the results bucket keeps each run's
+      own files under findings/runs/ (and their noncurrent versions). 0 keeps
+      them forever. Never touches the files every run overwrites
+      (findings/latest.json, report.html, findings.csv) or the scanner's state
+      (state/). A template setting, not settable from Mermera.
 
 Mappings:
   # txp-labs' AWS Signer profile version in each region it publishes the signed zip to
@@ -474,6 +481,8 @@ Mappings:
 Conditions:
   # #109: the Mermera site's HMAC key is stored as a Secrets Manager secret of the stack's own.
   HasMermeraKey: !Not [!Equals [!Ref FindingsHmacKey, ""]]
+  # #119: per-run files expire after FindingsRetentionDays; 0 keeps them.
+  ExpireFindings: !Not [!Equals [!Ref FindingsRetentionDays, 0]]
   UseImage: !Not [!Equals [!Ref ImageUri, ""]]
   # A region txp-labs publishes releases to (the ReleaseSigning table).
   ReleaseRegion: !Or
@@ -551,10 +560,18 @@ Resources:
             Prefix: exports/
             ExpirationInDays: 14
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
-          - Id: run-history
-            Status: Enabled
-            Prefix: findings/runs/
-            ExpirationInDays: !Ref RunHistoryDays
+          # #119: only findings/runs/, the per-run files. The files every run overwrites
+          # (findings/latest.json, report.html, findings.csv) sit beside that prefix, and
+          # state/ (cursors, the lock, the object index) outside it, so no rule reaches them.
+          - !If
+            - ExpireFindings
+            - Id: findings-retention
+              Status: Enabled
+              Prefix: findings/runs/
+              ExpirationInDays: !Ref FindingsRetentionDays
+              NoncurrentVersionExpiration:
+                NoncurrentDays: !Ref FindingsRetentionDays
+            - !Ref AWS::NoValue
 
   ResultsBucketPolicy:
     Type: AWS::S3::BucketPolicy

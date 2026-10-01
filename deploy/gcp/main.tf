@@ -221,13 +221,19 @@ resource "google_storage_bucket" "state" {
   public_access_prevention    = "enforced"
   force_destroy               = false
 
-  lifecycle_rule {
-    condition {
-      age            = var.runs_retention_days
-      matches_prefix = ["findings/runs/"]
-    }
-    action {
-      type = "Delete"
+  # #119: per-run files expire. findings/latest.json, report.html and findings.csv (overwritten
+  # by every run) sit beside findings/runs/, and the scanner's state outside it.
+  dynamic "lifecycle_rule" {
+    for_each = var.findings_retention_days > 0 ? [var.findings_retention_days] : []
+    content {
+      condition {
+        age            = lifecycle_rule.value
+        matches_prefix = ["findings/runs/"]
+        with_state     = "ANY"
+      }
+      action {
+        type = "Delete"
+      }
     }
   }
 }
