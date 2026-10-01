@@ -21,7 +21,7 @@ fails if it stops.
 | Asset | Where it lives | Why it matters |
 |---|---|---|
 | **The customer's data**: card numbers, SSNs, ITINs, dates of birth, and everything around them | The customer's stores (S3, logs, tables, databases, SaaS tenants) | The reason the scanner exists. It must never leave the customer's environment |
-| **Findings** | The results bucket (`findings/`), the state container or bucket, pushed events | They name where sensitive data sits. That is a map for an attacker, although it holds no value |
+| **Findings** | The results bucket (`findings/`, including the standalone `report.html` and `findings.csv` of 0.6.0 and any presigned link made to them), the state container or bucket, pushed events | They name where sensitive data sits. That is a map for an attacker, although it holds no value. The report is made from the findings document alone, masks every name again, and loads nothing (its CSP forbids every request): `tests/test_no_leak.py`, `tests/test_report.py` |
 | **Scanner state**: cursors, the lock, the object index, the `index_salt` | `state/` in the results bucket (or the platform's equivalent) | Tampering can hide data from later runs. The salt keys the index's HMACs |
 | **The scanner's identity**: its IAM role, managed identity, service account or SaaS grants | The customer's account or tenant | Broad read access to everything that holds data |
 | **Push credentials**: the HMAC key for the HTTPS sink, `PutEvents` on the consumer bus | Secrets or environment in the customer's account | Whoever holds them can send findings in the customer's name |

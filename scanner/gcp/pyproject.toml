@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner-gcp"
-version = "0.5.0"
+version = "0.6.0"
 description = "The Google Cloud scanner of the sensitive data scanner: a Cloud Run job with its own service account that discovers and samples an organization's or folder's data stores read-only, and reports findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"

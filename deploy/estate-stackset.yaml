@@ -47,7 +47,7 @@ Parameters:
   CodeS3Key:
     Type: String
     # Kept equal to scanner.yaml's default by scripts/launch_stack.py (#117).
-    Default: releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip
+    Default: releases/0.6.0/sensitive-data-scanner-0.6.0-lambda-python3.12-x86_64.zip
   CodeSigningProfileVersionArn:
     Type: String
     Default: release

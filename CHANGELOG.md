@@ -6,6 +6,16 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-01
+
+### Breaking
+- **Retention parameters renamed** ([#119](https://github.com/txp-labs/sensitive-data-scanner/issues/119)):
+  AWS `RunHistoryDays` is now `FindingsRetentionDays` (`scanner.yaml`,
+  `estate-stackset.yaml`), and Terraform `runs_retention_days` is now
+  `findings_retention_days`. Same default, 90 days; `0` now keeps run files
+  forever. A stack update or Terraform configuration that sets the old name
+  must use the new one.
+
 ### Feature
 - **Findings retention** ([#119](https://github.com/txp-labs/sensitive-data-scanner/issues/119)):
   the results store keeps each run's own files (`findings/runs/`, and their
@@ -13,14 +23,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   keeps them forever, with no rule. The current `findings/latest.json`,
   `report.html` and `findings.csv`, which every run overwrites, sit beside
   that prefix and the scanner's state outside it, so they never expire.
-  - AWS: `scanner.yaml` and `estate-stackset.yaml` take `FindingsRetentionDays`.
-    It **replaces `RunHistoryDays`** (the same rule, 90 by default): a stack
-    update that still passes `RunHistoryDays` must pass
-    `FindingsRetentionDays` instead.
+  - AWS: `scanner.yaml` and `estate-stackset.yaml` take `FindingsRetentionDays`
+    (renamed from `RunHistoryDays`; see Breaking).
   - Azure: `findingsRetentionDays` makes a lifecycle management policy on the
     job's state storage account (before, nothing expired there).
-  - Google Cloud: `findings_retention_days` **replaces
-    `runs_retention_days`**, and `0` now means no rule.
+  - Google Cloud: `findings_retention_days` (renamed from
+    `runs_retention_days`; see Breaking), and `0` now means no rule.
   - Template-only: lifecycle is infrastructure, so it is not a setting
     Mermera can change (`docs/limitations.md`, R1-R3; `docs/mermera-config.md`).
     ARCHITECTURE, AZURE, GCP and COST say so.
