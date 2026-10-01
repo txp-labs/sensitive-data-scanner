@@ -352,3 +352,92 @@ def test_the_keyspaces_session_is_tls_and_sigv4(monkeypatch: pytest.MonkeyPatch)
     assert (seen["port"], seen["protocol_version"]) == (9142, 4)
     assert seen["ssl_options"] == {"server_hostname": "cassandra.us-west-2.amazonaws.com"}
     assert isinstance(seen["auth_provider"], SigV4AuthProvider)
+
+
+# ------------------------------------------------------------------ #105: the toggles
+
+VPC: dict[str, Any] = {
+    "vpc_subnet_ids": ("subnet-0123456789abcdef0",),
+    "vpc_security_group_ids": ("sg-0123abcd",),
+}
+
+
+def caches_only(s: dict[str, Stubber]) -> None:
+    ec, mdb = s["elasticache"], s["memorydb"]
+    ec.add_response("describe_snapshots", {"Snapshots": []})
+    ec.add_response("describe_serverless_cache_snapshots", {"ServerlessCacheSnapshots": []})
+    ec.add_response(
+        "describe_replication_groups",
+        {"ReplicationGroups": [{"ReplicationGroupId": "sessions", "Status": "available"}]},
+    )
+    ec.add_response("describe_cache_clusters", {"CacheClusters": []})
+    ec.add_response("describe_serverless_caches", {"ServerlessCaches": []})
+    mdb.add_response("describe_snapshots", {"Snapshots": []})
+    mdb.add_response("describe_clusters", {"Clusters": [{"Name": "db"}]})
+
+
+def test_caches_and_influxdb_name_the_vpc_attachment(env: Env) -> None:
+    """A6 (#105): reached only inside their VPC, each names VPC_SUBNET_IDS; with the function
+    attached to a VPC, no reader is built, so each is `not_implemented`, never a silent pass."""
+    s = stubs(env, "elasticache", "memorydb")
+    caches_only(s)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"elasticache", "memorydb"})))
+    assert doc is not None
+    valid(doc)
+    st = stores(doc)
+    for key in (("elasticache", "sessions"), ("memorydb", "db")):
+        assert (st[key]["reason"], st[key]["toggle"]) == ("in_memory", "VPC_SUBNET_IDS")
+    caches_only(s)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"elasticache", "memorydb"}), **VPC))
+    assert doc is not None
+    valid(doc)
+    st = stores(doc)
+    for key in (("elasticache", "sessions"), ("memorydb", "db")):
+        assert (st[key]["status"], st[key]["reason"], st[key]["toggle"]) == (
+            "skipped",
+            "not_implemented",
+            "VPC_SUBNET_IDS",
+        )
+
+
+def test_timestream_off_reports_its_tables_naming_the_toggle(env: Env) -> None:
+    """A4c (#105): TIMESTREAM_READ off lists every table and runs no query."""
+    s = stubs(env, "timestream-write", "timestream-query", "timestream-influxdb")
+    timestream_estate(s)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"timestream"}), timestream_read=False))
+    assert doc is not None
+    valid(doc)
+    s["timestream-query"].assert_no_pending_responses()  # no query was asked for
+    st = stores(doc)
+    readings = st[("timestream", "iot.readings")]
+    assert (readings["status"], readings["reason"], readings["toggle"]) == (
+        "skipped",
+        "read_not_configured",
+        "TIMESTREAM_READ",
+    )
+    assert st[("timestream", "metrics")]["toggle"] == "VPC_SUBNET_IDS"  # InfluxDB
+    assert not doc["findings"]
+
+
+def test_keyspaces_off_reports_its_tables_naming_the_toggle(env: Env) -> None:
+    """A4c (#105): KEYSPACES_READ off lists every table and opens no CQL session."""
+    s = stubs(env, "keyspaces")
+    keyspaces_estate(s["keyspaces"])
+
+    def factory(region: str) -> FakeSession:
+        raise AssertionError("no session with KEYSPACES_READ off")
+
+    env.clients.services["keyspaces-cql"] = factory
+    doc = env.run(config(s3_targets=[], discover=frozenset({"keyspaces"}), keyspaces_read=False))
+    assert doc is not None
+    valid(doc)
+    users = stores(doc)[("keyspaces", "app.users")]
+    assert (users["status"], users["reason"], users["toggle"]) == (
+        "skipped",
+        "read_not_configured",
+        "KEYSPACES_READ",
+    )
+    c = read_config({"RESULTS_BUCKET": "x"})
+    assert (c.timestream_read, c.keyspaces_read) == (True, True)  # on by default
+    off = read_config({"RESULTS_BUCKET": "x", "TIMESTREAM_READ": "false", "KEYSPACES_READ": "0"})
+    assert (off.timestream_read, off.keyspaces_read) == (False, False)

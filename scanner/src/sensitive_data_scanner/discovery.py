@@ -419,7 +419,7 @@ def _glue_table(
         return
     store.extra["location"] = f"{where[0]}/{where[1]}"
     if store.extra.get("lakeFormation") and config.glue_lake_formation == "skip":
-        store.skip("lake_formation")
+        store.toggle_off("GLUE_LAKE_FORMATION", "lake_formation")
         return
     serde, delimiter = _serde(sd)
     try:

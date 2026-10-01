@@ -188,6 +188,8 @@ def test_domains_are_sampled_by_index_and_field(env: Env) -> None:
     s = stores(doc)
     assert (s["logs"]["status"], s["logs"]["deployment"]) == ("scanned", "managed")
     assert (s["private"]["status"], s["private"]["reason"]) == ("skipped", "vpc_only")
+    assert s["private"]["toggle"] == "VPC_SUBNET_IDS"  # #105: what would reach it
+    assert s["vectors"]["toggle"] == "OPENSEARCH_SERVERLESS_READ"
     assert (s["gone"]["reason"], s["gone"]["state"]) == ("unsupported", "deleted")
     assert (s["vectors"]["reason"], s["vectors"]["deployment"]) == (
         "read_not_configured",
@@ -292,3 +294,42 @@ def test_signed_http_sends_a_sigv4_get(monkeypatch: Any) -> None:
     auth = request.headers["Authorization"]
     auth = auth.decode() if isinstance(auth, bytes) else auth
     assert auth.startswith("AWS4-HMAC-SHA256 ") and "/us-west-2/es/aws4_request" in auth
+
+
+def test_with_the_function_in_a_vpc_a_domains_vpc_endpoint_is_read(env: Env) -> None:
+    """A6 (#105): with VPC_SUBNET_IDS set (the template attaches the function to the VPC), a
+    domain that has only a VPC endpoint is read through it, the same signed GETs."""
+    aws = Aws(env)
+    aws.estate(collections=False)
+    private = "vpc-private.es.amazonaws.com"
+    aws.indices(ENDPOINT, [])
+    aws.indices(private, ["patients"])
+    aws.docs(private, "patients", [{"ssn": dashed(SSN_B)}])
+    doc = env.run(
+        config(
+            s3_targets=[],
+            discover=OS,
+            vpc_subnet_ids=("subnet-0123456789abcdef0",),
+            vpc_security_group_ids=("sg-0123abcd",),
+        )
+    )
+    assert doc is not None
+    valid(doc)
+    s = stores(doc)
+    assert s["private"]["status"] == "scanned" and "toggle" not in s["private"]
+    [f] = doc["findings"]
+    assert (f["resource"]["store"], f["resource"]["table"], f["class"]) == (
+        "private",
+        "patients",
+        "us_ssn",
+    )
+    assert any(private in url for _, url in aws.http.seen)
+    assert read_config({"RESULTS_BUCKET": "x"}).vpc_attached is False
+    c = read_config(
+        {
+            "RESULTS_BUCKET": "x",
+            "VPC_SUBNET_IDS": "subnet-0123456789abcdef0",
+            "VPC_SECURITY_GROUP_IDS": "sg-0123abcd",
+        }
+    )
+    assert c.vpc_attached

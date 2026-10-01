@@ -18,7 +18,9 @@ scanner does not hold. So:
 
 docs/GCP.md describes the opt-in reader for dead-letter topics, designed and
 not built: a subscription of the scanner's own, created by the deployment on
-each named dead-letter topic, which only the scanner pulls from.
+each named dead-letter topic, which only the scanner pulls from. Its hook is
+`GCP_READ_PUBSUB_DLQ` (#105): a dead-letter topic names it, and with it on,
+the topic is `not_implemented`, never a silent pass.
 
 **Encryption (1.5):** the topic's Cloud KMS key (`kmsKeyName`), hashed, else
 Google's own keys (`service_managed`).
@@ -81,7 +83,11 @@ class PubSubAdapter:
                 continue
             if f"projects/{project}/topics/{topic}" in dead:
                 store.extra["deadLetterQueue"] = True
-                store.skip("needs_subscription")  # a subscription is a write; never made
+                if ctx.settings.pubsub_dlq_read:
+                    store.not_implemented("GCP_READ_PUBSUB_DLQ")  # the reader is a hook
+                else:
+                    # A subscription is a write; never made.
+                    store.toggle_off("GCP_READ_PUBSUB_DLQ", "needs_subscription")
             elif project in unknown:
                 store.skip("needs_subscription")
             else:

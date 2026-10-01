@@ -28,7 +28,9 @@ statements. Then, as the databases runner does:
    rolled back, resumable by table (for AlloyDB, by database and table).
 
 Cloud SQL for SQL Server has no IAM database authentication: reading it would
-take a password, so it is `no_read_path`. A PostgreSQL or MySQL instance with
+take a password, so it is `no_read_path`, naming `toggle: GCP_SQLSERVER`, a
+hook (#105): on, it is `not_implemented` (no password-free reader is built).
+AlloyDB is read only with `GCP_ALLOYDB` on (the default, #105). A PostgreSQL or MySQL instance with
 the IAM authentication flag off is `no_read_path` too. An instance the job
 cannot reach (no private path, no authorized network) is `network`; a login
 the database refuses (no IAM user yet, or `cloudsql.instances.login` missing)
@@ -233,11 +235,21 @@ class DatabaseAdapter:
         s = ctx.settings
         if not apply_rules(store, s.allow, s.deny):
             return
+        if self.kind == "cloudsql_sqlserver":
+            # #105: a hook. No IAM database authentication: a password is never used.
+            if s.sqlserver_read:
+                store.not_implemented("GCP_SQLSERVER")
+            else:
+                store.toggle_off("GCP_SQLSERVER", "no_read_path")
+            return
         if no_path:
             store.skip("no_read_path")  # no IAM database authentication: a password is never used
             return
+        if self.kind == "alloydb" and not s.alloydb_read:
+            store.toggle_off("GCP_ALLOYDB")
+            return
         if self.kind not in s.db_read:
-            store.skip("read_not_configured")
+            store.toggle_off("GCP_DB_READ")
 
     def _failed(self, out: Discovery, where: Located, name: str, err: Exception) -> None:
         store = Store(self.kind, f"{name}/*")

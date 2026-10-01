@@ -144,12 +144,30 @@ def test_snapshots_are_reported_per_disk_and_never_read() -> None:
     assert disk["atRestEncryption"] == "customer_managed_key"
     assert disk["atRestKeyHash"] == key_hash(DES_KEY)
     assert s["orphan"]["atRestEncryption"] == "service_managed"
+    # #105 (B4): the gap names the export reader's hook, off by default.
+    assert disk["toggle"] == "AZURE_READ_SNAPSHOTS"
+
+
+def test_reading_snapshots_is_a_hook_that_says_not_implemented() -> None:
+    """B4 (#105): AZURE_READ_SNAPSHOTS on: the SAS-export reader is not built, so each
+    snapshot is `not_implemented`, naming the setting, and beginGetAccess is never called."""
+    s = {
+        x["name"]: x
+        for x in run(tenant(secrets()), AZURE_READ_SNAPSHOTS="on")["discovery"]["stores"]
+    }
+    for name in ("vm1-os", "orphan"):
+        assert (s[name]["status"], s[name]["reason"], s[name]["toggle"]) == (
+            "skipped",
+            "not_implemented",
+            "AZURE_READ_SNAPSHOTS",
+        )
 
 
 def test_key_vault_secrets_are_off_by_default() -> None:
     kv = secrets()
     s = {x["name"]: x for x in run(tenant(kv))["discovery"]["stores"]}
     assert s["kv-app"]["reason"] == "read_not_configured"
+    assert s["kv-app"]["toggle"] == "KEYVAULT_SECRETS_READ"  # #105
     assert kv.got == []
 
 

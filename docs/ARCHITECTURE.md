@@ -5,6 +5,9 @@ is given, and it reports **findings only** ([FINDINGS.md](FINDINGS.md)):
 never a value. Detection is Microsoft Presidio with no NLP model, plus the
 recognizers for the spec's classes ([spec/README.md](../spec/README.md)).
 
+What the scanner deliberately does not read, on every platform, with the
+setting that changes it: [limitations.md](limitations.md).
+
 This document covers:
 
 - **Batch mode**, which is built and is what releases 0.1.0 and 0.2.0 ship;
@@ -214,14 +217,18 @@ Now:
 | `RESCAN_PERCENT` | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change their result changed ([below](#how-rescans-are-chosen)); 0 turns rescans off | 25 |
 | `COLUMNAR_MAX_ROWS` | Rows read per Parquet, ORC or Avro file (or catalog CSV/JSON object); the rest is `partial` | 10,000 |
 | `RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN` | The role RDS assumes to write snapshot exports, and the customer's KMS key to encrypt them. Both are needed to read RDS and Aurora | none: RDS stores are reported `export_not_configured` |
-| `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB) a run may start | 1 |
+| `MAX_EXPORTS_PER_RUN` | Export tasks (RDS and DynamoDB, Neptune Analytics, EventBridge replays) a run may start; past it a store is `deferred` (`budget`) and names `toggle: MAX_EXPORTS_PER_RUN` ([limitations.md](limitations.md), A1) | 1 |
 | `EXPORT_MIN_INTERVAL_DAYS` | Days before a store is exported again | 7 |
 | `DYNAMODB_EXPORT` | Read a table too large to Scan from an Export to S3 (needs PITR), and a big table with PITR on below that cap too, then only what changed ([below](#dynamodb-export-to-s3-large-tables)) | off |
 | `DYNAMODB_EXPORT_MIN_BYTES`, `DYNAMODB_EXPORT_MIN_ITEMS` | With `DYNAMODB_EXPORT`: a table below `DYNAMODB_MAX_TABLE_BYTES` with PITR on is read by export when it holds at least this many bytes or items (0 turns a measure off); smaller tables are sampled by Scan | 1 GiB, 1,000,000 |
 | `DYNAMODB_EXPORT_KMS_KEY_ARN` | Encrypt DynamoDB exports with this key (`SSE-KMS`) | SSE-S3 |
 | `DYNAMODB_INCREMENTAL` | After a table's full export, read only what changed, with incremental exports ([below](#dynamodb-export-to-s3-large-tables)) | on |
 | `RDS_DATA_API` | Opt-in: Aurora clusters to read with read-only SQL through the Data API, as a JSON list | none (off) |
-| `GLUE_LAKE_FORMATION` | For Glue tables registered with Lake Formation: `read` (with the scanner's own IAM; a denial is a gap) or `skip` (report them, read nothing) | `read` |
+| `GLUE_LAKE_FORMATION` | For Glue tables registered with Lake Formation: `read` (with the scanner's own IAM; a denial is a gap) or `skip` (report them `lake_formation`, naming this setting, and read nothing) | `read` |
+| `KMS_ALLOWED_KEY_ARNS` | (#105) The keys `kms:Decrypt` may use, still only through each service (`KmsAllowedKeyArns` in the template narrows the role); a store under another key is `kms_access`, naming this setting | none: any key, through a service |
+| `TIMESTREAM_READ`, `KEYSPACES_READ` | (#105) Sample Timestream for LiveAnalytics and Keyspaces tables | on; off: reported `read_not_configured` |
+| `FILESYSTEM_TASK_ENABLED` | (#105) A hook for the file-system task (EFS, FSx, file-level EBS), designed and not built | off: `needs_task`; on: `not_implemented` |
+| `VPC_SUBNET_IDS`, `VPC_SECURITY_GROUP_IDS` | (#105) Set by the template when the function is attached to a VPC (`VpcSubnetIds`): an OpenSearch domain's VPC endpoint is then read; caches and InfluxDB are `not_implemented` | none: such stores `vpc_only`, `in_memory` or `no_read_path`, naming `VPC_SUBNET_IDS` |
 | `REDSHIFT_READ` | Read Redshift clusters and Serverless workgroups through the Data API: `off`, `iam` or `db_user` ([below](#redshift-and-redshift-serverless)) | `off`: discovered and reported `read_not_configured` |
 | `REDSHIFT_DB_USER` | With `REDSHIFT_READ=db_user`: the existing read-only database user | none |
 | `REDSHIFT_MAX_ROWS_PER_TABLE`, `REDSHIFT_MAX_TABLES` | Rows sampled per table (`LIMIT`), and tables per database | 1,000 and 500 |
@@ -233,7 +240,7 @@ Now:
 | `KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS` | Records sampled per shard from `TRIM_HORIZON`, and shards per stream | 100 and 50 |
 | `SQS_DLQ_READ` | Receive from dead-letter queues ([below](#streams-and-queues)) | off: reported `read_not_configured` |
 | `SQS_MESSAGES_PER_QUEUE` | Messages received per dead-letter queue per run | 100 |
-| `SSM_DECRYPT` | Read `SecureString` parameters, decrypted through SSM ([below](#parameter-store-and-secrets-manager)) | on |
+| `SSM_DECRYPT` | Read `SecureString` parameters, decrypted through SSM ([below](#parameter-store-and-secrets-manager)) | off (since #105): counted in `excluded`, naming this setting |
 | `SECRETS_READ` | Read Secrets Manager secrets' values for sensitive data | off: listed and reported `read_not_configured` |
 | `TIMESTREAM_MAX_ROWS`, `TIMESTREAM_LOOKBACK_DAYS` | Rows sampled per Timestream table, and how far back (`WHERE time > ago(Nd)`) | 1,000 and 1 |
 | `KEYSPACES_MAX_ROWS` | Rows sampled per Keyspaces table (`LIMIT`) | 1,000 |
@@ -356,10 +363,10 @@ reason.
 | Kinesis Data Streams | **Scanned** | sampled from `TRIM_HORIZON`, never checkpointed | `unsupported` |
 | Firehose | **Scanned** | its S3 locations, by the S3 source | `no_s3_destination` |
 | SQS dead-letter queues | **Opt-in** (`SQS_DLQ_READ`) | received with `VisibilityTimeout=0` | `read_not_configured`, `redrive_would_change`; live queues `live_queue` |
-| SSM Parameter Store | **Scanned** (`SecureString` via `SSM_DECRYPT`, on) | `GetParameters` | `excluded` counts |
+| SSM Parameter Store | **Scanned** (`SecureString` only with `SSM_DECRYPT`, off by default) | `GetParameters` | `excluded` counts, `toggle: SSM_DECRYPT` |
 | Secrets Manager | **Opt-in** (`SECRETS_READ`) | `GetSecretValue`, counts only | `read_not_configured` |
-| Timestream for LiveAnalytics | **Scanned** | one sampled query per table | `unsupported` |
-| Keyspaces | **Scanned** | one sampled CQL query per table | `access_denied` |
+| Timestream for LiveAnalytics | **Scanned** (`TIMESTREAM_READ`, on) | one sampled query per table | `unsupported`, `read_not_configured` |
+| Keyspaces | **Scanned** (`KEYSPACES_READ`, on) | one sampled CQL query per table | `access_denied`, `read_not_configured` |
 | ElastiCache, MemoryDB snapshots exported to S3 | **Scanned** | `.rdb` files read by the S3 source | |
 | ElastiCache, MemoryDB | Coverage only | | `in_memory` |
 | AWS Backup vaults | Coverage only (EBS points read as EBS) | | `backup_copy` |
@@ -488,7 +495,8 @@ store, discovered or configured, with what happened to it:
 | `skipped` | `kms_access` | A table whose KMS key is out of reach |
 | `skipped` | `tags_unreadable` | Tags could not be read while a deny-by-tag rule exists |
 | `error` | `kms_access`, `access_denied`, `error` | The store could not be read; `error` names the AWS error |
-| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift, OpenSearch Serverless, EBS, SQS, Secrets Manager, MSK, MQ, ECR, SageMaker, EventBridge) |
+| `skipped` | `read_not_configured` | Discovered, but reading this kind is opt-in and off (Redshift, OpenSearch Serverless, EBS, SQS, Secrets Manager, MSK, MQ, ECR, SageMaker, EventBridge, and with their settings off, SSM `SecureString`s, Timestream and Keyspaces). (1.12, #105) The store names the setting that turns it on (`toggle`) |
+| `skipped` | `not_implemented` | (1.12, #105) A setting that is a hook only is on (`FILESYSTEM_TASK_ENABLED`, or a cache or InfluxDB instance with the function in a VPC): the read is designed and not built, and the store names the setting ([limitations.md](limitations.md)) |
 | `skipped` | `paused` | A paused Redshift cluster: a query would not resume it |
 | `skipped` | `no_grant` | Signed in, but the database user can see no table: grant it `SELECT` |
 | `skipped` | `vpc_only` | An OpenSearch domain, MSK cluster or MQ broker reachable only inside its VPC, which the scanner's Lambda is not in |
@@ -1286,9 +1294,11 @@ only, and the scanner holds no database credentials. When these kinds are
 discovered, the `rds` listing leaves their clusters to them.
 
 **EFS and FSx.** With `efs` or `fsx`, each file system is listed
-(`DescribeFileSystems`, with its size) and reported as `needs_task`: a file
-system is read by mounting it inside its VPC, which the scanner's Lambda
-does not do.
+(`DescribeFileSystems`, with its size) and reported as `needs_task`, naming
+`toggle: FILESYSTEM_TASK_ENABLED`: a file system is read by mounting it inside
+its VPC, which the scanner's Lambda does not do. That setting is a hook
+(#105): turned on before the task below is built, each file system is
+`not_implemented` ([limitations.md](limitations.md), A5).
 
 #### The opt-in file-system task (design, not built)
 
@@ -1437,9 +1447,11 @@ fragment of it.
 
 - **SSM Parameter Store** (`ssm`): `DescribeParameters`, then
   `GetParameters` ten names at a time, resumable by name within the budget.
-  `SecureString` values are decrypted through SSM (`SSM_DECRYPT`, on by
-  default: `kms:Decrypt` with `kms:ViaService` `ssm.<region>`). With it off,
-  they are counted as `excluded.secure_string` and not read. Only the current
+  `SecureString` values are decrypted through SSM only with `SSM_DECRYPT` on
+  (**off by default** since #105: `kms:Decrypt` with `kms:ViaService`
+  `ssm.<region>`). With it off, they are counted as `excluded.secure_string`
+  and not read, and the store names `toggle: SSM_DECRYPT`
+  ([limitations.md](limitations.md), A4). Only the current
   version is read, not the history. The scanner's own configuration
   parameters (under `/sensitive-data-scanner/`, see `CONFIG_LOCATION`) are
   never read as data (`excluded.self`).
@@ -2127,7 +2139,7 @@ several things:
 | DynamoDB | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:Scan`, `dynamodb:Query`, `dynamodb:ListTagsOfResource` | `*` | |
 | Glue Data Catalog | `glue:GetDatabases`, `glue:GetTables`, `glue:GetTags` | `*` | |
 | RDS and Aurora (discovery) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBClusterSnapshots`, `rds:DescribeDBSnapshots`, `rds:DescribeExportTasks` | `*` | |
-| KMS (customer managed keys) | `kms:Decrypt` | `*` | `kms:ViaService` is `s3.<region>`, `dynamodb.<region>`, `kinesis.<region>`, or (#35) `states.<region>`, `lambda.<region>`, `xray.<region>` or `codecommit.<region>`, or (#94) `logs.<region>` (`AllowKmsDecrypt`) |
+| KMS (customer managed keys) | `kms:Decrypt` | `*`, or (#105) the keys in `KmsAllowedKeyArns` when it is set, for this and every `kms:Decrypt` on `*` below | `kms:ViaService` is `s3.<region>`, `dynamodb.<region>`, `kinesis.<region>`, or (#35) `states.<region>`, `lambda.<region>`, `xray.<region>` or `codecommit.<region>`, or (#94) `logs.<region>` (`AllowKmsDecrypt`) |
 | Workflows, functions, traces and code (#35) | `states:ListStateMachines`, `states:DescribeStateMachine`, `states:ListTagsForResource`, `states:ListExecutions`, `states:GetExecutionHistory`, `lambda:ListFunctions`, `lambda:ListTags`, `lambda:GetFunctionConfiguration`, `xray:GetEncryptionConfig`, `xray:GetTraceSummaries`, `xray:BatchGetTraces`, `codecommit:ListRepositories`, `codecommit:GetRepository`, `codecommit:ListTagsForResource`, `codecommit:GetBranch`, `codecommit:GetFolder`, `codecommit:GetFile` | `*` | Read by default |
 | S3 directory buckets (#35) | `s3express:ListAllMyDirectoryBuckets` | `*` | |
 | | `s3express:CreateSession` | this account's `bucket/*` in the region | `s3express:SessionMode` is `ReadOnly`; `NoReadWriteExpressSessions` denies any other mode |
@@ -2174,12 +2186,13 @@ several things:
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `sqs.<region>`; only with `SqsDlqRead` |
 | Parameter Store and Secrets Manager (listing) | `ssm:DescribeParameters`, `ssm:ListTagsForResource`, `secretsmanager:ListSecrets` | `*` | |
 | Parameter values | `ssm:GetParameters` | this account's `parameter/*` in the region | |
-| | `kms:Decrypt` | `*` | `kms:ViaService` is `ssm.<region>`; only with `SsmDecrypt` (on by default) |
+| | `kms:Decrypt` | `*` | `kms:ViaService` is `ssm.<region>`; only with `SsmDecrypt` (off by default since #105) |
 | Secret values (opt-in) | `secretsmanager:GetSecretValue` | this account's `secret:*` in the region | only with `SecretsRead` |
 | | `kms:Decrypt` | `*` | `kms:ViaService` is `secretsmanager.<region>`; only with `SecretsRead` |
 | Caches and time series (discovery) | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeServerlessCaches`, `elasticache:DescribeSnapshots`, `elasticache:DescribeServerlessCacheSnapshots`, `memorydb:DescribeClusters`, `memorydb:DescribeSnapshots`, `timestream:DescribeEndpoints`, `timestream:ListDatabases`, `timestream:ListTables`, `timestream:ListTagsForResource`, `timestream-influxdb:ListDbInstances` | `*` | |
-| Timestream tables | `timestream:Select` (the `Query` API) | this account's `database/*/table/*` in the region | |
-| Keyspaces | `cassandra:Select` (listing, through the system keyspaces, and reading) | this account's `/keyspace/*` in the region | |
+| Timestream tables | `timestream:Select` (the `Query` API) | this account's `database/*/table/*` in the region | only with `TimestreamRead` (on by default, #105) |
+| Keyspaces | `cassandra:Select` (listing, through the system keyspaces, and reading) | this account's `/keyspace/*` in the region | only with `KeyspacesRead` (on by default, #105) |
+| The function in a VPC (opt-in, #105) | `ec2:CreateNetworkInterface`, `ec2:DescribeNetworkInterfaces`, `ec2:DescribeSubnets`, `ec2:DeleteNetworkInterface`, `ec2:AssignPrivateIpAddresses`, `ec2:UnassignPrivateIpAddresses` (exactly what `AWSLambdaVPCAccessExecutionRole` grants: Lambda places and removes the function's network interfaces) | `*` | only with `VpcSubnetIds` (`VpcNetworkInterfacePermissions`) |
 | OpenSearch Serverless (opt-in) | `aoss:APIAccessAll` | this account's `collection/*` in the region | only with `OpenSearchServerlessRead`; the collection's data access policy grants `aoss:ReadDocument` only |
 
 And eight explicit denies, as defense in depth against any other policy the

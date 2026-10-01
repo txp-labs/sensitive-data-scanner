@@ -22,6 +22,12 @@ param discover string = ''
 param readDatabases string = ''
 param readKeyVaultSecrets bool = false
 param readFileShares bool = false
+@description('AZURE_LOG_ANALYTICS (docs/limitations.md, B1).')
+param readLogAnalytics bool = true
+@description('AZURE_READ_SNAPSHOTS: a hook (docs/limitations.md, B4).')
+param readDiskSnapshots bool = false
+@description('AZURE_COSMOS_READER_POLICY: a hook (docs/limitations.md, B3).')
+param assignCosmosReaderPolicy bool = false
 @description('AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container\'s last complete pass listed that name it in the run summary; 0 never.')
 @minValue(0)
 param blobInventoryMinObjects int = 1000000
@@ -152,6 +158,18 @@ var settings = filter(
     {
       name: 'AZURE_FILES_READ'
       value: readFileShares ? 'on' : 'off'
+    }
+    {
+      name: 'AZURE_LOG_ANALYTICS'
+      value: readLogAnalytics ? 'on' : 'off'
+    }
+    {
+      name: 'AZURE_READ_SNAPSHOTS'
+      value: readDiskSnapshots ? 'on' : 'off'
+    }
+    {
+      name: 'AZURE_COSMOS_READER_POLICY'
+      value: assignCosmosReaderPolicy ? 'on' : 'off'
     }
     {
       name: 'AZURE_BLOB_INVENTORY_MIN_OBJECTS'

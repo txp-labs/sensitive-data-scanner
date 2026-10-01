@@ -121,6 +121,8 @@ class SpannerAdapter:
                 continue
             if str(meta.get("state") or "READY").upper() not in ("READY", "READY_OPTIMIZING"):
                 store.skip("paused")  # still being created or restored
+            elif not ctx.settings.spanner_read:
+                store.toggle_off("GCP_SPANNER")  # #105: listed, not read
 
     def source(self, ctx: Context, store: Store) -> SpannerSource | None:
         t = store.table

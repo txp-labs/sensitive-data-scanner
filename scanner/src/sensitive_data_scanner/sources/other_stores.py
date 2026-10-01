@@ -12,14 +12,20 @@ wherever S3 is.
 
 **Timestream for LiveAnalytics** (`timestream`): `ListDatabases` and
 `ListTables`, then for each table one sampled read-only query,
-`SELECT * FROM "db"."table" WHERE time > ago(Nd) LIMIT n`, read by column.
+`SELECT * FROM "db"."table" WHERE time > ago(Nd) LIMIT n`, read by column
+(`TIMESTREAM_READ`, on by default; off, each table is `read_not_configured`).
 Timestream for InfluxDB instances are listed and reported (`no_read_path`):
 they are reached inside a VPC with an InfluxDB token.
 
 **Keyspaces** (`keyspaces`): `ListKeyspaces` and `ListTables` (system
 keyspaces left out), then for each table `SELECT * FROM "ks"."table" LIMIT
 n` over CQL (TLS, port 9142, SigV4 with the scanner's own role: no password),
-read by column. `cassandra:Select` is the only permission it has.
+read by column (`KEYSPACES_READ`, on by default). `cassandra:Select` is the
+only permission it has.
+
+(#105, docs/limitations.md) A cache and an InfluxDB instance are reached only
+inside their VPC: each names `toggle: VPC_SUBNET_IDS`, and with the function
+attached to a VPC, `not_implemented` (no cache or InfluxDB reader is built).
 """
 
 from __future__ import annotations
@@ -54,6 +60,16 @@ AWS_SERVICES = (
     "timestream-influxdb",
     "keyspaces",
 )
+
+
+def _vpc_gap(ctx: Context, store: Store, reason: str) -> None:
+    """A store reached only inside its VPC (#105): a gap naming the VPC attachment, or, with
+    the function attached, `not_implemented` (no reader for it is built)."""
+    if ctx.config.vpc_attached:
+        store.not_implemented("VPC_SUBNET_IDS")
+    else:
+        store.toggle_off("VPC_SUBNET_IDS", reason)
+
 
 # Timestream and CQL quote names with double quotes, as PostgreSQL does.
 TIMESTREAM = Dialect("timestream", '"', ":{name}")
@@ -134,7 +150,7 @@ class ElastiCacheAdapter:
         out.stores.append(store)
         decide(store, ctx.config)
         if store.status == "pending":
-            store.skip("in_memory")
+            _vpc_gap(ctx, store, "in_memory")
             if state and state.lower() not in ("available", "active"):
                 store.extra["state"] = state[:60]
 
@@ -160,7 +176,7 @@ class MemoryDbAdapter:
                 out.stores.append(store)
                 decide(store, ctx.config)
                 if store.status == "pending":
-                    store.skip("in_memory")
+                    _vpc_gap(ctx, store, "in_memory")
 
     def source(self, ctx: Context, store: Store) -> None:
         return None
@@ -234,6 +250,9 @@ class TimestreamAdapter:
                         except Exception as err:
                             tag_error = error_name(err)
                     decide(store, ctx.config, tag_error)
+                    if store.status == "pending" and not ctx.config.timestream_read:
+                        store.toggle_off("TIMESTREAM_READ")
+                        continue
                     store.extra["tableName"] = str(t["TableName"])
                 token = r.get("NextToken")
                 if not token:
@@ -248,7 +267,7 @@ class TimestreamAdapter:
                 out.stores.append(store)
                 decide(store, ctx.config)
                 if store.status == "pending":
-                    store.skip("no_read_path")
+                    _vpc_gap(ctx, store, "no_read_path")
 
     def source(self, ctx: Context, store: Store) -> TimestreamSource | None:
         table = store.extra.get("tableName")
@@ -462,7 +481,9 @@ class KeyspacesAdapter:
                         except Exception as err:
                             tag_error = error_name(err)
                     decide(store, ctx.config, tag_error)
-                    if store.status == "pending":
+                    if store.status == "pending" and not ctx.config.keyspaces_read:
+                        store.toggle_off("KEYSPACES_READ")
+                    elif store.status == "pending":
                         store.facts = _keyspaces_facts(ctx, ks, space, str(t["tableName"]))
 
     def source(self, ctx: Context, store: Store) -> KeyspacesSource | None:

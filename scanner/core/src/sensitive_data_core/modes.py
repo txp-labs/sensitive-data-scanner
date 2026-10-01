@@ -186,17 +186,27 @@ def location_key(resource: Mapping[str, Any]) -> tuple[Any, ...] | None:
     return (kind, *(resource.get(n) for n in names))
 
 
-def link_duplicates(findings: Iterable[dict[str, Any]]) -> int:
+def link_duplicates(findings: Iterable[dict[str, Any]], by_location: Iterable[str] = ()) -> int:
     """In `both` mode: a finding at the same location and class as a finding of another
     source is linked to it (`linked`, the other findings' ids), never merged. Returns how
-    many findings were linked."""
+    many findings were linked.
+
+    (1.12, #105) `by_location` names the sources whose findings name no kind of data (class
+    `other`: Purview's and Slack DLP's alerts, with `LINK_VENDOR_ALERTS_BY_LOCATION` on, the
+    default): such a finding is also linked to the other sources' findings at the same
+    location, whatever their class, and both sides say so (`linkedBy: location`, at least one
+    link is by location only): the same item, not the same data. Without it, such a finding
+    is never linked, since a link needs the same class."""
+    loose = frozenset(by_location)
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    places: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for f in findings:
         key = location_key(f.get("resource") or {})
         if key is None:
             continue
         groups.setdefault((*key, f.get("class")), []).append(f)
-    linked = 0
+        places.setdefault(key, []).append(f)
+    linked: set[int] = set()
     for group in groups.values():
         sources = {f.get("source", SCANNER) for f in group}
         if len(sources) < 2:
@@ -207,8 +217,23 @@ def link_duplicates(findings: Iterable[dict[str, Any]]) -> int:
             )
             if others:
                 f["linked"] = others[:20]
-                linked += 1
-    return linked
+                linked.add(id(f))
+    if loose:
+        for place in places.values():
+            for f in place:
+                own = f.get("source", SCANNER)
+                if f.get("class") != OTHER or own not in loose:
+                    continue
+                for g in place:
+                    if g.get("source", SCANNER) == own or g.get("class") == OTHER:
+                        continue
+                    for a, b in ((f, g), (g, f)):
+                        ids = list(a.get("linked") or [])
+                        if b["id"] not in ids and len(ids) < 20:
+                            a["linked"] = sorted([*ids, b["id"]])
+                        a.setdefault("linkedBy", "location")
+                        linked.add(id(a))
+    return len(linked)
 
 
 @dataclass
@@ -224,6 +249,8 @@ class VendorCoverage:
     covers: tuple[str, ...] = ()
     limits: tuple[str, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
+    # (1.12, #105) With status `not_enabled` because a setting is off: that setting's name.
+    toggle: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -237,6 +264,8 @@ class VendorCoverage:
         }
         if self.error:
             out["error"] = re.sub(r"[^A-Za-z0-9._:-]", "", self.error)[:80] or "Error"
+        if self.toggle:
+            out["toggle"] = self.toggle
         return out
 
 

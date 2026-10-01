@@ -244,12 +244,13 @@ def test_projects_scope_searches_each_project() -> None:
 
 def test_objects_are_read_by_format_with_their_own_key() -> None:
     c = cloud()
-    doc = run(c)
+    doc = run(c, GCS_READ_ARCHIVE="on")
     lake = next(x for x in doc["coverage"] if x["target"] == "acme-lake/")
     assert lake["scanned"] == 5  # the CSVs, the gzip, the Parquet file, the Archive-class CSV
     assert lake["skipped"] == {"audio": 1}
     assert (lake["unreadable"], lake["kmsDenied"]) == (1, 1)  # the customer-supplied key
     assert lake["formats"] == {"csv": 4, "parquet": 1}
+    assert "notAllowed" not in lake and "toggle" not in stores(doc)["acme-lake"]
     by_object: dict[str, list[dict[str, Any]]] = {}
     for f in doc["findings"]:
         by_object.setdefault(f["resource"]["object"], []).append(f)
@@ -278,6 +279,26 @@ def test_objects_are_read_by_format_with_their_own_key() -> None:
     assert {b for b, _ in c.writes} == {STATE_BUCKET}
     media = [q for m, u, q in c.requests if q.get("alt") == "media" and "acme-lake" in u]
     assert media and all(q.get("generation") for q in media)
+
+
+def test_archive_class_objects_are_counted_not_read_and_name_the_toggle() -> None:
+    """#105 (C3): with GCS_READ_ARCHIVE off (the default), an Archive-class object has a
+    retrieval fee: counted (`notAllowed`: `archive_class`), never fetched, and the bucket names
+    the setting that reads it."""
+    c = cloud()
+    doc = run(c)
+    lake = next(x for x in doc["coverage"] if x["target"] == "acme-lake/")
+    assert lake["scanned"] == 4 and lake["notAllowed"] == {"archive_class": 1}
+    st = stores(doc)["acme-lake"]
+    assert (st["status"], st["toggle"], st["gaps"]["notAllowed"]) == (
+        "scanned",
+        "GCS_READ_ARCHIVE",
+        1,
+    )
+    assert not any(f["resource"]["object"] == "cold/old.csv" for f in doc["findings"])
+    media = [u for _, u, q in c.requests if q.get("alt") == "media"]
+    assert not any("cold" in u for u in media)
+    assert "toggle" not in stores(doc)["acme-cmek"]
 
 
 def test_the_next_run_reads_only_what_changed_and_keeps_findings() -> None:

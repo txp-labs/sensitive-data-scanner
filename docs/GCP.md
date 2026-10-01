@@ -10,6 +10,10 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 (`scanner/gcp`, `sensitive_data_gcp`) and its own image
 (`docker build --target gcp`).
 
+**Deliberate limitations.** What this scanner does not read, why, the setting
+that changes each and its default, and how a store left unread shows up:
+[limitations.md](limitations.md) (C1 to C7).
+
 - **No key.** Every request is signed by the job's service account through
   Application Default Credentials: on Cloud Run, the metadata server. No
   service account key is created, mounted or configured.
@@ -41,7 +45,7 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 | `bigquery` (`bq`) | A BigQuery table, `project.dataset.table` | `bigquery.datasets.get` and `bigquery.tables.list` (discovery), `bigquery.tables.get`, `bigquery.rowAccessPolicies.list` and `bigquery.tables.getData` (`tabledata.list`): BigQuery Data Viewer's reads | read; views, external tables, tables with row-level policies are gaps |
 | `firestore` (`documents`) | A Firestore database in Native mode, `project/database` | `datastore.databases.getMetadata` (discovery, key); `datastore.entities.list`, `datastore.entities.get` (`listCollectionIds`, `runQuery`): Cloud Datastore Viewer's reads | read |
 | `datastore` | A Firestore database in Datastore mode, `project/database` | the same (a `__kind__` query, then `runQuery` per kind) | read |
-| `spanner` | A Spanner database, `instance/database` | `spanner.databases.get` (discovery, key); `spanner.databases.select`, `spanner.sessions.create`, `spanner.sessions.delete`: Cloud Spanner Database Reader | read |
+| `spanner` | A Spanner database, `instance/database` | `spanner.databases.get` (discovery, key); `spanner.databases.select`, `spanner.sessions.create`, `spanner.sessions.delete`: Cloud Spanner Database Reader (the Terraform's own Spanner role, made with `read_spanner`) | read; `GCP_SPANNER=off`: `read_not_configured` |
 | `bigtable` | A Bigtable table, `instance/table` | `bigtable.clusters.list` (the key); `bigtable.tables.readRows`: Bigtable Reader | read |
 | `cloud_logging` (`logging`, `logs`) | A project's logs (the project id) | `logging.buckets.list` (the key); `logging.logs.list`, `logging.logEntries.list`: Logs Viewer | read; Data Access audit logs with `LOGGING_PRIVATE_READ` (Private Logs Viewer) |
 | `pubsub` (`topics`) | A Pub/Sub topic, `project/topic` | `pubsub.subscriptions.list` (which topics are dead-letter topics) | gap: `needs_subscription` (dead-letter topics) or `live_queue`: reading needs a subscription, a write |
@@ -69,9 +73,12 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
   a renamed file is read by content and its findings say `disguised`
   ([FINDINGS.md](FINDINGS.md#archives-pdfs-and-disguised-files-19)). Audio,
   video, images and the older binary Office formats are counted, not read;
-  7z is `archive_unsupported`. Every storage class is read
-  in place (Nearline, Coldline and Archive objects are online; their
-  retrieval fee falls within the run's bytes budget).
+  7z is `archive_unsupported`. Standard, Nearline and Coldline objects are
+  read in place. **Archive-class objects are not** (#105): reading one has a
+  retrieval fee, so each is counted (`notAllowed`: `archive_class`) and the
+  bucket names `toggle: GCS_READ_ARCHIVE`; turn that on (Terraform
+  `read_archive_objects`) to read them, their fee within the run's bytes
+  budget ([limitations.md](limitations.md), C3).
 - **Incremental.** A pass reads only the objects updated since the previous
   complete pass started (less `skew`), and a pass cut short by the budget
   resumes at the listing page it stopped in. With the object index
@@ -164,7 +171,8 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
 
 - **Discovery.** Cloud Asset Inventory lists every database; its record (its
   dialect, state and key) comes from the Spanner API. A database still being
-  created or restored is `paused`.
+  created or restored is `paused`. With `GCP_SPANNER=off` (#105), every
+  database is `read_not_configured`, naming that setting.
 - **Reading** is the core's sampled SQL pass (`scan/sql.py`) through one
   session: the base tables from `information_schema.tables`, then
   `SELECT * FROM <table> LIMIT n` with quoted identifiers, read by column.
@@ -224,7 +232,9 @@ scanners (the cloud-neutral core, `scanner/core`), in its own package
   consumer receives: a message pulled and not acknowledged is redelivered
   with its delivery attempt counted, and one acknowledged is gone. Creating a
   subscription is a write. So a dead-letter topic is `needs_subscription`
-  (with `deadLetterQueue: true`), and any other topic is `live_queue`. When a
+  (with `deadLetterQueue: true` and `toggle: GCP_READ_PUBSUB_DLQ`, the hook
+  for the reader below: on before it is built, the topic is
+  `not_implemented`), and any other topic is `live_queue`. When a
   project's subscriptions cannot be listed, its topics are
   `needs_subscription`.
 
@@ -438,6 +448,9 @@ masked.
 | `LOGGING_PRIVATE_READ` | off | `on` also reads Data Access audit logs (needs Private Logs Viewer) |
 | `SECRET_MANAGER_READ` | off | `on` reads Secret Manager secrets' latest versions, reported as counts only |
 | `GCP_DB_READ` | off | The database kinds read: `all`, or `cloudsql_postgresql`, `cloudsql_mysql`, `alloydb` (or `postgresql`, `mysql`, `alloy`). `cloudsql_sqlserver` is accepted and stays `no_read_path` |
+| `GCP_SPANNER`, `GCP_ALLOYDB` | on, on | (#105) `off` lists Spanner databases or AlloyDB clusters and reads none (`read_not_configured`); the Terraform's `read_spanner` and `read_alloydb` also leave out the role holding their exception permissions |
+| `GCS_READ_ARCHIVE` | off | (#105) `on` reads Archive-class objects, whose reads have a retrieval fee |
+| `GCP_SQLSERVER`, `GCP_READ_PUBSUB_DLQ` | off, off | (#105) Hooks: the SQL Server and dead-letter readers are not built; `on` reports those stores `not_implemented` |
 | `GCP_DB_PRINCIPAL` | | The service account's email; its IAM database users are logged in as. Required to read |
 | `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES` | all but the system's, 1000, 500 | As the databases runner's; Spanner too |
 | `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | 60, 15 | Per statement, per connection |

@@ -75,6 +75,28 @@ class Source(Protocol):
     ) -> SourceRun: ...
 
 
+# #105 (docs/limitations.md): the setting that turns on what a store left unread, by its kind
+# and reason. A store's own source may already name one (GCP_SPANNER, GCP_SQLSERVER, ...).
+TOGGLES: dict[tuple[str, str], str] = {
+    ("secret_manager", "read_not_configured"): "SECRET_MANAGER_READ",
+}
+
+
+def name_toggles(stores: Sequence[Store], by_source: dict[str, Coverage]) -> None:
+    """Name, on each store that left something unread, the setting that would read it (#105):
+    a gap by its kind and reason, and a bucket whose Archive-class objects were counted."""
+    for st in stores:
+        if st.toggle:
+            continue
+        toggle = TOGGLES.get((st.kind, st.reason or ""))
+        if st.kind == "gcs" and any(
+            by_source[i].not_allowed.get("archive_class") for i in st.source_ids if i in by_source
+        ):
+            toggle = "GCS_READ_ARCHIVE"
+        if toggle:
+            st.name_toggle(toggle)
+
+
 def discover(ctx: Context) -> Discovery:
     """Every store of every kind in `DISCOVER`, decided."""
     from .sources.gcp import ADAPTERS  # noqa: PLC0415 - the adapters import the runner's parts
@@ -299,6 +321,7 @@ def _scan(
             settle(st, covs, [notes.get(i) for i in st.source_ids], extra)
         elif st.status == "pending" and st.source_ids:
             st.status, st.reason = "deferred", "budget"
+    name_toggles(stores, by_source)
     public = findings.public()
     if mode == BOTH:
         link_duplicates(public)

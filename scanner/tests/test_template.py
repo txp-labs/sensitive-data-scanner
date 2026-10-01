@@ -148,6 +148,20 @@ AIMED: dict[str, Any] = {
     ),
     "StartOwnReplays": lambda s, a: str(s["Resource"]["Fn::Sub"]).endswith(":replay/sds-*"),
     "OwnReplayQueue": lambda s, a: s["Resource"] == {"Fn::GetAtt": ["ReplayQueue", "Arn"]},
+    # (#105, opt-in) The network interfaces Lambda places in the customer's VPC, exactly as
+    # AWSLambdaVPCAccessExecutionRole grants them, and only with VpcSubnetIds set.
+    "LambdaVpcNetworkInterfaces": lambda s, a: (
+        a
+        in (
+            "ec2:CreateNetworkInterface",
+            "ec2:DescribeNetworkInterfaces",
+            "ec2:DescribeSubnets",
+            "ec2:DeleteNetworkInterface",
+            "ec2:AssignPrivateIpAddresses",
+            "ec2:UnassignPrivateIpAddresses",
+        )
+        and gates()["LambdaVpcNetworkInterfaces"] == ["VpcAttached"]
+    ),
     # A directory bucket is read only through a session, and the session is read-only.
     "ReadOnlyExpressSessions": lambda s, a: (
         a == "s3express:CreateSession"

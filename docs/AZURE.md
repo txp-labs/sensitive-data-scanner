@@ -9,6 +9,10 @@ and coverage summary as the AWS scanner (the cloud-neutral core,
 `scanner/core`), in its own package (`scanner/azure`, `sensitive_data_azure`)
 and its own image (`docker build --target azure`).
 
+**Deliberate limitations.** What this scanner does not read, why, the setting
+that changes each and its default, and how a store left unread shows up:
+[limitations.md](limitations.md) (B1 to B5 and C6).
+
 - **No secret.** Every request is signed by the job's managed identity
   through `azure-identity`'s `DefaultAzureCredential`. No key, connection
   string or SAS is configured or created.
@@ -280,7 +284,9 @@ cannot narrow is refused rather than read.
 
 - Every Log Analytics workspace in scope is read by default with **Log
   Analytics Reader**, as the job's identity, through the Log Analytics query
-  API. Workspace-based Application Insights writes to its workspace, and is
+  API. `AZURE_LOG_ANALYTICS=off` (Bicep `readLogAnalytics: false`) lists the
+  workspaces and reads none: each is `read_not_configured`, naming the
+  setting ([limitations.md](limitations.md), B1). Workspace-based Application Insights writes to its workspace, and is
   read there. Diagnostic settings that archive to a storage account are read
   as blobs.
 - `Usage` says which tables took data in the window (`LOGS_LOOKBACK_DAYS`,
@@ -311,7 +317,9 @@ cannot narrow is refused rather than read.
   `beginGetAccess`, which puts the snapshot in an exported state and mints a
   SAS URL, then `endGetAccess`. Both are actions that change the resource,
   so a scanner with read roles never calls them. Every snapshot is the gap
-  `needs_sas_export`.
+  `needs_sas_export`, naming `toggle: AZURE_READ_SNAPSHOTS`, the hook for the
+  reader below (Bicep `readDiskSnapshots`): on before that reader is built,
+  each snapshot is `not_implemented` ([limitations.md](limitations.md), B4).
 
 #### The opt-in export reader (design, not built)
 
@@ -409,6 +417,12 @@ to be masked.
 | `LOGS_LOOKBACK_DAYS`, `LOGS_MAX_ROWS_PER_TABLE` | 1, 500 | Log Analytics: the window sampled, and rows per table |
 | `AZURE_FILES_READ` | off | `on` reads Azure Files shares' files (Storage File Data Privileged Reader) |
 | `KEYVAULT_SECRETS_READ` | off | `on` reads Key Vault secrets' values, reported as counts only |
+| `AZURE_LOG_ANALYTICS` | on | `off` lists Log Analytics workspaces and reads none (#105) |
+| `AZURE_READ_SNAPSHOTS` | off | A hook (#105): `on` reports each disk snapshot `not_implemented`, since the export reader is not built |
+| `AZURE_COSMOS_READER_POLICY` | off | A hook (#105), Bicep `assignCosmosReaderPolicy`: the Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built; `on` reports an account the identity cannot read `not_implemented`. Use `cosmosAccountIds` |
+
+A store left unread because one of these is off names it (`toggle`); every
+limitation and its setting is in [limitations.md](limitations.md).
 
 At least one of `STATE_CONTAINER_URL`, `FINDINGS_HTTPS_URL`,
 `FINDINGS_EVENT_GRID_ENDPOINT` and `FINDINGS_FILE` is required.

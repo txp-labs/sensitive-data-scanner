@@ -391,7 +391,31 @@ def test_mail_is_read_only_when_the_grant_is_proved_scoped(tmp_path: Path) -> No
     # The opt-in kinds left out are named, not silent.
     off = {x["kind"] for x in doc["discovery"]["stores"] if x["name"] == "*"}
     assert off == {"m365_teams_channel", "m365_teams_chat"}
+    # #105: each names the setting that reads it.
+    assert {x["toggle"] for x in doc["discovery"]["stores"] if x["name"] == "*"} == {"DISCOVER"}
     assert not any("/mailFolders" in c[1] for c in m.calls)
+
+
+def test_mail_off_lists_mailboxes_and_reads_none(tmp_path: Path) -> None:
+    """D3 (#105): M365_MAIL off (on by default): every mailbox is `read_not_configured`, naming
+    the setting; no mail is read, and the scope check is not run (nothing would be read)."""
+    m = mailbox_tenant()
+    s = settings(
+        tmp_path, M365_USERS=ALICE, DISCOVER="mail", M365_MAIL_SCOPE_CHECK=OUTSIDE, M365_MAIL="off"
+    )
+    doc = scan(m, s)
+    alice = stores(doc)[("m365_mail", f"user-{owner_hash(ALICE)[:16]}")]
+    assert (alice["status"], alice["reason"], alice["toggle"]) == (
+        "skipped",
+        "read_not_configured",
+        "M365_MAIL",
+    )
+    assert doc["findings"] == []
+    assert not any("/mailFolders" in c[1] or "/messages" in c[1] for c in m.calls)
+    assert settings(tmp_path, M365_USERS=ALICE).m365.mail_read is True  # type: ignore[union-attr]
+    with pytest.raises(ConfigError) as err:
+        settings(tmp_path, M365_USERS=ALICE, M365_MAIL="sometimes")
+    assert err.value.code == "m365_mail"
 
 
 def test_mail_bodies_and_attachments(tmp_path: Path) -> None:

@@ -82,7 +82,12 @@ def test_parameters_are_read_decrypted_and_named(env: Env) -> None:
     ssm_estate(s["ssm"])
     get(s["ssm"], ["/app/db-host", "/app/owner-ssn", "/app/payment", "/app/regions"])
     doc = env.run(
-        config(s3_targets=[], discover=frozenset({"ssm"}), deny=store_rules("ssm:/prod/*"))
+        config(
+            s3_targets=[],
+            discover=frozenset({"ssm"}),
+            deny=store_rules("ssm:/prod/*"),
+            ssm_decrypt=True,
+        )
     )
     assert doc is not None
     valid(doc)
@@ -116,7 +121,12 @@ def test_parameter_store_says_its_at_rest_encryption(env: Env) -> None:
     ssm_estate(s["ssm"])
     get(s["ssm"], ["/app/db-host", "/app/owner-ssn", "/app/payment", "/app/regions"])
     doc = env.run(
-        config(s3_targets=[], discover=frozenset({"ssm"}), deny=store_rules("ssm:/prod/*"))
+        config(
+            s3_targets=[],
+            discover=frozenset({"ssm"}),
+            deny=store_rules("ssm:/prod/*"),
+            ssm_decrypt=True,
+        )
     )
     assert doc is not None
     valid(doc)
@@ -130,7 +140,7 @@ def test_a_parameter_store_of_secure_strings_only_is_under_kms(env: Env) -> None
     s = stubs(env, "ssm")
     ssm_estate(s["ssm"], secure)
     get(s["ssm"], sorted(secure), params=secure)
-    doc = env.run(config(s3_targets=[], discover=frozenset({"ssm"})))
+    doc = env.run(config(s3_targets=[], discover=frozenset({"ssm"}), ssm_decrypt=True))
     assert doc is not None
     valid(doc)
     st = stores(doc)["ssm"]
@@ -145,9 +155,33 @@ def test_without_decrypt_secure_strings_are_counted_not_read(env: Env) -> None:
     doc = env.run(config(s3_targets=[], discover=frozenset({"ssm"}), ssm_decrypt=False))
     assert doc is not None
     s["ssm"].assert_no_pending_responses()
-    assert stores(doc)["ssm"]["excluded"] == {"secure_string": 2, "self": 1}
-    assert read_config({"RESULTS_BUCKET": "x"}).ssm_decrypt is True
-    assert read_config({"RESULTS_BUCKET": "x", "SSM_DECRYPT": "false"}).ssm_decrypt is False
+    valid(doc)
+    st = stores(doc)["ssm"]
+    assert st["excluded"] == {"secure_string": 2, "self": 1}
+    # #105: the store names the setting that would read the SecureStrings it left out.
+    assert (st["status"], st["toggle"]) == ("scanned", "SSM_DECRYPT")
+    # Off by default since #105 (docs/limitations.md, A4).
+    assert read_config({"RESULTS_BUCKET": "x"}).ssm_decrypt is False
+    assert read_config({"RESULTS_BUCKET": "x", "SSM_DECRYPT": "true"}).ssm_decrypt is True
+
+
+def test_a_parameter_store_of_secure_strings_only_names_the_toggle(env: Env) -> None:
+    """#105: with SSM_DECRYPT off and nothing but SecureStrings, the store is a gap that names
+    the setting, not `not_allowed`."""
+    secure = {k: v for k, v in PARAMS.items() if v[0] == "SecureString"}
+    s = stubs(env, "ssm")
+    ssm_estate(s["ssm"], secure)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"ssm"})))
+    assert doc is not None
+    valid(doc)
+    s["ssm"].assert_no_pending_responses()
+    st = stores(doc)["ssm"]
+    assert (st["status"], st["reason"], st["toggle"]) == (
+        "skipped",
+        "read_not_configured",
+        "SSM_DECRYPT",
+    )
+    assert st["excluded"] == {"secure_string": 2}
 
 
 def test_parameters_go_ten_at_a_time_and_resume(env: Env) -> None:
@@ -155,7 +189,7 @@ def test_parameters_go_ten_at_a_time_and_resume(env: Env) -> None:
     many = {f"/p/{i:02d}": ("String", f"value {i}") for i in range(12)}
     many["/p/11"] = ("String", f"ssn {dashed(SSN_B)}")
     names = sorted(many)
-    cfg = config(s3_targets=[], discover=frozenset({"ssm"}), max_items_per_run=1)
+    cfg = config(s3_targets=[], discover=frozenset({"ssm"}), max_items_per_run=1, ssm_decrypt=True)
     ssm_estate(s["ssm"], many)
     get(s["ssm"], names[:10], params=many)
     first = env.run(cfg)
@@ -200,6 +234,7 @@ def test_secrets_are_listed_always_and_read_only_when_on(env: Env) -> None:
         4,
         {"managed": 1, "own": 3},
     )
+    assert st["toggle"] == "SECRETS_READ"  # #105: the gap names the setting that reads it
     secrets_estate(sm)
     sm.add_response("get_secret_value", {"Name": "app/cert", "SecretBinary": b"\xff\xfe\x00"})
     sm.add_response(

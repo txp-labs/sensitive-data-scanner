@@ -148,6 +148,33 @@ def test_discovered_by_default_read_only_when_opted_in() -> None:
     assert s["pg-idle/idle"]["reason"] == "paused"
     assert (s["pg-denied/*"]["status"], s["pg-denied/*"]["reason"]) == ("error", "access_denied")
     assert s["alloy-main"]["reason"] == "read_not_configured"
+    # #105: each gap names the setting that turns its read on (C4: SQL Server's is a hook).
+    assert s["pg-orders/orders"]["toggle"] == "GCP_DB_READ"
+    assert s["ms-erp/erp"]["toggle"] == "GCP_SQLSERVER"
+    assert "toggle" not in s["pg-legacy/hr"]  # the instance's IAM flag, not a setting here
+
+
+def test_sql_server_is_a_hook_and_alloydb_a_toggle() -> None:
+    """C4 (#105): GCP_SQLSERVER on gives `not_implemented` (no password-free reader exists);
+    C2: GCP_ALLOYDB off leaves AlloyDB unread even with GCP_DB_READ, and asks for no client
+    certificate (one of the named exceptions)."""
+    c, dbs = cloud()
+    pg, my = drivers()
+    s = stores(run(c, pg, my, GCP_SQLSERVER="on", GCP_ALLOYDB="off", **READ))
+    assert (s["ms-erp/erp"]["status"], s["ms-erp/erp"]["reason"], s["ms-erp/erp"]["toggle"]) == (
+        "skipped",
+        "not_implemented",
+        "GCP_SQLSERVER",
+    )
+    alloy = s["alloy-main"]
+    assert (alloy["status"], alloy["reason"], alloy["toggle"]) == (
+        "skipped",
+        "read_not_configured",
+        "GCP_ALLOYDB",
+    )
+    assert dbs.certificates == []
+    assert not [k for _, k in pg.calls if k["host"].startswith("10.1.")]
+    assert s["pg-orders/orders"]["status"] == "scanned"  # Cloud SQL is read as before
 
 
 def test_read_as_the_service_account_with_its_token_over_verified_tls() -> None:

@@ -9,6 +9,10 @@ contract, budget and coverage summary as the AWS scanner (the cloud-neutral
 core, `scanner/core`), in its own package (`scanner/db`,
 `sensitive_data_db`) and its own image target.
 
+**Deliberate limitations.** What this scanner does not read, why, the setting
+that changes each and its default, and how a store left unread shows up:
+[limitations.md](limitations.md) (A7).
+
 ## Engines
 
 | Engine | Connection string | Driver (extra) | Read-only enforced by | Refused when the user has |

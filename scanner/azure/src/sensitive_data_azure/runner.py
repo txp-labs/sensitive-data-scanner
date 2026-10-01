@@ -47,7 +47,7 @@ from sensitive_data_core.schedule import run_sources
 
 from . import __version__
 from .clients import Clients
-from .config import Settings
+from .config import DATABASE_KINDS, Settings
 from .sources.base import Context
 from .state import INDEX, LATEST, RUNS, STATE, BlobState
 
@@ -69,6 +69,34 @@ class Source(Protocol):
         store: FindingStore,
         now: _dt.datetime,
     ) -> SourceRun: ...
+
+
+# #105 (docs/limitations.md): the setting that turns on what a store left unread, by its kind
+# and reason. A store's own source may already name one (AZURE_LOG_ANALYTICS, ...).
+TOGGLES: dict[tuple[str, str], str] = {
+    **{(k, "read_not_configured"): "AZURE_DB_READ" for k in DATABASE_KINDS},
+    ("azure_files", "read_not_configured"): "AZURE_FILES_READ",
+    ("key_vault", "read_not_configured"): "KEYVAULT_SECRETS_READ",
+}
+
+
+def name_toggles(settings: Settings, stores: Sequence[Store]) -> None:
+    """Name, on each store left unread, the setting that would read it (#105). A Cosmos DB for
+    NoSQL account the identity may not read names `assignCosmosReaderPolicy` (Bicep), a hook:
+    on, the account is `not_implemented` (the policy is not built; `cosmosAccountIds` grants
+    the role account by account)."""
+    for st in stores:
+        if st.toggle or not st.reason:
+            continue
+        if st.kind == "cosmosdb" and st.reason == "access_denied":
+            if settings.cosmos_reader_policy:
+                st.not_implemented("assignCosmosReaderPolicy")
+            else:
+                st.name_toggle("assignCosmosReaderPolicy")
+            continue
+        toggle = TOGGLES.get((st.kind, st.reason))
+        if toggle:
+            st.name_toggle(toggle)
 
 
 def discover(ctx: Context) -> Discovery:
@@ -281,6 +309,7 @@ def _scan(
             settle(st, covs, [notes.get(i) for i in st.source_ids], extra)
         elif st.status == "pending" and st.source_ids:
             st.status, st.reason = "deferred", "budget"
+    name_toggles(settings, stores)
     doc = findings_document(
         run_id=run_id,
         account=None,

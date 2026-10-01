@@ -16,8 +16,11 @@ engines), `ListCollections` and `BatchGetCollection` for Serverless.
    field (`store_field`).
 
 Not read, and reported:
-- a domain inside a VPC (`vpc_only`): the scanner's Lambda is not in the
-  domain's VPC, so it cannot reach the endpoint;
+- a domain inside a VPC (`vpc_only`, `toggle: VPC_SUBNET_IDS`): the scanner's
+  Lambda is not in the domain's VPC, so it cannot reach the endpoint. With the
+  function attached to the VPC (`VPC_SUBNET_IDS` and `VPC_SECURITY_GROUP_IDS`,
+  #105), the domain's VPC endpoint is read the same way; one the function still
+  cannot reach is an `error`;
 - a domain still being created or deleted (`unsupported`);
 - a domain whose access policy or fine-grained access control refuses the
   scanner's role (`access_denied`): map the role to a read-only backend role
@@ -139,10 +142,14 @@ class OpenSearchAdapter:
                     store.skip("unsupported")  # being created or deleted
                     store.extra["state"] = "deleted" if d.get("Deleted") else "creating"
                     continue
-                if not d.get("Endpoint"):
-                    store.skip("vpc_only")  # only a VPC endpoint: out of the Lambda's reach
+                endpoint = d.get("Endpoint")
+                if not endpoint and ctx.config.vpc_attached:
+                    endpoint = (d.get("Endpoints") or {}).get("vpc")  # the function is in a VPC
+                if not endpoint:
+                    # Only a VPC endpoint: out of the Lambda's reach until it is attached.
+                    store.toggle_off("VPC_SUBNET_IDS", "vpc_only")
                     continue
-                store.extra["endpoint"] = str(d["Endpoint"])
+                store.extra["endpoint"] = str(endpoint)
                 tag_error: str | None = None
                 if needs_tags(ctx.config, "opensearch"):
                     try:
@@ -189,7 +196,7 @@ class OpenSearchAdapter:
                     tag_error = error_name(err)
             decide(store, ctx.config, tag_error)
             if store.status == "pending" and not ctx.config.opensearch_serverless_read:
-                store.skip("read_not_configured")
+                store.toggle_off("OPENSEARCH_SERVERLESS_READ")
 
     def source(self, ctx: Context, store: Store) -> OpenSearchSource | None:
         endpoint = store.extra.get("endpoint")

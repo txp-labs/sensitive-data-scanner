@@ -85,6 +85,36 @@ variable "read_databases" {
   default     = false
 }
 
+variable "read_spanner" {
+  description = "GCP_SPANNER: read Spanner databases (on by default). Off leaves out the Spanner role, with its session permissions, and reports each database read_not_configured (docs/limitations.md, C2)."
+  type        = bool
+  default     = true
+}
+
+variable "read_alloydb" {
+  description = "GCP_ALLOYDB: with read_databases, read AlloyDB too (on by default). Off leaves out the AlloyDB login role, with generateClientCertificate, and reports each cluster read_not_configured (C2)."
+  type        = bool
+  default     = true
+}
+
+variable "read_archive_objects" {
+  description = "GCS_READ_ARCHIVE: read Archive-class objects, which have a retrieval fee (off by default: counted as notAllowed archive_class, C3)."
+  type        = bool
+  default     = false
+}
+
+variable "read_sqlserver" {
+  description = "GCP_SQLSERVER: a hook, off by default. Cloud SQL for SQL Server has no IAM database authentication and no reader is built: on, each database is reported not_implemented (C4)."
+  type        = bool
+  default     = false
+}
+
+variable "read_pubsub_dead_letters" {
+  description = "GCP_READ_PUBSUB_DLQ: a hook, off by default. The dead-letter reader (a subscription of the scanner's own) is not built: on, each dead-letter topic is reported not_implemented (C5)."
+  type        = bool
+  default     = false
+}
+
 variable "read_private_logs" {
   description = "LOGGING_PRIVATE_READ=on: read Data Access audit logs. Adds logging.privateLogEntries.list."
   type        = bool

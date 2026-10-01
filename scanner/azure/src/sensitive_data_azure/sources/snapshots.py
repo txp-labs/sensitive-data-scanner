@@ -10,8 +10,10 @@ snapshot's when the disk is gone) holding its latest snapshot, with
 `beginGetAccess`, which puts the snapshot in an exported state and mints a SAS
 URL for it (`Microsoft.Compute/snapshots/beginGetAccess/action`), then
 `endGetAccess`. Both change the resource, so the scanner, which holds read
-roles only, never calls them. Every snapshot is the gap `needs_sas_export`.
-docs/AZURE.md describes the opt-in export reader, designed and not built.
+roles only, never calls them. Every snapshot is the gap `needs_sas_export`,
+naming `toggle: AZURE_READ_SNAPSHOTS`. docs/AZURE.md describes the opt-in
+export reader, designed and not built: that setting is its hook (#105), and
+turned on, each snapshot is `not_implemented`, never a silent pass.
 
 **Encryption (1.5):** `EncryptionAtRestWithPlatformKey` is `service_managed`;
 a customer key (`EncryptionAtRestWithCustomerKey`, or platform and customer
@@ -85,8 +87,13 @@ class DiskSnapshotAdapter:
                 store.size_bytes = int(latest["sizeBytes"])
             store.facts = _facts(latest, sets)
             out.stores.append(store)
-            if apply_rules(store, ctx.settings.allow, ctx.settings.deny):
-                store.skip("needs_sas_export")  # beginGetAccess changes the snapshot: never called
+            if not apply_rules(store, ctx.settings.allow, ctx.settings.deny):
+                continue
+            if ctx.settings.read_snapshots:
+                store.not_implemented("AZURE_READ_SNAPSHOTS")  # the export reader is a hook
+            else:
+                # beginGetAccess changes the snapshot: never called
+                store.toggle_off("AZURE_READ_SNAPSHOTS", "needs_sas_export")
 
     def source(self, ctx: Context, store: Store) -> None:
         return None

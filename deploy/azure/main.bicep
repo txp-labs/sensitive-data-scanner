@@ -45,6 +45,12 @@ param readKeyVaultSecrets bool = false
 param readFileShares bool = false
 @description('Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on.')
 param cosmosAccountIds array = []
+@description('AZURE_LOG_ANALYTICS: read Log Analytics workspaces with Reader (on by default); off lists them, read_not_configured (docs/limitations.md, B1).')
+param readLogAnalytics bool = true
+@description('AZURE_READ_SNAPSHOTS: a hook, off by default. A snapshot is read only by a SAS export, a write, and no reader is built: on, each snapshot is reported not_implemented (B4).')
+param readDiskSnapshots bool = false
+@description('AZURE_COSMOS_READER_POLICY: a hook, off by default. The Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built (its remediation identity would need a write role): on, an account the identity cannot read is reported not_implemented; use cosmosAccountIds (B3).')
+param assignCosmosReaderPolicy bool = false
 @secure()
 param findingsHttpsUrl string = ''
 @secure()
@@ -104,6 +110,9 @@ module centralJob 'modules/job.bicep' = if (central) {
     readDatabases: readDatabases
     readKeyVaultSecrets: readKeyVaultSecrets
     readFileShares: readFileShares
+    readLogAnalytics: readLogAnalytics
+    readDiskSnapshots: readDiskSnapshots
+    assignCosmosReaderPolicy: assignCosmosReaderPolicy
     blobInventoryMinObjects: blobInventoryMinObjects
     findingsHttpsUrl: findingsHttpsUrl
     findingsHmacKey: findingsHmacKey
@@ -158,6 +167,9 @@ module jobs 'modules/job.bicep' = [
       readDatabases: readDatabases
       readKeyVaultSecrets: readKeyVaultSecrets
       readFileShares: readFileShares
+      readLogAnalytics: readLogAnalytics
+      readDiskSnapshots: readDiskSnapshots
+      assignCosmosReaderPolicy: assignCosmosReaderPolicy
       blobInventoryMinObjects: blobInventoryMinObjects
       findingsHttpsUrl: findingsHttpsUrl
       findingsHmacKey: findingsHmacKey

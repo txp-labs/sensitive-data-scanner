@@ -1,5 +1,5 @@
 {
- "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request. Changed since fb9097a, deliberately: #94 (iam:PassedToService on the RDS export role also rds.amazonaws.com, which StartExportTask evaluates; kms:Decrypt also through logs.<region>, for log groups under a customer managed key).",
+ "about": "Every statement ScannerRole can hold in deploy/scanner.yaml at fb9097a, before the Denies and opt-in Allows moved to managed policies (normalized by tests/cfn_templates.py: the conditions each comes under, sorted; action lists sorted). test_iam_limits.py holds the template to exactly these. A change to the role's permissions changes this file in the same pull request. Changed since fb9097a, deliberately: #94 (iam:PassedToService on the RDS export role also rds.amazonaws.com, which StartExportTask evaluates; kms:Decrypt also through logs.<region>, for log groups under a customer managed key); #105 (an optional allow-list of keys for every kms:Decrypt through a service, KmsAllowedKeyArns; timestream:Select and cassandra:Select under TimestreamRead and KeyspacesRead; the network interfaces Lambda places in the customer's VPC under VpcSubnetIds, as AWSLambdaVPCAccessExecutionRole grants them).",
  "statements": [
   {
    "gates": [
@@ -122,7 +122,15 @@
      }
     },
     "Effect": "Allow",
-    "Resource": "*",
+    "Resource": {
+     "Fn::If": [
+      "KmsKeyAllowList",
+      {
+       "Ref": "KmsAllowedKeyArns"
+      },
+      "*"
+     ]
+    },
     "Sid": "DecryptSnapshotsThroughEbs"
    }
   },
@@ -232,6 +240,19 @@
   },
   {
    "gates": [
+    "KeyspacesReads"
+   ],
+   "statement": {
+    "Action": "cassandra:Select",
+    "Effect": "Allow",
+    "Resource": {
+     "Fn::Sub": "arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*"
+    },
+    "Sid": "SelectKeyspaces"
+   }
+  },
+  {
+   "gates": [
     "KmsDecrypt"
    ],
    "statement": {
@@ -267,7 +288,15 @@
      }
     },
     "Effect": "Allow",
-    "Resource": "*",
+    "Resource": {
+     "Fn::If": [
+      "KmsKeyAllowList",
+      {
+       "Ref": "KmsAllowedKeyArns"
+      },
+      "*"
+     ]
+    },
     "Sid": "DecryptThroughS3AndDynamoDB"
    }
   },
@@ -663,7 +692,15 @@
      }
     },
     "Effect": "Allow",
-    "Resource": "*",
+    "Resource": {
+     "Fn::If": [
+      "KmsKeyAllowList",
+      {
+       "Ref": "KmsAllowedKeyArns"
+      },
+      "*"
+     ]
+    },
     "Sid": "DecryptSecretsThroughSecretsManager"
    }
   },
@@ -694,7 +731,15 @@
      }
     },
     "Effect": "Allow",
-    "Resource": "*",
+    "Resource": {
+     "Fn::If": [
+      "KmsKeyAllowList",
+      {
+       "Ref": "KmsAllowedKeyArns"
+      },
+      "*"
+     ]
+    },
     "Sid": "DecryptQueuesThroughSqs"
    }
   },
@@ -725,19 +770,47 @@
      }
     },
     "Effect": "Allow",
-    "Resource": "*",
+    "Resource": {
+     "Fn::If": [
+      "KmsKeyAllowList",
+      {
+       "Ref": "KmsAllowedKeyArns"
+      },
+      "*"
+     ]
+    },
     "Sid": "DecryptParametersThroughSsm"
    }
   },
   {
-   "gates": [],
+   "gates": [
+    "TimestreamReads"
+   ],
    "statement": {
-    "Action": "cassandra:Select",
+    "Action": "timestream:Select",
     "Effect": "Allow",
     "Resource": {
-     "Fn::Sub": "arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*"
+     "Fn::Sub": "arn:${AWS::Partition}:timestream:${AWS::Region}:${AWS::AccountId}:database/*/table/*"
     },
-    "Sid": "SelectKeyspaces"
+    "Sid": "SelectTimestreamTables"
+   }
+  },
+  {
+   "gates": [
+    "VpcAttached"
+   ],
+   "statement": {
+    "Action": [
+     "ec2:AssignPrivateIpAddresses",
+     "ec2:CreateNetworkInterface",
+     "ec2:DeleteNetworkInterface",
+     "ec2:DescribeNetworkInterfaces",
+     "ec2:DescribeSubnets",
+     "ec2:UnassignPrivateIpAddresses"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "LambdaVpcNetworkInterfaces"
    }
   },
   {
@@ -862,17 +935,6 @@
      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
     },
     "Sid": "ReadParameters"
-   }
-  },
-  {
-   "gates": [],
-   "statement": {
-    "Action": "timestream:Select",
-    "Effect": "Allow",
-    "Resource": {
-     "Fn::Sub": "arn:${AWS::Partition}:timestream:${AWS::Region}:${AWS::AccountId}:database/*/table/*"
-    },
-    "Sid": "SelectTimestreamTables"
    }
   },
   {

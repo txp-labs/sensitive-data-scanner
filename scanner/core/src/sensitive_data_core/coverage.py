@@ -8,10 +8,16 @@ ones not read and why** (`denied`, `not_allowed`, `self`, `too_large`,
 to a later run by the budget, or an adapter's own reason), so a coverage gap
 is visible rather than silent. Names in the summary are masked like object
 keys. Nothing here names a cloud.
+
+(1.12, #105) A store left unread because a setting is off names that setting
+(`toggle`), so the customer sees what turns the read on (docs/limitations.md).
+A setting that is only a hook, whose read is not built yet, gives the reason
+`not_implemented` when it is turned on, never a silent no-op.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,6 +44,12 @@ ACCESS_DENIED = frozenset(
     }
 )
 MAX_STORES_IN_SUMMARY = 5000
+# (1.12, #105) A store whose read a setting turns on, with that setting on, but whose read
+# path is a hook only (designed, not built): skipped, and named so, never silently.
+NOT_IMPLEMENTED = "not_implemented"
+# A store left unread because a setting is off.
+READ_NOT_CONFIGURED = "read_not_configured"
+_TOGGLE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,63}$")
 
 _INTERNAL = frozenset(
     {
@@ -87,11 +99,29 @@ class Store:
     # and `atRestKeyHash`, `findings.encryption_facts`). Its sources give each finding these,
     # and the run summary shows them.
     facts: dict[str, Any] = field(default_factory=dict)
+    # (1.12, #105) The setting that would read what this store left unread (docs/limitations.md).
+    toggle: str | None = None
 
-    def skip(self, reason: str, error: str | None = None) -> None:
+    def skip(self, reason: str, error: str | None = None, toggle: str | None = None) -> None:
         self.status = "skipped"
         self.reason = reason
         self.error = error
+        if toggle is not None:
+            self.name_toggle(toggle)
+
+    def name_toggle(self, toggle: str) -> None:
+        """Name the setting that turns on what this store left unread (a setting's name)."""
+        if not _TOGGLE.match(toggle):
+            raise ValueError("a toggle is a setting's name")
+        self.toggle = toggle
+
+    def toggle_off(self, toggle: str, reason: str = READ_NOT_CONFIGURED) -> None:
+        """Not read because `toggle` is off: a gap that names the setting that turns it on."""
+        self.skip(reason, toggle=toggle)
+
+    def not_implemented(self, toggle: str) -> None:
+        """`toggle` is on, but the read it turns on is a hook only: a named gap, not a no-op."""
+        self.skip(NOT_IMPLEMENTED, toggle=toggle)
 
     def as_json(self) -> dict[str, Any]:
         name = redact_digits(self.name)
@@ -107,6 +137,8 @@ class Store:
             out["reason"] = self.reason
         if self.error:
             out["error"] = self.error
+        if self.toggle:
+            out["toggle"] = self.toggle
         if self.size_bytes is not None:
             out["sizeBytes"] = self.size_bytes
         if self.sample_percent is not None and self.sample_percent < 100:
@@ -201,6 +233,8 @@ NOTES = {
     "throttled": ("deferred", "throttled"),
     # (1.8) A Slack channel the app's bot was not invited to (joining would be a write).
     "not_a_member": ("skipped", "not_a_member"),
+    # (1.12, #105) A source whose read a setting turned on, but which is a hook only.
+    NOT_IMPLEMENTED: ("skipped", NOT_IMPLEMENTED),
 }
 
 

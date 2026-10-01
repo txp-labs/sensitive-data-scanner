@@ -44,6 +44,10 @@ CLUSTERS = ",".join(f"arn:{P}:rds:{R}:{A}:cluster:{'c' * 63}" for _ in range(3))
 ALL_ON: dict[str, Any] = {
     "ConfigLocation": "ssm:/sensitive-data-scanner/config",
     "AllowKmsDecrypt": "true",
+    # #105: an allow-list of keys puts three key ARNs in every kms:Decrypt statement.
+    "KmsAllowedKeyArns": ",".join([KEY] * 3),
+    "VpcSubnetIds": "subnet-0123456789abcdef0,subnet-0123456789abcdef1",
+    "VpcSecurityGroupIds": "sg-0123456789abcdef0",
     "RdsExportKmsKeyArn": KEY,
     "EnableDynamoDBExport": "true",
     "DynamoDBExportKmsKeyArn": KEY,
@@ -69,6 +73,8 @@ ALL_ON: dict[str, Any] = {
 ALL_OFF: dict[str, Any] = {
     "AllowKmsDecrypt": "false",
     "SsmDecrypt": "false",
+    "TimestreamRead": "false",
+    "KeyspacesRead": "false",
 }
 SCENARIOS: dict[str, dict[str, dict[str, Any]]] = {
     "scanner.yaml": {
@@ -138,7 +144,7 @@ def test_the_worst_case_is_the_all_on_case() -> None:
     on = role_sizes(t, "ScannerRole", SCENARIOS["scanner.yaml"]["all opt-ins, Redshift db-user"])
     off = role_sizes(t, "ScannerRole", ALL_OFF)
     assert sum(on["managed"].values()) > sum(off["managed"].values())
-    assert on["count"] == 8 and off["count"] == 4
+    assert on["count"] == 9 and off["count"] == 4
 
 
 def test_the_scanner_role_keeps_exactly_its_permissions() -> None:

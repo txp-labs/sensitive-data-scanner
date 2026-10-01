@@ -169,6 +169,41 @@ def test_workspace_alerts_link_to_the_scanners_drive_findings(tmp_path: Path) ->
     assert ADMIN not in blob
 
 
+def test_the_alert_center_off_imports_nothing_and_says_so(tmp_path: Path) -> None:
+    """D1 (#105): GWS_ALERT_CENTER off (on by default): in both mode nothing is imported, the
+    importer says `not_enabled` naming the setting, and the scanner still reads Drive."""
+    w = Workspace()
+    w.user(ANA)
+    w.file(
+        "my",
+        DFile("f1", "notes.txt", data=f"my card is {printed(CARDS['visa'])}".encode(), owner=ANA),
+    )
+    w.alerts = [{"alertId": "al-1", "createTime": "2026-09-28T10:00:00Z"}]
+    doc = scan(
+        w,
+        gws_settings(
+            tmp_path, GWS_USERS=ANA, DISCOVER="drive", SCAN_MODE="both", GWS_ALERT_CENTER="off"
+        ),
+    )
+    (cov,) = doc["vendorCoverage"]
+    assert (cov["vendor"], cov["status"], cov["findings"], cov["toggle"]) == (
+        "google_workspace_dlp",
+        "not_enabled",
+        0,
+        "GWS_ALERT_CENTER",
+    )
+    assert {f["source"] for f in doc["findings"]} == {"scanner"}
+    # In vendor mode, nothing reads Workspace: its stores say so.
+    doc = scan(
+        w,
+        gws_settings(
+            tmp_path, GWS_USERS=ANA, DISCOVER="drive", SCAN_MODE="vendor", GWS_ALERT_CENTER="off"
+        ),
+    )
+    assert {x["reason"] for x in doc["discovery"]["stores"]} == {"vendor_not_covered"}
+    assert doc["findings"] == []
+
+
 def test_slack_dlp_audit_events_link_to_the_scanners_messages(tmp_path: Path) -> None:
     o = SlackOrg()
     c = Chan("C0SUPPORT1", "support")
@@ -200,11 +235,43 @@ def test_slack_dlp_audit_events_link_to_the_scanners_messages(tmp_path: Path) ->
     vendor = [f for f in doc["findings"] if f["source"] == "vendor:slack_dlp"]
     msg = next(f for f in vendor if f["resource"]["part"] == "message")
     ours = next(f for f in doc["findings"] if f["source"] == "scanner")
-    # The same message, by its hash; not linked, since the event names no class of data.
+    # The same message, by its hash. The event names no class of data: linked by location
+    # only (#105, LINK_VENDOR_ALERTS_BY_LOCATION on by default), and both sides say so.
     assert msg["resource"]["itemHash"] == ours["resource"]["itemHash"]
-    assert "linked" not in msg and "linked" not in ours
+    assert msg["linked"] == [ours["id"]] and ours["linked"] == [msg["id"]]
+    assert msg["linkedBy"] == ours["linkedBy"] == "location"
     assert "no_data_class" in cov["limits"]
     assert msg["vendorType"] == "native_dlp_rule_matched"
     blob = json.dumps(doc)
     assert CARDS["visa"] not in blob and "bob@" not in blob and AUDIT not in blob
     assert o.audit_queries and o.audit_queries[0]["action"] == "native_dlp_rule_matched"
+
+
+def test_linking_by_location_can_be_turned_off(tmp_path: Path) -> None:
+    """D2 (#105): LINK_VENDOR_ALERTS_BY_LOCATION off: an alert that names no kind of data is
+    never linked, as before 1.12."""
+    o = SlackOrg()
+    c = Chan("C0SUPPORT1", "support")
+    c.messages = [{"ts": ts(5), "text": f"my card is {printed(CARDS['visa'])}"}]
+    o.channels[c.id] = c
+    o.audit = [
+        {
+            "id": "ev-1",
+            "date_create": int(NOW.timestamp()) - 3600,
+            "action": "native_dlp_rule_matched",
+            "entity": {"type": "message", "message": {"channel": "C0SUPPORT1", "timestamp": ts(5)}},
+        }
+    ]
+    audit = tmp_path / "audit-token"
+    audit.write_text(AUDIT)
+    doc = scan(
+        o,
+        slack_settings(
+            tmp_path,
+            SCAN_MODE_SLACK="both",
+            SLACK_AUDIT_TOKEN_FILE=str(audit),
+            LINK_VENDOR_ALERTS_BY_LOCATION="off",
+        ),
+    )
+    assert not any("linked" in f or "linkedBy" in f for f in doc["findings"])
+    assert len(doc["findings"]) == 2

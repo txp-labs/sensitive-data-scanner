@@ -96,7 +96,7 @@ def discover(ctx: Context) -> Discovery:
     for kind in ctx.settings.configured:
         if kind not in ctx.settings.discover and kind in OPT_IN_KINDS:
             off = Store(kind, "*", origin="config")
-            off.skip("read_not_configured")
+            off.toggle_off("DISCOVER")  # an opt-in kind: named in DISCOVER to be read
             out.stores.append(off)
     for kind in ctx.settings.discover:
         adapter = ADAPTERS.get(kind)
@@ -156,22 +156,52 @@ VENDOR_KINDS: dict[str, tuple[str, ...]] = {
 }
 
 
+# The importers whose findings name no kind of data (class `other`): with
+# LINK_VENDOR_ALERTS_BY_LOCATION on, linked to the scanner's findings at the same item (#105).
+LOCATION_ONLY = ("vendor:purview", "vendor:slack_dlp")
+
+
 def importers(ctx: Context) -> list[Any]:
     """The importer of each vendor whose mode is not `scanner` (#55)."""
     from .sources.gws_alerts import WorkspaceAlertsImporter  # noqa: PLC0415
     from .sources.purview import PurviewImporter  # noqa: PLC0415
     from .sources.slack_audit import SlackAuditImporter  # noqa: PLC0415
 
-    made = {
+    made: dict[str, Any] = {
         "m365": PurviewImporter,
         "google_workspace": WorkspaceAlertsImporter,
         "slack": SlackAuditImporter,
     }
+    gws = ctx.settings.gws
+    if gws is not None and not gws.alert_center:
+        made["google_workspace"] = _AlertCenterOff  # #105: GWS_ALERT_CENTER off
     return [
         made[vendor](ctx, mode)
         for vendor, mode in ctx.settings.modes
         if mode != SCANNER and vendor in made
     ]
+
+
+class _AlertCenterOff:
+    """The Workspace Alert Center's importer with `GWS_ALERT_CENTER` off (#105): it reads
+    nothing, covers nothing, and says so (`not_enabled`, naming the setting). Its cursor is
+    kept, so turning it on resumes where it stopped."""
+
+    covers: tuple[str, ...] = ()
+
+    def __init__(self, ctx: Context, mode: str) -> None:
+        from .sources import gws_alerts  # noqa: PLC0415
+
+        self.id = gws_alerts.ID
+        self.vendor = gws_alerts.VENDOR
+        self.mode = mode
+
+    def run(
+        self, cursor: dict[str, Any], budget: Budget, store: FindingStore, now: _dt.datetime
+    ) -> tuple[VendorCoverage, dict[str, Any]]:
+        cov = VendorCoverage(self.vendor, "google_workspace", self.mode, status="not_enabled")
+        cov.toggle = "GWS_ALERT_CENTER"
+        return cov, cursor
 
 
 def _load(state: StateStore | None, site: str) -> dict[str, Any]:
@@ -348,7 +378,8 @@ def _scan(
             st.status, st.reason = "deferred", "budget"
     public = findings.public()
     if BOTH in modes.values():
-        link_duplicates(public)
+        # #105: Purview's and Slack DLP's alerts name no kind of data: linked by item.
+        link_duplicates(public, by_location=LOCATION_ONLY if settings.link_by_location else ())
     doc = findings_document(
         run_id=run_id,
         account=None,

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10213771761692270377"
+      "templateHash": "9624321840434096015"
     }
   },
   "parameters": {
@@ -102,6 +102,27 @@
       "defaultValue": [],
       "metadata": {
         "description": "Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on."
+      }
+    },
+    "readLogAnalytics": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "AZURE_LOG_ANALYTICS: read Log Analytics workspaces with Reader (on by default); off lists them, read_not_configured (docs/limitations.md, B1)."
+      }
+    },
+    "readDiskSnapshots": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "AZURE_READ_SNAPSHOTS: a hook, off by default. A snapshot is read only by a SAS export, a write, and no reader is built: on, each snapshot is reported not_implemented (B4)."
+      }
+    },
+    "assignCosmosReaderPolicy": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "AZURE_COSMOS_READER_POLICY: a hook, off by default. The Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built (its remediation identity would need a write role): on, an account the identity cannot read is reported not_implemented; use cosmosAccountIds (B3)."
       }
     },
     "findingsHttpsUrl": {
@@ -272,6 +293,15 @@
           "readFileShares": {
             "value": "[parameters('readFileShares')]"
           },
+          "readLogAnalytics": {
+            "value": "[parameters('readLogAnalytics')]"
+          },
+          "readDiskSnapshots": {
+            "value": "[parameters('readDiskSnapshots')]"
+          },
+          "assignCosmosReaderPolicy": {
+            "value": "[parameters('assignCosmosReaderPolicy')]"
+          },
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
@@ -298,7 +328,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "17934717672359237149"
+              "templateHash": "3438155641692074347"
             }
           },
           "parameters": {
@@ -355,6 +385,27 @@
             "readFileShares": {
               "type": "bool",
               "defaultValue": false
+            },
+            "readLogAnalytics": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "AZURE_LOG_ANALYTICS (docs/limitations.md, B1)."
+              }
+            },
+            "readDiskSnapshots": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "AZURE_READ_SNAPSHOTS: a hook (docs/limitations.md, B4)."
+              }
+            },
+            "assignCosmosReaderPolicy": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "AZURE_COSMOS_READER_POLICY: a hook (docs/limitations.md, B3)."
+              }
             },
             "blobInventoryMinObjects": {
               "type": "int",
@@ -487,7 +538,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(parameters('readLogAnalytics'), 'on', 'off')), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(parameters('readDiskSnapshots'), 'on', 'off')), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(parameters('assignCosmosReaderPolicy'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
@@ -643,6 +694,15 @@
           "readFileShares": {
             "value": "[parameters('readFileShares')]"
           },
+          "readLogAnalytics": {
+            "value": "[parameters('readLogAnalytics')]"
+          },
+          "readDiskSnapshots": {
+            "value": "[parameters('readDiskSnapshots')]"
+          },
+          "assignCosmosReaderPolicy": {
+            "value": "[parameters('assignCosmosReaderPolicy')]"
+          },
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
@@ -666,7 +726,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "17934717672359237149"
+              "templateHash": "3438155641692074347"
             }
           },
           "parameters": {
@@ -723,6 +783,27 @@
             "readFileShares": {
               "type": "bool",
               "defaultValue": false
+            },
+            "readLogAnalytics": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "AZURE_LOG_ANALYTICS (docs/limitations.md, B1)."
+              }
+            },
+            "readDiskSnapshots": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "AZURE_READ_SNAPSHOTS: a hook (docs/limitations.md, B4)."
+              }
+            },
+            "assignCosmosReaderPolicy": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "AZURE_COSMOS_READER_POLICY: a hook (docs/limitations.md, B3)."
+              }
             },
             "blobInventoryMinObjects": {
               "type": "int",
@@ -855,7 +936,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(parameters('readLogAnalytics'), 'on', 'off')), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(parameters('readDiskSnapshots'), 'on', 'off')), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(parameters('assignCosmosReaderPolicy'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }

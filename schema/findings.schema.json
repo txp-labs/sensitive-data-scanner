@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.11",
+  "title": "Sensitive-data scanner findings, version 1.12",
   "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site, or (1.8) in the SaaS tenants of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.11" },
+    "schemaVersion": { "const": "1.12" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
@@ -67,6 +67,11 @@
           "mode": { "enum": ["vendor", "both"] },
           "status": { "enum": ["read", "not_enabled", "access_denied", "error", "throttled"] },
           "error": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,80}$" },
+          "toggle": {
+            "description": "(1.12, #105) With status not_enabled because a setting is off: the setting that turns the import on (docs/limitations.md).",
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$"
+          },
           "findings": { "type": "integer", "minimum": 0 },
           "covers": { "type": "array", "items": { "$ref": "#/$defs/storeKind" } },
           "limits": {
@@ -558,6 +563,10 @@
           "maxItems": 20,
           "items": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
         },
+        "linkedBy": {
+          "description": "(1.12, #105) At least one of the links in 'linked' is by location only: a vendor's finding that names no kind of data (class other: Purview's and Slack DLP's alerts) at the same item as findings of another source, whatever their class. Linked so only with LINK_VENDOR_ALERTS_BY_LOCATION on (the default).",
+          "const": "location"
+        },
         "disguised": {
           "description": "The object (or archive entry, or an archive holding it) is named as one kind and is another (1.9, #65): a Word document named .jpg. It was read by what its bytes are.",
           "const": true
@@ -661,9 +670,9 @@
           "minimum": 0
         },
         "notAllowed": {
-          "description": "(1.10) Objects listed and not read because the store's own rules do not allow them, by reason: key_filter (the bucket's keyInclude / keyExclude in DISCOVER_SAMPLING). Counted, never read, never a finding.",
+          "description": "(1.10) Objects listed and not read because the store's own rules do not allow them, by reason: key_filter (the bucket's keyInclude / keyExclude in DISCOVER_SAMPLING); (1.12, #105) archive_class (a Cloud Storage Archive-class object, whose read has a retrieval fee, with GCS_READ_ARCHIVE off). Counted, never read, never a finding.",
           "type": "object",
-          "propertyNames": { "enum": ["key_filter"] },
+          "propertyNames": { "enum": ["key_filter", "archive_class"] },
           "additionalProperties": { "type": "integer", "minimum": 1 }
         },
         "rescanBacklog": {
@@ -694,7 +703,8 @@
         "archive_retrieval", "network", "needs_sas_export",
         "requester_pays", "row_level_policy", "authorized_view", "needs_subscription",
         "needs_disk_restore", "scope_unverified", "unscoped_grant", "protected_api",
-        "not_provisioned", "throttled", "not_a_member", "vendor_mode", "vendor_not_covered"
+        "not_provisioned", "throttled", "not_a_member", "vendor_mode", "vendor_not_covered",
+        "not_implemented"
       ]
     },
     "discovery": {
@@ -717,6 +727,11 @@
               "status": { "enum": ["scanned", "deferred", "skipped", "error", "pending"] },
               "reason": { "$ref": "#/$defs/storeReason" },
               "error": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,80}$" },
+              "toggle": {
+                "description": "(1.12, #105) The setting that would read what this store left unread: with reason read_not_configured (or another gap a setting decides), the setting that is off; with reason not_implemented, the setting that is on but whose read is a hook only, not built yet (docs/limitations.md).",
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$"
+              },
               "sizeBytes": { "type": "integer", "minimum": 0 },
               "samplePercent": { "type": "integer", "minimum": 1, "maximum": 100 },
               "maxObjectsPerPrefix": { "type": "integer", "minimum": 1 },

@@ -129,6 +129,21 @@ def test_tables_with_data_are_sampled_by_column_and_billed_plans_skipped() -> No
     assert "['Custom\\'CL']" in " ".join(lg.queries)
 
 
+def test_log_analytics_off_lists_workspaces_and_queries_none() -> None:
+    """B1 (#105): AZURE_LOG_ANALYTICS off (on by default): each workspace is
+    `read_not_configured`, naming the setting, and no query is run."""
+    lg = logs()
+    doc = run(tenant(lg), AZURE_LOG_ANALYTICS="off")
+    s = {x["name"]: x for x in doc["discovery"]["stores"]}
+    for name in ("law-contoso", "law-cmk"):
+        assert (s[name]["status"], s[name]["reason"], s[name]["toggle"]) == (
+            "skipped",
+            "read_not_configured",
+            "AZURE_LOG_ANALYTICS",
+        )
+    assert lg.queries == [] and not doc["findings"]
+
+
 def test_a_workspace_resumes_at_its_next_table() -> None:
     lg = logs()
     t = tenant(lg)

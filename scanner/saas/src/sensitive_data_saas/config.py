@@ -97,6 +97,21 @@ Center's DLP alerts or Slack's DLP audit events and reads nothing of that
 vendor; `both` reads and imports. Atlassian has no detection of its own:
 `scanner` only.
 
+**Limitations' toggles** (#105, docs/limitations.md)
+
+- `M365_MAIL`: `on` (the default) reads mailboxes once the grant is proved
+  scoped (`M365_MAIL_SCOPE_CHECK`; that refusal is always on); `off` lists
+  them and reads none (`read_not_configured`).
+- `GWS_ALERT_CENTER`: `on` (the default) imports the Alert Center's DLP
+  alerts in `vendor` or `both` mode; `off` imports nothing and says so
+  (`vendorCoverage`: `not_enabled`, `toggle: GWS_ALERT_CENTER`).
+- `LINK_VENDOR_ALERTS_BY_LOCATION`: `on` (the default) links a vendor's alert
+  that names no kind of data (Purview, Slack DLP) to the scanner's findings at
+  the same item (`linkedBy: location`); `off` never links such an alert.
+- `ATLASSIAN_AUTH_MODE`: `token` (the default, recommended) or `oauth` (3LO,
+  whose refresh token file must be writable); the other mode's settings are
+  refused.
+
 **Atlassian** (on when `ATLASSIAN_SITE` is set)
 
 - `ATLASSIAN_SITE`: the Cloud site, `acme.atlassian.net`.
@@ -210,6 +225,8 @@ class M365Settings:
     all_sites: bool = False
     teams: tuple[str, ...] = ()
     customer_key_id: str | None = field(default=None, repr=False)
+    # #105: M365_MAIL off lists mailboxes and reads none.
+    mail_read: bool = True
 
     def __repr__(self) -> str:
         return f"M365Settings(users={len(self.users)}, groups={len(self.groups)})"
@@ -228,6 +245,8 @@ class GwsSettings:
     org_units: tuple[str, ...] = ()
     shared_drives: tuple[str, ...] = ()
     all_shared_drives: bool = False
+    # #105: GWS_ALERT_CENTER off imports no Alert Center alerts in vendor or both mode.
+    alert_center: bool = True
 
     def __repr__(self) -> str:
         return f"GwsSettings(users={len(self.users)}, groups={len(self.groups)})"
@@ -300,6 +319,8 @@ class Settings:
     configured: tuple[str, ...] = ()
     # #55: each configured vendor's mode (the core's `scanner`, `vendor` or `both`).
     modes: tuple[tuple[str, str], ...] = ()
+    # #105: a vendor's alert with no kind of data is linked to findings at the same item.
+    link_by_location: bool = True
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -316,6 +337,17 @@ def _int(v: str | None, default: int, lo: int, hi: int) -> int:
     except ValueError:
         raise ConfigError("not_a_number") from None
     return max(lo, min(hi, n))
+
+
+def _toggle(v: str | None, default: str, name: str) -> bool:
+    """A limitation's on/off setting (#105): on, off (or true, false, 1, 0, yes, no). A wrong
+    value is reported by `name`, a fixed code."""
+    t = (v or default).strip().lower()
+    if t in ("on", "true", "1", "yes"):
+        return True
+    if t in ("off", "false", "0", "no"):
+        return False
+    raise ConfigError(name)
 
 
 def _list(v: str | None) -> tuple[str, ...]:
@@ -454,6 +486,7 @@ def _m365(e: Mapping[str, str]) -> M365Settings | None:
         all_sites=all_sites,
         teams=tuple(t.lower() for t in teams),
         customer_key_id=key_id,
+        mail_read=_toggle(e.get("M365_MAIL"), "on", "m365_mail"),
     )
 
 
@@ -519,6 +552,7 @@ def _gws(e: Mapping[str, str]) -> GwsSettings | None:
         org_units=org_units,
         shared_drives=drives,
         all_shared_drives=all_drives,
+        alert_center=_toggle(e.get("GWS_ALERT_CENTER"), "on", "gws_alert_center"),
     )
 
 
@@ -560,6 +594,11 @@ def _atlassian(e: Mapping[str, str]) -> AtlassianSettings | None:
         raise ConfigError("atlassian_secret_in_env")
     token_file = _file(e.get("ATLASSIAN_API_TOKEN_FILE"), "atlassian_api_token_file")
     client = (e.get("ATLASSIAN_OAUTH_CLIENT_ID") or "").strip() or None
+    # #105 (docs/limitations.md, D4): API-token mode unless OAuth is chosen by name; the
+    # other mode's settings are refused, so neither is used by accident.
+    mode = (e.get("ATLASSIAN_AUTH_MODE") or "token").strip().lower()
+    if mode not in ("token", "oauth") or (client if mode == "token" else token_file):
+        raise ConfigError("atlassian_auth_mode")
     if (token_file is None) == (client is None):
         raise ConfigError("atlassian_credential")
     email = token = secret = None
@@ -743,4 +782,7 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         atlassian=atlassian,
         configured=configured,
         modes=_modes(e, m365, gws, slack, atlassian),
+        link_by_location=_toggle(
+            e.get("LINK_VENDOR_ALERTS_BY_LOCATION"), "on", "link_vendor_alerts_by_location"
+        ),
     )

@@ -79,7 +79,10 @@ class MailAdapter:
     kind = KIND
 
     def discover(self, ctx: Context, out: Discovery) -> None:
-        scope = mail_scope(ctx)
+        m365 = ctx.settings.m365
+        # #105: with M365_MAIL off, mailboxes are listed and none is read (no scope check).
+        reading = m365 is None or m365.mail_read
+        scope = mail_scope(ctx) if reading else None
         for p in people(ctx):
             store = Store(KIND, p.store_name)
             store.extra.update(fields_of(ctx, p.principal_hash))
@@ -96,6 +99,9 @@ class MailAdapter:
                 store.skip(scope)
                 continue
             if not apply_rules(store, ctx.settings.allow, ctx.settings.deny):
+                continue
+            if not reading:
+                store.toggle_off("M365_MAIL")
                 continue
             pct, _ = ctx.settings.sampling_for(KIND, store.name, None)
             store.sample_percent = pct if pct is not None else ctx.settings.sample_percent
