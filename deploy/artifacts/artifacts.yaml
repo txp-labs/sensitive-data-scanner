@@ -367,6 +367,38 @@ Resources:
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1/signing/*
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1/signing/*
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2/signing/*
+              # AWS Signer checks the source bucket itself with the caller's
+              # credentials before a job starts (versioning, location, a listing
+              # of the signing/ prefix): without these, StartSigningJob fails
+              # "S3 bucket ... not accessible" (v0.5.0's first run, 1 Oct 2026).
+              - Sid: SignerChecksTheBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-2
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-west-2
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ca-central-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2
+              - Sid: SignerListsTheSigningPrefix
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-2
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-west-2
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ca-central-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - signing/*
               - Sid: SignWithEachRegionsProfile
                 Effect: Allow
                 Action:
