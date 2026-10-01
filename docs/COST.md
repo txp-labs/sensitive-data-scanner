@@ -107,6 +107,7 @@ almost none.
 | S3 transfer to Lambda | free within the region | The scanner runs in each region it reads |
 | KMS | $0.03 per 10,000 requests (20,000 free a month) | SSE-KMS objects without an S3 Bucket Key: about one `Decrypt` per GET, so **up to $3.60 per million objects read**. With Bucket Keys, S3 calls KMS far less often: a fraction of that |
 | S3 PUT (findings, state, index) | $0.005 per 1,000 | A handful per run: negligible |
+| Secrets Manager (optional, #109) | $0.40 per secret a month, $0.05 per 10,000 API calls | With `FindingsHmacKey`, one secret per account and region holds the Mermera key: **about $0.40 a month per stack**; it is read once per cold start, so the calls are negligible |
 | EventBridge `PutEvents` (optional push) | $1.00 per million events (64 KB chunks) | A findings part is up to about 200 KB (4 chunks). Negligible |
 | CloudWatch Logs `FilterLogEvents` | no per-request price on the pricing page | The cost is the Lambda time to read the events: **$0.025 to $0.05 per GB of log read**. The scanner does not use Logs Insights ($0.005 per GB scanned) |
 | DynamoDB `Scan` (on-demand) | $0.125 per million read request units; an eventually consistent read is half a unit per 4 KB | A table's pass is capped at 200 pages × 100 items. At 1 KB items that is 20 MB, about 2,500 units: **$0.0003 a table a pass**. On a provisioned table the Scan uses its capacity instead |
@@ -229,6 +230,74 @@ vCPU and 4 GiB, for at most 3,600 seconds.
   the Container Apps and Cloud Run rates above. A 1 vCPU, 2 GB task running
   one hour a day costs **about $1.50 a month**.
 
+## Reading cold storage classes
+
+Some storage classes charge for every byte read, on top of the request
+([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109)). The
+scanner decides what to read from each object's class in the listing it already
+does, so an object it leaves out costs nothing, and every run reports what
+reading the rest would cost: each object store's `storageClasses` (objects and
+bytes per class) and `costEstimate` in the run summary
+([FINDINGS.md](FINDINGS.md)). **Every scan cost lands on the customer's own
+cloud bill.**
+
+| Platform | Class / tier | Read? | Retrieval | Reads (GET) | Setting |
+|---|---|---|---|---|---|
+| S3 | Standard, Intelligent-Tiering (frequent, infrequent, archive instant) | yes | none | $0.0004 per 1,000 | |
+| S3 | Standard-IA, One Zone-IA | yes, within the byte budget | $0.01 per GB | $0.001 per 1,000 | |
+| S3 | Glacier Instant Retrieval | **off by default** | $0.03 per GB | $0.01 per 1,000 | `S3_READ_GLACIER_IR` |
+| S3 | Glacier Flexible Retrieval, Deep Archive, Intelligent-Tiering Archive and Deep Archive Access | **no**: needs a restore (a write, hours, the customer's cost): `needs_restore` | | | hook `S3_RESTORE_ARCHIVED` |
+| Azure Blob / ADLS Gen2 | Hot | yes | none | $0.0004 per 1,000 ($0.004 per 10,000) | |
+| Azure Blob / ADLS Gen2 | Cool | yes, within the byte budget | $0.01 per GB | $0.001 per 1,000 | |
+| Azure Blob / ADLS Gen2 | Cold | **off by default** | $0.03 per GB | $0.01 per 1,000 | `AZURE_READ_COLD_TIER` |
+| Azure Blob / ADLS Gen2 | Archive | **no**: needs a rehydration (Set Blob Tier or Copy Blob to Hot or Cool; a write, hours, the customer's cost): `needs_rehydration` | | | hook `AZURE_REHYDRATE_ARCHIVE` |
+| Cloud Storage | Standard | yes | none | $0.0004 per 1,000 | |
+| Cloud Storage | Nearline / Coldline | yes, within the byte budget | $0.01 / $0.02 per GiB | $0.001 / $0.01 per 1,000 | |
+| Cloud Storage | Archive | **off by default** (#105) | $0.05 per GiB | $0.05 per 1,000 | `GCS_READ_ARCHIVE` |
+
+Prices are us-east-1, eastus and Cloud Storage's single price; the estimate
+uses the store's own region where the table has it.
+
+**How the estimate is worked out.** For each class with a retrieval fee that
+the scanner can read (now, or with its setting on): the retrieval fee on the
+bytes a read fetches (each object up to `MAX_OBJECT_BYTES`, 20 MiB by default,
+not its full size) plus one GET per object. Ranged reads of a large or columnar
+object take a few GETs more, so the request part is a floor; the retrieval part
+is exact for those bytes. It is the cost of reading every object once (a full
+pass); later passes read only what changed, and smart rescans re-read at most
+`RESCAN_PERCENT` of a run's budget. `estimatedToScanUsd` covers the classes read
+now; `byClass` gives each priced class, read or not, so the cost of turning
+Glacier Instant Retrieval or Cold on is shown before anyone does. Classes that
+need a restore or a rehydration get counts and bytes only: the scanner cannot
+read them, so it has no estimate.
+
+For example, 100 GB in Standard-IA across 100,000 objects under 20 MiB:
+$1.00 retrieval and $0.10 in GETs, **$1.10 a full pass**; the same in Glacier
+Instant Retrieval: $3.00 and $1.00, **$4.00**; in Azure Cold (eastus): $3.00 and
+$1.00, **$4.00**; in Cloud Storage Coldline (93 GiB): $1.86 and $1.00, **about $2.90**.
+
+**The price table** is `scanner/core/src/sensitive_data_core/storage_prices.json`,
+dated, with its sources, written by `scripts/storage_prices.py --write` (never
+read from a pricing API at run time):
+
+- AWS: the Price List Bulk API's `AmazonS3` offer for each commercial region
+  (publication date **2026-09-28**), the figures of
+  <https://aws.amazon.com/s3/pricing/> (Requests & data retrievals). Standard-IA,
+  One Zone-IA and Glacier Instant Retrieval cost the same in every commercial
+  region today; the per-region rows stay so a change shows up in the diff.
+- Azure: the Retail Prices API, *General Block Blob v2*, LRS meters, per region
+  (read **2026-10-01**), the figures of
+  <https://azure.microsoft.com/pricing/details/storage/blobs/>. Cold and Archive
+  vary by region (Cold retrieval $0.03 to $0.045 per GB); other redundancies can
+  differ from LRS, and hierarchical-namespace (ADLS Gen2) read operations are
+  priced as flat.
+- Google Cloud: <https://cloud.google.com/storage/pricing>, *Retrieval fees*
+  and *Operation charges* (Class B, flat namespace), read **2026-10-01**: the
+  same in every location. A bucket with Autoclass pays no retrieval fee; the
+  estimate does not know Autoclass and overstates it.
+- A region the table lacks is priced as **us-east-1** (AWS) or **eastus**
+  (Azure), and the estimate says so (`regionFallback: true`).
+
 ## What brings it down
 
 | Lever | Setting | What it saves |
@@ -243,6 +312,7 @@ vCPU and 4 GiB, for at most 3,600 seconds.
 | **S3 Bucket Keys** | the customer's bucket setting | Removes most of the KMS cost on SSE-KMS buckets |
 | **Exports only when needed** | `EXPORT_MIN_INTERVAL_DAYS`, `MAX_EXPORTS_PER_RUN`, `DYNAMODB_INCREMENTAL`, `DYNAMODB_EXPORT_MIN_BYTES` | Full exports once, then incremental, and small tables by a cheap `Scan` |
 | **The free queries** | `tabledata.list` (BigQuery), sampled `LIMIT` queries | Samples cost no bytes billed |
+| **Cold classes left unread** | `S3_READ_GLACIER_IR`, `AZURE_READ_COLD_TIER`, `GCS_READ_ARCHIVE` (all off) | No retrieval fee for the classes that charge most per byte; the run's `costEstimate` says what reading them would cost |
 | **Vendor mode** | `SCAN_MODE=vendor` | Imports Macie's, Google SDP's or Purview's own findings and reads nothing. The scanner's compute and requests go to nearly zero; the vendor's own pricing applies instead |
 
 ## Sources
@@ -260,6 +330,7 @@ Read on **30 Sep 2026**.
 - Amazon DynamoDB on-demand pricing, <https://aws.amazon.com/dynamodb/pricing/on-demand/>: $0.125 per million read request units, and export to S3 at $0.10 per GB, full and incremental.
 - Amazon RDS for PostgreSQL pricing, <https://aws.amazon.com/rds/postgresql/pricing/>: snapshot export $0.013 per GB of snapshot size (the page's example).
 - Amazon Redshift pricing, <https://aws.amazon.com/redshift/pricing/>: Serverless $0.375 per RPU-hour (the page's examples).
+- AWS Secrets Manager pricing, <https://aws.amazon.com/secrets-manager/pricing/>: $0.40 per secret per month, $0.05 per 10,000 API calls.
 - Amazon EventBridge, the price-list API (`AWSEvents`): custom events $1.00 per million (64 KB chunks).
 - AWS Fargate pricing, <https://aws.amazon.com/fargate/pricing/>: Linux x86 $0.000011244 per vCPU-second, $0.000001235 per GB-second.
 - Azure Container Apps pricing, <https://azure.microsoft.com/en-us/pricing/details/container-apps/>, and the Azure Retail Prices API (`eastus`):

@@ -5,10 +5,21 @@ those, also from a configuration document: the invoke payload's `config`, or
 a JSON file named by `CONFIG_LOCATION` (or the payload's `configLocation`) in
 S3 or SSM Parameter Store. A document uses the environment variables' names;
 what it sets wins over the environment, and the payload wins over the file.
+
+**Settings from Mermera (#109).** With `FINDINGS_HTTPS_URL` and
+`FINDINGS_HMAC_KEY` set (the site Mermera gave this account), the function
+pulls the site's settings (`GET .../config`, docs/mermera-config.md) and
+applies them under an explicit environment variable, template parameter or
+document value, and over the default (`sensitive_data_core.runner_config`).
+The findings still go to the event bus; the URL is used for the pull only.
+The run reports each setting's source (`settingsSource`) and, for a setting
+whose read the template did not grant (`IAM_GRANTS`), `gate: iam` with the
+template parameter to change.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -16,6 +27,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from sensitive_data_core.findings import FINDINGS_SCHEMA_VERSION
 from sensitive_data_core.modes import SCANNER, read_mode
 from sensitive_data_core.rules import (
     KeyFilter,
@@ -27,6 +39,8 @@ from sensitive_data_core.rules import (
 from sensitive_data_core.rules import parse_rule as _parse_rule
 from sensitive_data_core.rules import sampling_rules as _sampling_rules
 from sensitive_data_core.rules import store_rules as _store_rules
+from sensitive_data_core.runner_config import apply_mermera
+from sensitive_data_core.safety import Secret, error_name
 from sensitive_data_core.scan.paths import parse_path
 
 from .events import bus_region
@@ -573,6 +587,18 @@ class Config:
     # report when it has one (and named as a recommendation when it has none).
     s3_inventory: bool = True
     s3_inventory_min_objects: int = 1_000_000
+    # #109 (docs/limitations.md): Glacier Instant Retrieval objects are read only when on
+    # (retrieval fees); Glacier Flexible Retrieval and Deep Archive objects need a restore
+    # (a hook: on, the class says not_implemented; s3:RestoreObject stays denied).
+    s3_read_glacier_ir: bool = False
+    s3_restore_archived: bool = False
+    # #109: the settings pull (FINDINGS_HTTPS_URL is set), and the run's settings report
+    # (`settingsSource`, `configPull`), put in the findings document.
+    mermera_pull: bool = False
+    # #109: the template's own secret holding the Mermera key (FINDINGS_HMAC_KEY_SECRET): the
+    # Secrets Manager source never reads it as data. An ARN, not a value.
+    own_secret_arn: str | None = None
+    settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def vpc_attached(self) -> bool:
@@ -592,6 +618,57 @@ class Config:
     def key_filter_for(self, kind: str, name: str, tags: dict[str, str] | None) -> KeyFilter:
         """A bucket's key filter (`keyInclude` / `keyExclude`) from its sampling rules."""
         return key_filter_for(self.sampling, kind, name, tags)
+
+
+def _mermera_url(url: str | None, key: str | None, secret: str | None = None) -> bool:
+    """`FINDINGS_HTTPS_URL` (https) with the site's key: `FINDINGS_HMAC_KEY_SECRET` (the ARN
+    of the secret the template stores it in, #109) or `FINDINGS_HMAC_KEY` (32 characters or
+    more, for a run outside the template). The site whose settings the function pulls.
+    Neither the URL nor the key is kept."""
+    if not (url or "").strip():
+        return False
+    if not (url or "").strip().startswith("https://"):
+        raise ValueError("FINDINGS_HTTPS_URL must be https")
+    if _own_secret(secret):
+        return True
+    if len((key or "").strip()) < 32:
+        raise ValueError("FINDINGS_HTTPS_URL needs FINDINGS_HMAC_KEY (32 characters or more)")
+    return True
+
+
+# The secret the template stores the Mermera key in (#109), by ARN (Secrets Manager adds six
+# characters of its own to the name).
+_KEY_SECRET = re.compile(
+    r"^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:"
+    r"/sensitive-data-scanner/[A-Za-z0-9_.-]{1,128}/findings-hmac-key-[A-Za-z0-9]{6}$"
+)
+MIN_KEY_CHARS = 32
+# The key, once read in this execution environment (a cold start): in memory only, never in
+# the environment, a log or a repr (`Secret`).
+_KEYS: dict[str, Secret] = {}
+
+
+def _own_secret(raw: str | None) -> str | None:
+    """`FINDINGS_HMAC_KEY_SECRET`: the template's own secret's ARN, or None when unset."""
+    arn = (raw or "").strip()
+    if not arn:
+        return None
+    if not _KEY_SECRET.match(arn):
+        raise ValueError("FINDINGS_HMAC_KEY_SECRET must be the template's own secret ARN")
+    return arn
+
+
+def mermera_key(arn: str, client: Callable[[str], Any]) -> Secret:
+    """The site's HMAC key from the stack's own secret (`secretsmanager:GetSecretValue` on
+    that one ARN, decrypted through Secrets Manager), read once per execution environment."""
+    held = _KEYS.get(arn)
+    if held is None:
+        got = client("secretsmanager").get_secret_value(SecretId=arn)
+        value = str(got.get("SecretString") or "").strip()
+        if len(value) < MIN_KEY_CHARS:
+            raise ValueError("key_too_short")
+        held = _KEYS[arn] = Secret(value)
+    return held
 
 
 def read_config(env: Mapping[str, str] | None = None) -> Config:
@@ -706,6 +783,14 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         s3_inventory_min_objects=_int(
             e.get("S3_INVENTORY_MIN_OBJECTS"), 1_000_000, 0, 10_000_000_000
         ),
+        s3_read_glacier_ir=_bool(e.get("S3_READ_GLACIER_IR")),
+        s3_restore_archived=_bool(e.get("S3_RESTORE_ARCHIVED")),
+        mermera_pull=_mermera_url(
+            e.get("FINDINGS_HTTPS_URL"),
+            e.get("FINDINGS_HMAC_KEY"),
+            e.get("FINDINGS_HMAC_KEY_SECRET"),
+        ),
+        own_secret_arn=_own_secret(e.get("FINDINGS_HMAC_KEY_SECRET")),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn
@@ -723,7 +808,16 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
 # Settings holding JSON: a document may give them as JSON values, not strings.
 _JSON_SETTINGS = frozenset({"SCAN_DYNAMODB", "DISCOVER_SAMPLING", "RDS_DATA_API", "MQ_BROKERS"})
 # Read by read_config but set by Lambda, never by a document.
-_NOT_FROM_DOCUMENTS = frozenset({"AWS_LAMBDA_LOG_GROUP_NAME", "AWS_LAMBDA_FUNCTION_NAME"})
+# IAM_GRANTS is the template's statement of what its role holds (#109): never a document's.
+# FINDINGS_HMAC_KEY_SECRET names the secret the template made and granted (#109).
+_NOT_FROM_DOCUMENTS = frozenset(
+    {
+        "AWS_LAMBDA_LOG_GROUP_NAME",
+        "AWS_LAMBDA_FUNCTION_NAME",
+        "IAM_GRANTS",
+        "FINDINGS_HMAC_KEY_SECRET",
+    }
+)
 MAX_CONFIG_BYTES = 1024 * 1024
 _S3_LOCATION = re.compile(r"^s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/(.{1,1024})$")
 _SSM_ARN = re.compile(r"^arn:aws[a-z-]*:ssm:[a-z0-9-]+:[0-9]{12}:parameter/.{1,2000}$")
@@ -825,9 +919,28 @@ def load_config(
         documents.append(document_settings(payload["config"]))
     for d in documents:
         e.update(d)
-    asked = _Asked(e)
+    # #109: Mermera's settings, under what the environment and the documents set explicitly.
+    # The template's key is a secret of the stack's own, read once per cold start and held in
+    # memory only.
+    key: Secret | None = None
+    key_error: str | None = None
+    arn = (e.get("FINDINGS_HMAC_KEY_SECRET") or "").strip()
+    if arn and (e.get("FINDINGS_HTTPS_URL") or "").strip():
+        if client is None or not _KEY_SECRET.match(arn):
+            key_error = "key_secret"
+        else:
+            try:
+                key = mermera_key(arn, client)
+            except ValueError:
+                key_error = "key_too_short"
+            except Exception as err:  # by name only; the run goes on with its own settings
+                key_error = error_name(err)
+    merged, report = apply_mermera(
+        "aws", e, schema_version=FINDINGS_SCHEMA_VERSION, key=key, key_error=key_error
+    )
+    asked = _Asked(merged)
     config = read_config(asked)
     unknown = {name for d in documents for name in d} - asked.asked
     if unknown:
         raise ValueError("a configuration document names a setting the scanner does not read")
-    return config
+    return dataclasses.replace(config, settings_report=report.as_json())

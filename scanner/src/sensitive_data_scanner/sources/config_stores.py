@@ -49,6 +49,8 @@ PARAMETER_STORE = "parameter-store"
 # The scanner's own configuration parameters (CONFIG_LOCATION): never read as data.
 OWN_PARAMETERS = "/sensitive-data-scanner/"
 SECRETS = "secrets-manager"
+# Excluded, never a gap: a secret that is the scanner's own credential (#109).
+SCANNER_OWN_CREDENTIAL = "scanner_own_credential"
 
 
 def _count(d: dict[str, int], key: str) -> None:
@@ -163,10 +165,14 @@ class SecretsAdapter:
         secrets: list[dict[str, Any]] = []
         for page in sm.get_paginator("list_secrets").paginate():
             secrets.extend(page.get("SecretList", []))
+        # #109: the scanner's own credential (the Mermera key's secret) is never read as data.
+        own_arn = ctx.config.own_secret_arn
+        own = [s for s in secrets if own_arn and str(s.get("ARN") or "") == own_arn]
+        secrets = [s for s in secrets if s not in own]
         store = Store("secretsmanager", SECRETS)
         out.stores.append(store)
         managed = sum(1 for s in secrets if s.get("OwningService"))
-        store.extra.update(items=len(secrets))
+        store.extra.update(items=len(secrets) + len(own))
         if managed:
             store.extra["itemTypes"] = {"managed": managed, "own": len(secrets) - managed}
         items = [
@@ -178,6 +184,8 @@ class SecretsAdapter:
             for s in secrets
         ]
         kept, excluded = _members(ctx, "secretsmanager", items, None)
+        if own:
+            excluded[SCANNER_OWN_CREDENTIAL] = len(own)
         keys = classifier(ctx.clients)
         # Every secret is encrypted: `aws/secretsmanager` unless it names a key of its own.
         item_facts = {

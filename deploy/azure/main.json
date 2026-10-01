@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#",
+  "languageVersion": "2.0",
   "contentVersion": "1.0.0.0",
   "metadata": {
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "9624321840434096015"
+      "templateHash": "9991619521703409373"
     }
   },
   "parameters": {
@@ -85,16 +86,16 @@
     },
     "readKeyVaultSecrets": {
       "type": "bool",
-      "defaultValue": false,
+      "nullable": true,
       "metadata": {
-        "description": "Key Vault secrets: off by default. On grants Key Vault Secrets User and reads values (counts only)."
+        "description": "KEYVAULT_SECRETS_READ: Key Vault secrets, off by default. True grants Key Vault Secrets User and reads values (counts only); without it, Mermera turning it on is reported gate: iam. Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
       }
     },
     "readFileShares": {
       "type": "bool",
-      "defaultValue": false,
+      "nullable": true,
       "metadata": {
-        "description": "Azure Files shares: off by default. On grants Storage File Data Privileged Reader (reads files over REST, overriding their ACLs) and reads them."
+        "description": "AZURE_FILES_READ: Azure Files shares, off by default. True grants Storage File Data Privileged Reader (reads files over REST, overriding their ACLs) and reads them; without it, Mermera turning it on is reported gate: iam. Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
       }
     },
     "cosmosAccountIds": {
@@ -106,23 +107,37 @@
     },
     "readLogAnalytics": {
       "type": "bool",
-      "defaultValue": true,
+      "nullable": true,
       "metadata": {
-        "description": "AZURE_LOG_ANALYTICS: read Log Analytics workspaces with Reader (on by default); off lists them, read_not_configured (docs/limitations.md, B1)."
+        "description": "AZURE_LOG_ANALYTICS: read Log Analytics workspaces with Reader (on by default); off lists them, read_not_configured (docs/limitations.md, B1). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
       }
     },
     "readDiskSnapshots": {
       "type": "bool",
-      "defaultValue": false,
+      "nullable": true,
       "metadata": {
-        "description": "AZURE_READ_SNAPSHOTS: a hook, off by default. A snapshot is read only by a SAS export, a write, and no reader is built: on, each snapshot is reported not_implemented (B4)."
+        "description": "AZURE_READ_SNAPSHOTS: a hook, off by default. A snapshot is read only by a SAS export, a write, and no reader is built: on, each snapshot is reported not_implemented (B4). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
       }
     },
     "assignCosmosReaderPolicy": {
       "type": "bool",
-      "defaultValue": false,
+      "nullable": true,
       "metadata": {
-        "description": "AZURE_COSMOS_READER_POLICY: a hook, off by default. The Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built (its remediation identity would need a write role): on, an account the identity cannot read is reported not_implemented; use cosmosAccountIds (B3)."
+        "description": "AZURE_COSMOS_READER_POLICY: a hook, off by default. The Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built (its remediation identity would need a write role): on, an account the identity cannot read is reported not_implemented; use cosmosAccountIds (B3). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
+      }
+    },
+    "readColdTier": {
+      "type": "bool",
+      "nullable": true,
+      "metadata": {
+        "description": "AZURE_READ_COLD_TIER: read Cold-tier blobs, which have a read fee per GB (the run's costEstimate says how much); off by default, they are counted notAllowed cold_tier (#109). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
+      }
+    },
+    "rehydrateArchive": {
+      "type": "bool",
+      "nullable": true,
+      "metadata": {
+        "description": "AZURE_REHYDRATE_ARCHIVE: a hook, off by default. An Archive-tier blob needs a rehydration (a write, at the customer's cost) and is the gap needs_rehydration; on, the tier says not_implemented (#109). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
       }
     },
     "findingsHttpsUrl": {
@@ -167,11 +182,11 @@
     ],
     "vaultReadRole": "4633458b-17de-408a-b874-0445c86b69e6",
     "fileReadRole": "b8eda974-7b85-4f76-af95-65846b26df6d",
-    "roles": "[concat(variables('readRoles'), if(parameters('readKeyVaultSecrets'), createArray(variables('vaultReadRole')), createArray()), if(parameters('readFileShares'), createArray(variables('fileReadRole')), createArray()))]",
+    "roles": "[concat(variables('readRoles'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray(variables('vaultReadRole')), createArray()), if(equals(parameters('readFileShares'), true()), createArray(variables('fileReadRole')), createArray()))]",
     "central": "[equals(parameters('mode'), 'central')]"
   },
-  "resources": [
-    {
+  "resources": {
+    "centralRead": {
       "copy": {
         "name": "centralRead",
         "count": "[length(variables('roles'))]"
@@ -182,15 +197,15 @@
       "name": "[guid(managementGroup().id, parameters('jobName'), variables('roles')[copyIndex()])]",
       "properties": {
         "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles')[copyIndex()])]",
-        "principalId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central'), '2025-04-01').outputs.principalId.value]",
+        "principalId": "[reference('centralJob').outputs.principalId.value]",
         "principalType": "ServicePrincipal",
         "description": "sensitive-data-scanner: read-only"
       },
       "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central')]"
+        "centralJob"
       ]
     },
-    {
+    "centralGroup": {
       "condition": "[variables('central')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -247,7 +262,7 @@
         }
       }
     },
-    {
+    "centralJob": {
       "condition": "[variables('central')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -302,6 +317,12 @@
           "assignCosmosReaderPolicy": {
             "value": "[parameters('assignCosmosReaderPolicy')]"
           },
+          "readColdTier": {
+            "value": "[parameters('readColdTier')]"
+          },
+          "rehydrateArchive": {
+            "value": "[parameters('rehydrateArchive')]"
+          },
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
@@ -323,12 +344,13 @@
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3438155641692074347"
+              "templateHash": "14535242296347337249"
             }
           },
           "parameters": {
@@ -380,31 +402,51 @@
             },
             "readKeyVaultSecrets": {
               "type": "bool",
-              "defaultValue": false
+              "nullable": true,
+              "metadata": {
+                "description": "KEYVAULT_SECRETS_READ."
+              }
             },
             "readFileShares": {
               "type": "bool",
-              "defaultValue": false
+              "nullable": true,
+              "metadata": {
+                "description": "AZURE_FILES_READ."
+              }
             },
             "readLogAnalytics": {
               "type": "bool",
-              "defaultValue": true,
+              "nullable": true,
               "metadata": {
                 "description": "AZURE_LOG_ANALYTICS (docs/limitations.md, B1)."
               }
             },
             "readDiskSnapshots": {
               "type": "bool",
-              "defaultValue": false,
+              "nullable": true,
               "metadata": {
                 "description": "AZURE_READ_SNAPSHOTS: a hook (docs/limitations.md, B4)."
               }
             },
             "assignCosmosReaderPolicy": {
               "type": "bool",
-              "defaultValue": false,
+              "nullable": true,
               "metadata": {
                 "description": "AZURE_COSMOS_READER_POLICY: a hook (docs/limitations.md, B3)."
+              }
+            },
+            "readColdTier": {
+              "type": "bool",
+              "nullable": true,
+              "metadata": {
+                "description": "AZURE_READ_COLD_TIER (#109)."
+              }
+            },
+            "rehydrateArchive": {
+              "type": "bool",
+              "nullable": true,
+              "metadata": {
+                "description": "AZURE_REHYDRATE_ARCHIVE: a hook (#109)."
               }
             },
             "blobInventoryMinObjects": {
@@ -449,8 +491,8 @@
             "pushSecrets": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'findings-https-url', 'value', parameters('findingsHttpsUrl')), createObject('name', 'findings-hmac-key', 'value', parameters('findingsHmacKey'))))]",
             "pushEnv": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'FINDINGS_HTTPS_URL', 'secretRef', 'findings-https-url'), createObject('name', 'FINDINGS_HMAC_KEY', 'secretRef', 'findings-hmac-key')))]"
           },
-          "resources": [
-            {
+          "resources": {
+            "state": {
               "type": "Microsoft.Storage/storageAccounts",
               "apiVersion": "2023-05-01",
               "name": "[parameters('stateAccountName')]",
@@ -468,15 +510,15 @@
                 "supportsHttpsTrafficOnly": true
               }
             },
-            {
+            "blobs": {
               "type": "Microsoft.Storage/storageAccounts/blobServices",
               "apiVersion": "2023-05-01",
               "name": "[format('{0}/{1}', parameters('stateAccountName'), 'default')]",
               "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+                "state"
               ]
             },
-            {
+            "stateContainer": {
               "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
               "apiVersion": "2023-05-01",
               "name": "[format('{0}/{1}/{2}', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
@@ -484,10 +526,10 @@
                 "publicAccess": "None"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('stateAccountName'), 'default')]"
+                "blobs"
               ]
             },
-            {
+            "environment": {
               "type": "Microsoft.App/managedEnvironments",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}-env', parameters('jobName'))]",
@@ -503,7 +545,7 @@
                 "vnetConfiguration": "[if(empty(parameters('infrastructureSubnetId')), null(), createObject('infrastructureSubnetId', parameters('infrastructureSubnetId'), 'internal', true()))]"
               }
             },
-            {
+            "job": {
               "type": "Microsoft.App/jobs",
               "apiVersion": "2024-03-01",
               "name": "[parameters('jobName')]",
@@ -538,50 +580,50 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(parameters('readLogAnalytics'), 'on', 'off')), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(parameters('readDiskSnapshots'), 'on', 'off')), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(parameters('assignCosmosReaderPolicy'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(equals(parameters('readKeyVaultSecrets'), null()), '', if(equals(parameters('readKeyVaultSecrets'), true()), 'on', 'off'))), createObject('name', 'AZURE_FILES_READ', 'value', if(equals(parameters('readFileShares'), null()), '', if(equals(parameters('readFileShares'), true()), 'on', 'off'))), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(equals(parameters('readLogAnalytics'), null()), '', if(equals(parameters('readLogAnalytics'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(equals(parameters('readDiskSnapshots'), null()), '', if(equals(parameters('readDiskSnapshots'), true()), 'on', 'off'))), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(equals(parameters('assignCosmosReaderPolicy'), null()), '', if(equals(parameters('assignCosmosReaderPolicy'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_COLD_TIER', 'value', if(equals(parameters('readColdTier'), null()), '', if(equals(parameters('readColdTier'), true()), 'on', 'off'))), createObject('name', 'AZURE_REHYDRATE_ARCHIVE', 'value', if(equals(parameters('rehydrateArchive'), null()), '', if(equals(parameters('rehydrateArchive'), true()), 'on', 'off'))), createObject('name', 'IAM_GRANTS', 'value', join(concat(createArray('none'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray('KEYVAULT_SECRETS_READ'), createArray()), if(equals(parameters('readFileShares'), true()), createArray('AZURE_FILES_READ'), createArray())), ',')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('jobName')))]",
-                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+                "environment",
+                "state"
               ]
             },
-            {
+            "stateWriter": {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName')), resourceId('Microsoft.App/jobs', parameters('jobName')), variables('blobDataContributor'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributor'))]",
-                "principalId": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]",
+                "principalId": "[reference('job', '2024-03-01', 'full').identity.principalId]",
                 "principalType": "ServicePrincipal",
                 "description": "sensitive-data-scanner: its own findings, cursors and lock"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.App/jobs', parameters('jobName'))]",
-                "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]"
+                "job",
+                "stateContainer"
               ]
             }
-          ],
+          },
           "outputs": {
             "principalId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]"
+              "value": "[reference('job', '2024-03-01', 'full').identity.principalId]"
             },
             "stateContainerUrl": {
               "type": "string",
-              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))]"
+              "value": "[format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))]"
             }
           }
         }
       },
       "dependsOn": [
-        "[subscriptionResourceId(parameters('scannerSubscriptionId'), 'Microsoft.Resources/deployments', 'sds-rg-central')]"
+        "centralGroup"
       ]
     },
-    {
+    "groups": {
       "copy": {
         "name": "groups",
         "count": "[length(parameters('subscriptionIds'))]"
@@ -642,7 +684,7 @@
         }
       }
     },
-    {
+    "jobs": {
       "copy": {
         "name": "jobs",
         "count": "[length(parameters('subscriptionIds'))]"
@@ -703,6 +745,12 @@
           "assignCosmosReaderPolicy": {
             "value": "[parameters('assignCosmosReaderPolicy')]"
           },
+          "readColdTier": {
+            "value": "[parameters('readColdTier')]"
+          },
+          "rehydrateArchive": {
+            "value": "[parameters('rehydrateArchive')]"
+          },
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
@@ -721,12 +769,13 @@
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3438155641692074347"
+              "templateHash": "14535242296347337249"
             }
           },
           "parameters": {
@@ -778,31 +827,51 @@
             },
             "readKeyVaultSecrets": {
               "type": "bool",
-              "defaultValue": false
+              "nullable": true,
+              "metadata": {
+                "description": "KEYVAULT_SECRETS_READ."
+              }
             },
             "readFileShares": {
               "type": "bool",
-              "defaultValue": false
+              "nullable": true,
+              "metadata": {
+                "description": "AZURE_FILES_READ."
+              }
             },
             "readLogAnalytics": {
               "type": "bool",
-              "defaultValue": true,
+              "nullable": true,
               "metadata": {
                 "description": "AZURE_LOG_ANALYTICS (docs/limitations.md, B1)."
               }
             },
             "readDiskSnapshots": {
               "type": "bool",
-              "defaultValue": false,
+              "nullable": true,
               "metadata": {
                 "description": "AZURE_READ_SNAPSHOTS: a hook (docs/limitations.md, B4)."
               }
             },
             "assignCosmosReaderPolicy": {
               "type": "bool",
-              "defaultValue": false,
+              "nullable": true,
               "metadata": {
                 "description": "AZURE_COSMOS_READER_POLICY: a hook (docs/limitations.md, B3)."
+              }
+            },
+            "readColdTier": {
+              "type": "bool",
+              "nullable": true,
+              "metadata": {
+                "description": "AZURE_READ_COLD_TIER (#109)."
+              }
+            },
+            "rehydrateArchive": {
+              "type": "bool",
+              "nullable": true,
+              "metadata": {
+                "description": "AZURE_REHYDRATE_ARCHIVE: a hook (#109)."
               }
             },
             "blobInventoryMinObjects": {
@@ -847,8 +916,8 @@
             "pushSecrets": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'findings-https-url', 'value', parameters('findingsHttpsUrl')), createObject('name', 'findings-hmac-key', 'value', parameters('findingsHmacKey'))))]",
             "pushEnv": "[if(empty(parameters('findingsHttpsUrl')), createArray(), createArray(createObject('name', 'FINDINGS_HTTPS_URL', 'secretRef', 'findings-https-url'), createObject('name', 'FINDINGS_HMAC_KEY', 'secretRef', 'findings-hmac-key')))]"
           },
-          "resources": [
-            {
+          "resources": {
+            "state": {
               "type": "Microsoft.Storage/storageAccounts",
               "apiVersion": "2023-05-01",
               "name": "[parameters('stateAccountName')]",
@@ -866,15 +935,15 @@
                 "supportsHttpsTrafficOnly": true
               }
             },
-            {
+            "blobs": {
               "type": "Microsoft.Storage/storageAccounts/blobServices",
               "apiVersion": "2023-05-01",
               "name": "[format('{0}/{1}', parameters('stateAccountName'), 'default')]",
               "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+                "state"
               ]
             },
-            {
+            "stateContainer": {
               "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
               "apiVersion": "2023-05-01",
               "name": "[format('{0}/{1}/{2}', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
@@ -882,10 +951,10 @@
                 "publicAccess": "None"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('stateAccountName'), 'default')]"
+                "blobs"
               ]
             },
-            {
+            "environment": {
               "type": "Microsoft.App/managedEnvironments",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}-env', parameters('jobName'))]",
@@ -901,7 +970,7 @@
                 "vnetConfiguration": "[if(empty(parameters('infrastructureSubnetId')), null(), createObject('infrastructureSubnetId', parameters('infrastructureSubnetId'), 'internal', true()))]"
               }
             },
-            {
+            "job": {
               "type": "Microsoft.App/jobs",
               "apiVersion": "2024-03-01",
               "name": "[parameters('jobName')]",
@@ -936,50 +1005,50 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(parameters('readKeyVaultSecrets'), 'on', 'off')), createObject('name', 'AZURE_FILES_READ', 'value', if(parameters('readFileShares'), 'on', 'off')), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(parameters('readLogAnalytics'), 'on', 'off')), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(parameters('readDiskSnapshots'), 'on', 'off')), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(parameters('assignCosmosReaderPolicy'), 'on', 'off')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(equals(parameters('readKeyVaultSecrets'), null()), '', if(equals(parameters('readKeyVaultSecrets'), true()), 'on', 'off'))), createObject('name', 'AZURE_FILES_READ', 'value', if(equals(parameters('readFileShares'), null()), '', if(equals(parameters('readFileShares'), true()), 'on', 'off'))), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(equals(parameters('readLogAnalytics'), null()), '', if(equals(parameters('readLogAnalytics'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(equals(parameters('readDiskSnapshots'), null()), '', if(equals(parameters('readDiskSnapshots'), true()), 'on', 'off'))), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(equals(parameters('assignCosmosReaderPolicy'), null()), '', if(equals(parameters('assignCosmosReaderPolicy'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_COLD_TIER', 'value', if(equals(parameters('readColdTier'), null()), '', if(equals(parameters('readColdTier'), true()), 'on', 'off'))), createObject('name', 'AZURE_REHYDRATE_ARCHIVE', 'value', if(equals(parameters('rehydrateArchive'), null()), '', if(equals(parameters('rehydrateArchive'), true()), 'on', 'off'))), createObject('name', 'IAM_GRANTS', 'value', join(concat(createArray('none'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray('KEYVAULT_SECRETS_READ'), createArray()), if(equals(parameters('readFileShares'), true()), createArray('AZURE_FILES_READ'), createArray())), ',')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('jobName')))]",
-                "[resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName'))]"
+                "environment",
+                "state"
               ]
             },
-            {
+            "stateWriter": {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName')), resourceId('Microsoft.App/jobs', parameters('jobName')), variables('blobDataContributor'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributor'))]",
-                "principalId": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]",
+                "principalId": "[reference('job', '2024-03-01', 'full').identity.principalId]",
                 "principalType": "ServicePrincipal",
                 "description": "sensitive-data-scanner: its own findings, cursors and lock"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.App/jobs', parameters('jobName'))]",
-                "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('stateAccountName'), 'default', variables('stateContainerName'))]"
+                "job",
+                "stateContainer"
               ]
             }
-          ],
+          },
           "outputs": {
             "principalId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.App/jobs', parameters('jobName')), '2024-03-01', 'full').identity.principalId]"
+              "value": "[reference('job', '2024-03-01', 'full').identity.principalId]"
             },
             "stateContainerUrl": {
               "type": "string",
-              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('stateAccountName')), '2023-05-01').primaryEndpoints.blob, variables('stateContainerName'))]"
+              "value": "[format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))]"
             }
           }
         }
       },
       "dependsOn": [
-        "[subscriptionResourceId(parameters('subscriptionIds')[copyIndex()], 'Microsoft.Resources/deployments', format('sds-rg-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()])))]"
+        "[format('groups[{0}]', copyIndex())]"
       ]
     },
-    {
+    "subscriptionRead": {
       "copy": {
         "name": "subscriptionRead",
         "count": "[length(parameters('subscriptionIds'))]"
@@ -997,7 +1066,7 @@
         "mode": "Incremental",
         "parameters": {
           "principalId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('subscriptionIds')[copyIndex()], parameters('resourceGroupName')), 'Microsoft.Resources/deployments', format('sds-job-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()]))), '2025-04-01').outputs.principalId.value]"
+            "value": "[reference(format('jobs[{0}]', copyIndex())).outputs.principalId.value]"
           },
           "roles": {
             "value": "[variables('roles')]"
@@ -1041,10 +1110,10 @@
         }
       },
       "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('subscriptionIds')[copyIndex()], parameters('resourceGroupName')), 'Microsoft.Resources/deployments', format('sds-job-{0}', uniqueString(parameters('subscriptionIds')[copyIndex()])))]"
+        "[format('jobs[{0}]', copyIndex())]"
       ]
     },
-    {
+    "cosmosReaders": {
       "copy": {
         "name": "cosmosReaders",
         "count": "[length(parameters('cosmosAccountIds'))]"
@@ -1065,7 +1134,7 @@
             "value": "[last(split(parameters('cosmosAccountIds')[copyIndex()], '/'))]"
           },
           "principalId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central'), '2025-04-01').outputs.principalId.value]"
+            "value": "[reference('centralJob').outputs.principalId.value]"
           }
         },
         "template": {
@@ -1104,14 +1173,14 @@
         }
       },
       "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central')]"
+        "centralJob"
       ]
     }
-  ],
+  },
   "outputs": {
     "principalId": {
       "type": "string",
-      "value": "[if(variables('central'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('scannerSubscriptionId'), parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sds-job-central'), '2025-04-01').outputs.principalId.value, '')]"
+      "value": "[if(variables('central'), reference('centralJob').outputs.principalId.value, '')]"
     }
   }
 }

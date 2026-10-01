@@ -59,7 +59,8 @@ def merge_coverage(a: Coverage, b: Coverage) -> Coverage:
             out[f.name] = y
         elif f.name == "relisted":
             out[f.name] = bool(x) or bool(y)
-        elif f.name == "indexed":
+        elif f.name in ("indexed", "storage_classes"):
+            # The latest call's: a pass's objects per class are carried by the cursor (#109).
             out[f.name] = y if y is not None else x
         elif isinstance(x, dict):
             summed = dict(x)

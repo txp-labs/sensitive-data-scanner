@@ -33,6 +33,14 @@ reported by a fixed code, never by its value.
   `assignCosmosReaderPolicy`: the Azure Policy that would give the identity
   Cosmos DB Built-in Data Reader on every NoSQL account is not built; on, a
   NoSQL account the identity cannot read is `not_implemented`.
+- `AZURE_READ_COLD_TIER` (#109): `on` reads Cold-tier blobs (a read fee per
+  GB); off by default, they are counted `notAllowed: cold_tier`.
+- `AZURE_REHYDRATE_ARCHIVE`: a hook (#109): an Archive-tier blob needs a
+  rehydration (a write) and is the gap `needs_rehydration`; on, the tier says
+  `not_implemented`.
+- Settings from Mermera (#109): with `FINDINGS_HTTPS_URL`, the job pulls the
+  site's settings first (docs/mermera-config.md); an explicit environment
+  variable (a Bicep parameter that is set) wins over Mermera's value.
   docs/limitations.md lists every limitation and its setting.
 - `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
@@ -63,6 +71,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sensitive_data_core.rules import (
     SamplingRule,
@@ -204,6 +213,11 @@ class Settings:
     log_analytics_read: bool = True
     read_snapshots: bool = False
     cosmos_reader_policy: bool = False
+    # #109: Cold-tier blobs (off), and the hook that would rehydrate Archive-tier blobs (off).
+    read_cold_tier: bool = False
+    rehydrate_archive: bool = False
+    # #109: the run's settings report (`settingsSource`, `configPull`), for the document.
+    settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -338,6 +352,12 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     cosmos_policy = _on(e.get("AZURE_COSMOS_READER_POLICY"))
     if cosmos_policy is None:
         raise ConfigError("azure_cosmos_reader_policy")
+    cold = _on(e.get("AZURE_READ_COLD_TIER"))
+    if cold is None:
+        raise ConfigError("azure_read_cold_tier")
+    rehydrate = _on(e.get("AZURE_REHYDRATE_ARCHIVE"))
+    if rehydrate is None:
+        raise ConfigError("azure_rehydrate_archive")
     try:
         db_read = _kinds(e.get("AZURE_DB_READ"), (), DATABASE_KINDS)
     except ConfigError:
@@ -398,4 +418,6 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         log_analytics_read=log_analytics,
         read_snapshots=snapshots,
         cosmos_reader_policy=cosmos_policy,
+        read_cold_tier=cold,
+        rehydrate_archive=rehydrate,
     )

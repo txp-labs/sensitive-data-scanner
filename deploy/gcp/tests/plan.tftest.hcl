@@ -35,14 +35,12 @@ run "defaults_read_only" {
     condition = {
       for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.name => e.value
       if contains(["GCP_SPANNER", "GCP_ALLOYDB", "GCS_READ_ARCHIVE", "GCP_SQLSERVER", "GCP_READ_PUBSUB_DLQ"], e.name)
-      } == {
-      GCP_SPANNER         = "on"
-      GCP_ALLOYDB         = "on"
-      GCS_READ_ARCHIVE    = "off"
-      GCP_SQLSERVER       = "off"
-      GCP_READ_PUBSUB_DLQ = "off"
-    }
-    error_message = "Each limitation's toggle reaches the job with its default (docs/limitations.md)."
+    } == {}
+    error_message = "Left unset, no toggle reaches the job: it takes Mermera's setting, else its default (#109, docs/mermera-config.md)."
+  }
+  assert {
+    condition     = one([for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.value if e.name == "IAM_GRANTS"]) == "none,GCP_SPANNER"
+    error_message = "IAM_GRANTS names the grants this deployment made: Spanner's role only, by default (#109)."
   }
   assert {
     condition     = length(google_secret_manager_secret.push) == 0
@@ -151,5 +149,9 @@ run "limitations_toggled" {
       GCP_READ_PUBSUB_DLQ = "on"
     }
     error_message = "Each toggle reaches the job as set."
+  }
+  assert {
+    condition     = one([for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.value if e.name == "IAM_GRANTS"]) == "none"
+    error_message = "With Spanner and AlloyDB off, IAM_GRANTS names no grant (#109)."
   }
 }

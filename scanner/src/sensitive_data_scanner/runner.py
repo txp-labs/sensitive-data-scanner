@@ -240,6 +240,9 @@ def _s3_source(
     )
     source.use_inventory = config.s3_inventory
     source.inventory_min_objects = config.s3_inventory_min_objects
+    # #109: storage classes (docs/limitations.md).
+    source.read_glacier_ir = config.s3_read_glacier_ir
+    source.restore_archived = config.s3_restore_archived
     return source
 
 
@@ -668,6 +671,7 @@ def run_scan(
             discovery=run_summary,
             scan_mode={"aws": mode},
             vendor_coverage=[v.as_json() for v in vendor_coverage] if importer else None,
+            settings=config.settings_report,
         )
         new_state: dict[str, Any] = {
             "version": STATE_VERSION,

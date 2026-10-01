@@ -266,3 +266,46 @@ def test_secrets_are_listed_always_and_read_only_when_on(env: Env) -> None:
     assert (cov["scanned"], cov["unreadable"], cov["passComplete"]) == (1, 2, True)
     assert stores(doc)["secretsmanager"]["excluded"] == {"denied": 1}
     assert read_config({"RESULTS_BUCKET": "x"}).secrets_read is False
+
+
+# ------------------------------------------------------------------ the scanner's own key (#109)
+
+OWN_KEY = (
+    "arn:aws:secretsmanager:us-west-2:123456789012:secret:"
+    "/sensitive-data-scanner/sds-stack/findings-hmac-key-AbC123"
+)
+
+
+def test_the_scanners_own_mermera_key_secret_is_excluded_never_read(env: Env) -> None:
+    """With SECRETS_READ on, the Secrets Manager source never reads the secret the template
+    stores the Mermera key in (by ARN): `excluded.scanner_own_credential`, not a gap."""
+    sm = stubs(env, "secretsmanager")["secretsmanager"]
+    own = {"ARN": OWN_KEY, "Name": "/sensitive-data-scanner/sds-stack/findings-hmac-key"}
+    other = {"ARN": OWN_KEY.replace("sds-stack", "other-stack"), "Name": "app/customer"}
+    sm.add_response("list_secrets", {"SecretList": [own, other]})
+    sm.add_response(
+        "get_secret_value",
+        {"Name": "app/customer", "SecretString": json.dumps({"ssn": dashed(SSN_B)})},
+        {"SecretId": "app/customer"},
+    )
+    on = {"secrets_read": True, "own_secret_arn": OWN_KEY}
+    doc = env.run(config(s3_targets=[], discover=frozenset({"secretsmanager"}), **on))
+    assert doc is not None
+    valid(doc)
+    sm.assert_no_pending_responses()  # one GetSecretValue: never the scanner's own
+    st = stores(doc)["secretsmanager"]
+    assert (st["status"], st["items"], st["excluded"]) == (
+        "scanned",
+        2,
+        {"scanner_own_credential": 1},
+    )
+    assert "gaps" not in st and "reason" not in st
+    # The only secret is the scanner's own: read as nothing, and still no gap.
+    sm.add_response("list_secrets", {"SecretList": [own]})
+    alone = env.run(config(s3_targets=[], discover=frozenset({"secretsmanager"}), **on))
+    assert alone is not None
+    valid(alone)
+    sm.assert_no_pending_responses()
+    st = stores(alone)["secretsmanager"]
+    assert st["status"] == "scanned" and st["excluded"] == {"scanner_own_credential": 1}
+    assert "gaps" not in st and "reason" not in st

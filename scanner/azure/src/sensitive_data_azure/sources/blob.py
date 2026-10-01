@@ -21,8 +21,15 @@ zero-length blobs, skipped); nothing is written, leased, rehydrated or copied.
   listing page it stopped in.
 - Sampling: `samplePercent` (a stable hash of the name) and at most n blobs
   per directory (`maxObjectsPerPrefix`), stated in the coverage, never silent.
-- An Archive-tier blob would need a rehydration, which is a write: it is
-  counted as skipped `archive_tier`. A blob under a customer-provided key
+- **Tiers (1.13, #109)**, from the listing (`AccessTier`, `ArchiveStatus`), so
+  a blob left out is never fetched (`sensitive_data_core.storage_classes`): Hot
+  and Cool are read (Cool within the byte budget); Cold only with
+  `AZURE_READ_COLD_TIER` (else `notAllowed: cold_tier`); an Archive-tier blob,
+  or one being rehydrated, would need a rehydration, which is a write: it is
+  the gap `needs_rehydration` (the hook `AZURE_REHYDRATE_ARCHIVE` names it),
+  never `unreadable`. The blobs and bytes per tier over a listing pass are kept
+  in the cursor; the run summary's store shows them (`storageClasses`,
+  `costEstimate`). A blob under a customer-provided key
   (CPK) cannot be read without that key: it is counted in `kmsDenied`.
 - A firewall or private-only account that keeps the job out is the store's
   `network` gap; a missing data role is `access_denied`.
@@ -48,6 +55,7 @@ from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale
 from sensitive_data_core.safety import error_name, log_event
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.objects import planned_bytes, sample_point
+from sensitive_data_core.storage_classes import ClassInventory, Rule, azure_rule, azure_tier
 
 from ..resources import BlobTarget, ResourceId, azure_fields, blob_resource, portal_link
 from . import blob_read as _read_path
@@ -60,7 +68,7 @@ ACCOUNT_SCOPE = "$account-encryption-key"
 
 STORAGE_ACCOUNTS = """resources
 | where type =~ 'microsoft.storage/storageaccounts'
-| project id, name, subscriptionId, resourceGroup, kind, tags,
+| project id, name, subscriptionId, resourceGroup, kind, tags, location,
     blobEndpoint = tostring(properties.primaryEndpoints.blob),
     tableEndpoint = tostring(properties.primaryEndpoints.table),
     queueEndpoint = tostring(properties.primaryEndpoints.queue),
@@ -153,6 +161,7 @@ class BlobAdapter:
                     network_restricted=restricted,
                     scopes={**scopes, ACCOUNT_SCOPE: scopes[""]},
                     default=dict(store.facts),
+                    location=str(row.get("location") or "").lower(),
                 )
                 out.stores.append(store)
                 if own is not None and own.account == account and own.container == container:
@@ -184,6 +193,8 @@ class BlobAdapter:
             max_rows=s.columnar_max_rows,
             skew_seconds=s.skew_seconds,
             inventory_min_objects=s.blob_inventory_min_objects,
+            read_cold=s.read_cold_tier,
+            rehydrate_archive=s.rehydrate_archive,
         )
 
 
@@ -205,6 +216,7 @@ class BlobSource:
         "prefixDir",
         "prefixCount",
         "passListed",
+        "classes",
     )
     # (#67) Named in the run summary when its last complete pass listed at least
     # `inventory_min_objects`: an inventory report would spare it a listing each pass. Not
@@ -227,8 +239,14 @@ class BlobSource:
         columnar: bool | None = None,
         page_size: int = 1000,
         inventory_min_objects: int = 1_000_000,
+        read_cold: bool = False,
+        rehydrate_archive: bool = False,
     ) -> None:
         self.inventory_min_objects = inventory_min_objects
+        # #109 (docs/limitations.md): AZURE_READ_COLD_TIER, and the hook AZURE_REHYDRATE_ARCHIVE.
+        self.read_cold = read_cold
+        self.rehydrate_archive = rehydrate_archive
+        self._classes = ClassInventory("azure", target.location or None)
         self.container = container
         self.t = target
         self.prefix = prefix
@@ -281,6 +299,10 @@ class BlobSource:
             columnar=self.columnar,
             budget=budget,
             scope=f"azure:{self.t.rid.subscription}" if self.t.rid.subscription else None,
+        )
+        # The pass's blobs per tier so far (#109): carried by the cursor.
+        self._classes = self._inventory(
+            cursor.get("classes") if cursor.get("passStartedAt") else None
         )
         try:
             pages = self.container.list_blobs(
@@ -344,7 +366,10 @@ class BlobSource:
                 "watermark": pass_started,
                 "passStartedAt": None,
                 "objects": listed,
+                "classesPass": self._classes.cursor(),
             }
+            self._classes.complete = True
+            cov.storage_classes = self._classes
             cur_dir, cur_n = None, 0
         else:
             if cov.error is None:
@@ -355,9 +380,14 @@ class BlobSource:
                 "token": token,
                 "skip": skip,
                 "passListed": listed,
+                "classes": self._classes.cursor(),
             }
             if cursor.get("objects"):
                 new_cursor["objects"] = cursor["objects"]
+            last = self._last_pass(cursor)
+            if last is not None:
+                new_cursor["classesPass"] = cursor["classesPass"]
+            cov.storage_classes = last or self._classes
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
@@ -392,6 +422,16 @@ class BlobSource:
         self._op.seen(name)
         if name.endswith("/") or size == 0:
             return cur_dir, cur_n, None  # a directory (ADLS Gen2) or an empty blob
+        tier = azure_tier(getattr(props, "blob_tier", None), getattr(props, "archive_status", None))
+        rule = self._rule(tier)
+        self._classes.add(tier, size, planned_bytes(name, size, self.max_object_bytes), rule)
+        if not rule.read:
+            # #109: decided from the listing, never fetched: Cold with its setting off
+            # (`notAllowed`), Archive (`needs_rehydration`: a rehydration is a write).
+            gaps = cov.archived if rule.archived else cov.not_allowed
+            reason = str(rule.reason)
+            gaps[reason] = gaps.get(reason, 0) + 1
+            return cur_dir, cur_n, None
         modified = getattr(props, "last_modified", None)
         changed = since is None or modified is None or modified > since
         decision = self._op.decide(name, changed=changed, marker=blob_marker(props))
@@ -400,11 +440,6 @@ class BlobSource:
         cov.eligible += int(decision.read)
         if sample_point(name) >= self.sample_percent:
             cov.sampled_out += int(decision.read)
-            return cur_dir, cur_n, None
-        tier = str(getattr(props, "blob_tier", None) or "")
-        if tier.lower() == "archive":
-            if decision.read:
-                cov.skipped["archive_tier"] = cov.skipped.get("archive_tier", 0) + 1
             return cur_dir, cur_n, None
         directory = name.rsplit("/", 1)[0] if "/" in name else ""
         counted = decision.read or (decision.why is not None and decision.why.reason == UNINDEXED)
@@ -419,10 +454,27 @@ class BlobSource:
             return cur_dir, cur_n + int(counted), None
         want = planned_bytes(name, size, self.max_object_bytes)
         if not budget.has(want):
+            self._classes.remove(tier, size, want)  # listed again by the next run (#109)
             return None
         budget.take(want)
         cur_n += 1
         return cur_dir, cur_n, self._guarded(props, cov, detector, store, seen_at)
+
+    def _rule(self, tier: str) -> Rule:
+        return azure_rule(tier, read_cold=self.read_cold, rehydrate_archive=self.rehydrate_archive)
+
+    def _inventory(self, saved: Any) -> ClassInventory:
+        inv = ClassInventory.resume("azure", self.t.location or None, saved)
+        inv.rules = {tier: self._rule(tier) for tier in inv.counts}
+        return inv
+
+    def _last_pass(self, cursor: dict[str, Any]) -> ClassInventory | None:
+        """The last complete pass's blobs per tier, with today's rules; None before one."""
+        if not isinstance(cursor.get("classesPass"), dict):
+            return None
+        inv = self._inventory(cursor["classesPass"])
+        inv.complete = True
+        return inv
 
     def _planned(self, props: Any) -> int:
         return planned_bytes(str(props.name), int(props.size or 0), self.max_object_bytes)

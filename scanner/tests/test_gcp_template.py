@@ -23,6 +23,7 @@ import hcl2
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY = REPO / "deploy" / "gcp"
 CONFIG = REPO / "scanner" / "gcp" / "src" / "sensitive_data_gcp" / "config.py"
+RUNNER_CONFIG = REPO / "scanner" / "core" / "src" / "sensitive_data_core" / "runner_config.py"
 
 # A permission reads when its verb (the last part) is one of these.
 READ_VERBS = frozenset(
@@ -145,9 +146,12 @@ def test_opt_in_permissions_sit_in_their_own_roles_off_by_default() -> None:
         for p in perms:
             assert verb(p) in READ_VERBS | OPT_IN_VERBS or p in EXCEPTIONS, p
             assert p not in t["locals"]["read_permissions"], p
-        assert t["variable"][variable]["default"] is False
+        # False, or (#109) null: left to Mermera, and the role is made only when it is true.
+        assert t["variable"][variable]["default"] in (False, None), variable
         # The role is in local.roles only when its variable is on.
-        assert re.search(rf"var\.{variable} \? \{{ \w+ = \{{[^}}]*local\.{local}", source), local
+        assert re.search(
+            rf"var\.{variable}( == true)? \? \{{ \w+ = \{{[^}}]*local\.{local}", source
+        ), local
     # Secret access and database logins are never in the default role.
     assert not any(verb(p) in OPT_IN_VERBS for p in t["locals"]["read_permissions"])
 
@@ -163,8 +167,11 @@ def test_every_named_exception_sits_in_a_role_its_toggle_can_turn_off() -> None:
         assert perms == expected, local
         held |= perms
         assert not perms & set(t["locals"]["read_permissions"]), local
-        assert t["variable"][variable]["default"] is True
-        assert re.search(rf"var\.{variable} \? \{{ \w+ = \{{[^}}]*local\.{local}", source), local
+        # (#109) null, left to Mermera: the role is made unless the variable is false.
+        assert t["variable"][variable]["default"] is None
+        short = variable.removeprefix("read_")
+        assert f"{short} = coalesce(var.{variable}, true)" in re.sub(r"\s+", " ", source)
+        assert re.search(rf"local\.{short} \? \{{ \w+ = \{{[^}}]*local\.{local}", source), local
     assert set(EXCEPTIONS) <= held
     env = {
         "GCP_SPANNER": "read_spanner",
@@ -174,7 +181,9 @@ def test_every_named_exception_sits_in_a_role_its_toggle_can_turn_off() -> None:
         "GCP_READ_PUBSUB_DLQ": "read_pubsub_dead_letters",
     }
     for name, variable in env.items():
-        assert re.search(rf"{name}\s+= var\.{variable} \? \"on\" : \"off\"", source), name
+        # (#109) Set only when given: the job takes Mermera's setting otherwise.
+        assert re.search(rf"{name}\s+= var\.{variable}\n", source), name
+    assert '(v ? "on" : "off") if v != null' in source
 
 
 def test_sdp_profiles_are_listed_only_in_vendor_or_both() -> None:
@@ -185,11 +194,12 @@ def test_sdp_profiles_are_listed_only_in_vendor_or_both() -> None:
     assert perms == {"dlp.columnDataProfiles.list", "dlp.fileStoreProfiles.list"}
     assert all(verb(p) == "list" for p in perms)
     assert not perms & set(t["locals"]["read_permissions"])
-    assert t["variable"]["scan_mode"]["default"] == "scanner"
+    assert t["variable"]["scan_mode"]["default"] is None  # (#109) left to Mermera
     source = (DEPLOY / "main.tf").read_text()
-    assert re.search(
-        r'var\.scan_mode != "scanner" \? \{ sdp = \{[^}]*local\.sdp_permissions', source
+    assert 'vendor_mode = contains(["vendor", "both"], coalesce(var.scan_mode, "scanner"))' in (
+        re.sub(r"\s+", " ", source)
     )
+    assert re.search(r"local\.vendor_mode \? \{ sdp = \{[^}]*local\.sdp_permissions", source)
     assert "dlp.jobs" not in source and "inspectFindings" not in source
 
 
@@ -265,7 +275,8 @@ def test_the_job_runs_as_the_scanner_account_and_every_setting_it_sets_is_read()
     names |= {"GCP_ORGANIZATION", "GCP_FOLDERS", "GCP_PROJECTS"}
     names |= set(re.findall(r'"(FINDINGS_[A-Z_]+)"', source))
     assert {"SCANNER_SITE", "STATE_BUCKET", "FINDINGS_HTTPS_URL", "FINDINGS_HMAC_KEY"} <= names
-    config = CONFIG.read_text()
+    # IAM_GRANTS (#109) is read by the core's settings pull, beside the platform's config.
+    config = CONFIG.read_text() + RUNNER_CONFIG.read_text()
     for name in names:
         assert f'"{name}"' in config, name
     image = t["variable"]["image"]

@@ -42,9 +42,9 @@ data:
   M365_MAIL_SCOPE_CHECK: ""
   M365_SITES: ""
   SLACK_TOKEN_FILE: /run/secrets/sds/slack-token
-  # The limitations' toggles, at their defaults (docs/limitations.md, D2-D4).
-  M365_MAIL: "on"
-  LINK_VENDOR_ALERTS_BY_LOCATION: "on"
+  # The limitations' toggles (docs/limitations.md): empty leaves each to Mermera's setting, else its default, on (#109, docs/mermera-config.md).
+  M365_MAIL: ""
+  LINK_VENDOR_ALERTS_BY_LOCATION: ""
   ATLASSIAN_AUTH_MODE: token
   STATE_LOCATION: /state/sds-saas-state.json
   FINDINGS_HTTPS_URL: https://collector.example/findings

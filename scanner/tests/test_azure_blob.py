@@ -293,7 +293,9 @@ def test_blobs_are_read_by_format_with_their_own_encryption() -> None:
     doc = run(t)
     raw = next(c for c in doc["coverage"] if c["target"] == "contosolake/raw/")
     assert raw["scanned"] == 4  # two CSVs, the gzip, the Parquet file
-    assert raw["skipped"] == {"archive_tier": 1, "audio": 1}
+    assert raw["skipped"] == {"audio": 1}
+    # #109: the Archive-tier blob is decided from the listing: a rehydration gap, not a read.
+    assert raw["archived"] == {"needs_rehydration": 1}
     assert (raw["unreadable"], raw["kmsDenied"]) == (1, 1)  # the customer-provided key
     assert raw["formats"] == {"csv": 3, "parquet": 1}
     by_blob: dict[str, list[dict[str, Any]]] = {}

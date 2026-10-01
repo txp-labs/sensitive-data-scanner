@@ -15,10 +15,14 @@ quote a URL, an address or a header.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import os
 import sys
 import warnings
 
+from sensitive_data_core.findings import FINDINGS_SCHEMA_VERSION
+from sensitive_data_core.runner_config import apply_mermera
 from sensitive_data_core.safety import error_name, log_event
 
 from .clients import Clients
@@ -37,7 +41,11 @@ def main(argv: list[str] | None = None, clients: Clients | None = None) -> int:
         log_event("run.failed", error="usage")
         return 1
     try:
-        settings = read_settings()
+        # #109: Mermera's settings, under what the environment sets explicitly.
+        env, report = apply_mermera(
+            "saas", dict(os.environ), schema_version=FINDINGS_SCHEMA_VERSION
+        )
+        settings = dataclasses.replace(read_settings(env), settings_report=report.as_json())
     except ConfigError as err:
         log_event("run.failed", error=err.code)
         return 1

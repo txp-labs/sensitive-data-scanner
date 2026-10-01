@@ -20,14 +20,22 @@ param managementGroup string = ''
 param subscriptionIds array = []
 param discover string = ''
 param readDatabases string = ''
-param readKeyVaultSecrets bool = false
-param readFileShares bool = false
+// The settings Mermera may set (docs/mermera-config.md, #109) are nullable: null leaves the
+// variable unset, so the job takes Mermera's setting, else the scanner's default.
+@description('KEYVAULT_SECRETS_READ.')
+param readKeyVaultSecrets bool?
+@description('AZURE_FILES_READ.')
+param readFileShares bool?
 @description('AZURE_LOG_ANALYTICS (docs/limitations.md, B1).')
-param readLogAnalytics bool = true
+param readLogAnalytics bool?
 @description('AZURE_READ_SNAPSHOTS: a hook (docs/limitations.md, B4).')
-param readDiskSnapshots bool = false
+param readDiskSnapshots bool?
 @description('AZURE_COSMOS_READER_POLICY: a hook (docs/limitations.md, B3).')
-param assignCosmosReaderPolicy bool = false
+param assignCosmosReaderPolicy bool?
+@description('AZURE_READ_COLD_TIER (#109).')
+param readColdTier bool?
+@description('AZURE_REHYDRATE_ARCHIVE: a hook (#109).')
+param rehydrateArchive bool?
 @description('AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container\'s last complete pass listed that name it in the run summary; 0 never.')
 @minValue(0)
 param blobInventoryMinObjects int = 1000000
@@ -153,23 +161,44 @@ var settings = filter(
     }
     {
       name: 'KEYVAULT_SECRETS_READ'
-      value: readKeyVaultSecrets ? 'on' : 'off'
+      value: readKeyVaultSecrets == null ? '' : (readKeyVaultSecrets == true ? 'on' : 'off')
     }
     {
       name: 'AZURE_FILES_READ'
-      value: readFileShares ? 'on' : 'off'
+      value: readFileShares == null ? '' : (readFileShares == true ? 'on' : 'off')
     }
     {
       name: 'AZURE_LOG_ANALYTICS'
-      value: readLogAnalytics ? 'on' : 'off'
+      value: readLogAnalytics == null ? '' : (readLogAnalytics == true ? 'on' : 'off')
     }
     {
       name: 'AZURE_READ_SNAPSHOTS'
-      value: readDiskSnapshots ? 'on' : 'off'
+      value: readDiskSnapshots == null ? '' : (readDiskSnapshots == true ? 'on' : 'off')
     }
     {
       name: 'AZURE_COSMOS_READER_POLICY'
-      value: assignCosmosReaderPolicy ? 'on' : 'off'
+      value: assignCosmosReaderPolicy == null ? '' : (assignCosmosReaderPolicy == true ? 'on' : 'off')
+    }
+    {
+      name: 'AZURE_READ_COLD_TIER'
+      value: readColdTier == null ? '' : (readColdTier == true ? 'on' : 'off')
+    }
+    {
+      name: 'AZURE_REHYDRATE_ARCHIVE'
+      value: rehydrateArchive == null ? '' : (rehydrateArchive == true ? 'on' : 'off')
+    }
+    {
+      // #109: the grants this deployment made, so a setting Mermera turns on that needs a
+      // role this identity was not given is reported gate: iam, never tried.
+      name: 'IAM_GRANTS'
+      value: join(
+        concat(
+          ['none'],
+          readKeyVaultSecrets == true ? ['KEYVAULT_SECRETS_READ'] : [],
+          readFileShares == true ? ['AZURE_FILES_READ'] : []
+        ),
+        ','
+      )
     }
     {
       name: 'AZURE_BLOB_INVENTORY_MIN_OBJECTS'

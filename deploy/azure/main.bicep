@@ -39,18 +39,22 @@ param site string = toLower(managementGroup().name)
 param discover string = ''
 @description('AZURE_DB_READ: the database kinds read (off by default); each needs the identity as a user.')
 param readDatabases string = ''
-@description('Key Vault secrets: off by default. On grants Key Vault Secrets User and reads values (counts only).')
-param readKeyVaultSecrets bool = false
-@description('Azure Files shares: off by default. On grants Storage File Data Privileged Reader (reads files over REST, overriding their ACLs) and reads them.')
-param readFileShares bool = false
+@description('KEYVAULT_SECRETS_READ: Key Vault secrets, off by default. True grants Key Vault Secrets User and reads values (counts only); without it, Mermera turning it on is reported gate: iam. Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param readKeyVaultSecrets bool?
+@description('AZURE_FILES_READ: Azure Files shares, off by default. True grants Storage File Data Privileged Reader (reads files over REST, overriding their ACLs) and reads them; without it, Mermera turning it on is reported gate: iam. Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param readFileShares bool?
 @description('Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on.')
 param cosmosAccountIds array = []
-@description('AZURE_LOG_ANALYTICS: read Log Analytics workspaces with Reader (on by default); off lists them, read_not_configured (docs/limitations.md, B1).')
-param readLogAnalytics bool = true
-@description('AZURE_READ_SNAPSHOTS: a hook, off by default. A snapshot is read only by a SAS export, a write, and no reader is built: on, each snapshot is reported not_implemented (B4).')
-param readDiskSnapshots bool = false
-@description('AZURE_COSMOS_READER_POLICY: a hook, off by default. The Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built (its remediation identity would need a write role): on, an account the identity cannot read is reported not_implemented; use cosmosAccountIds (B3).')
-param assignCosmosReaderPolicy bool = false
+@description('AZURE_LOG_ANALYTICS: read Log Analytics workspaces with Reader (on by default); off lists them, read_not_configured (docs/limitations.md, B1). Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param readLogAnalytics bool?
+@description('AZURE_READ_SNAPSHOTS: a hook, off by default. A snapshot is read only by a SAS export, a write, and no reader is built: on, each snapshot is reported not_implemented (B4). Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param readDiskSnapshots bool?
+@description('AZURE_COSMOS_READER_POLICY: a hook, off by default. The Azure Policy that would give the identity Cosmos DB Built-in Data Reader on every NoSQL account is not built (its remediation identity would need a write role): on, an account the identity cannot read is reported not_implemented; use cosmosAccountIds (B3). Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param assignCosmosReaderPolicy bool?
+@description('AZURE_READ_COLD_TIER: read Cold-tier blobs, which have a read fee per GB (the run\'s costEstimate says how much); off by default, they are counted notAllowed cold_tier (#109). Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param readColdTier bool?
+@description('AZURE_REHYDRATE_ARCHIVE: a hook, off by default. An Archive-tier blob needs a rehydration (a write, at the customer\'s cost) and is the gap needs_rehydration; on, the tier says not_implemented (#109). Unset (null, the default): Mermera\'s setting, else the scanner\'s default (docs/mermera-config.md).')
+param rehydrateArchive bool?
 @secure()
 param findingsHttpsUrl string = ''
 @secure()
@@ -77,8 +81,8 @@ var vaultReadRole = '4633458b-17de-408a-b874-0445c86b69e6'
 var fileReadRole = 'b8eda974-7b85-4f76-af95-65846b26df6d' // Storage File Data Privileged Reader
 var roles = concat(
   readRoles,
-  readKeyVaultSecrets ? [vaultReadRole] : [],
-  readFileShares ? [fileReadRole] : []
+  readKeyVaultSecrets == true ? [vaultReadRole] : [],
+  readFileShares == true ? [fileReadRole] : []
 )
 var central = mode == 'central'
 
@@ -113,6 +117,8 @@ module centralJob 'modules/job.bicep' = if (central) {
     readLogAnalytics: readLogAnalytics
     readDiskSnapshots: readDiskSnapshots
     assignCosmosReaderPolicy: assignCosmosReaderPolicy
+    readColdTier: readColdTier
+    rehydrateArchive: rehydrateArchive
     blobInventoryMinObjects: blobInventoryMinObjects
     findingsHttpsUrl: findingsHttpsUrl
     findingsHmacKey: findingsHmacKey
@@ -170,6 +176,8 @@ module jobs 'modules/job.bicep' = [
       readLogAnalytics: readLogAnalytics
       readDiskSnapshots: readDiskSnapshots
       assignCosmosReaderPolicy: assignCosmosReaderPolicy
+    readColdTier: readColdTier
+    rehydrateArchive: rehydrateArchive
       blobInventoryMinObjects: blobInventoryMinObjects
       findingsHttpsUrl: findingsHttpsUrl
       findingsHmacKey: findingsHmacKey

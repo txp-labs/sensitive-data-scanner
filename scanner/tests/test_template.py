@@ -265,6 +265,89 @@ def test_the_config_parameter_is_read_under_its_own_path_only() -> None:
     assert env["CONFIG_LOCATION"] == {"Ref": "ConfigLocation"}
 
 
+def test_the_mermera_key_is_one_secret_the_role_alone_reads() -> None:
+    """#109: the Mermera site's HMAC key is a Secrets Manager secret of the stack's own, under
+    the aws/secretsmanager key. The scanner's role may read that one secret and decrypt it
+    only through Secrets Manager and only for it; no Deny blocks that read, and no other
+    Allow reads a secret unless SecretsRead is on."""
+    secret = RES["MermeraKeySecret"]
+    assert secret["Type"] == "AWS::SecretsManager::Secret"
+    assert secret["Condition"] == "HasMermeraKey"
+    props = secret["Properties"]
+    assert props["SecretString"] == {"Ref": "FindingsHmacKey"}
+    assert props["Name"] == {
+        "Fn::Sub": "/sensitive-data-scanner/${AWS::StackName}/findings-hmac-key"
+    }
+    assert "KmsKeyId" not in props  # the aws/secretsmanager key
+    by_sid = {s["Sid"]: s for s in statements() if "Sid" in s}
+    read = by_sid["ReadOwnMermeraKey"]
+    assert actions(read) == ["secretsmanager:GetSecretValue"]
+    assert read["Resource"] == {"Ref": "MermeraKeySecret"}
+    assert gates()["ReadOwnMermeraKey"] == ["HasMermeraKey"]
+    decrypt = by_sid["DecryptOwnMermeraKeyThroughSecretsManager"]
+    assert actions(decrypt) == ["kms:Decrypt"]
+    assert decrypt["Condition"] == {
+        "StringEquals": {
+            "kms:ViaService": {"Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"},
+            "kms:EncryptionContext:SecretARN": {"Ref": "MermeraKeySecret"},
+        }
+    }
+    readers = [
+        s["Sid"]
+        for s in statements()
+        if s["Effect"] == "Allow" and "secretsmanager:GetSecretValue" in actions(s)
+    ]
+    assert sorted(readers) == [
+        "NamedSecretsOnly",
+        "ReadMqUserSecrets",
+        "ReadOwnMermeraKey",
+        "ReadSecretValues",
+    ]
+    assert gates()["ReadSecretValues"] == ["SecretsValues"]
+    assert gates()["NamedSecretsOnly"] == ["DataApi"]
+    assert gates()["ReadMqUserSecrets"] == ["MqReads"]
+    # The Denies stay as they were, and none of them touches the scanner's own read.
+    denies = [s for s in statements() if s["Effect"] == "Deny"]
+    denied = {a for s in denies for a in actions(s)}
+    assert {"secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret"} <= denied
+    for s in denies:
+        for a in actions(s):
+            assert not re.fullmatch(a.replace("*", ".*"), "secretsmanager:GetSecretValue"), a
+            assert not re.fullmatch(a.replace("*", ".*"), "kms:Decrypt"), a
+    # Nothing else is made for it: no custom resource, no function or role of its own.
+    kinds = {r["Type"] for r in RES.values()}
+    assert not [k for k in kinds if k.startswith("Custom::")]
+    assert [n for n, r in RES.items() if r["Type"] == "AWS::Lambda::Function"] == ["Function"]
+
+
+def test_the_mermera_key_never_reaches_the_functions_environment() -> None:
+    env = RES["Function"]["Properties"]["Environment"]["Variables"]
+    assert "FINDINGS_HMAC_KEY" not in env
+    assert env["FINDINGS_HMAC_KEY_SECRET"] == {
+        "Fn::If": ["HasMermeraKey", {"Ref": "MermeraKeySecret"}, ""]
+    }
+    # The key parameter is used by the secret and the condition, nothing else.
+    refs: list[str] = []
+
+    def walk(node: Any, where: str) -> None:
+        if isinstance(node, dict):
+            if node.get("Ref") == "FindingsHmacKey":
+                refs.append(where)
+            for v in node.values():
+                walk(v, where)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, where)
+
+    for name, r in RES.items():
+        walk(r, name)
+    walk(SCANNER["Conditions"], "Conditions")
+    walk(SCANNER["Outputs"], "Outputs")
+    assert sorted(refs) == ["Conditions", "MermeraKeySecret"]
+    param = SCANNER["Parameters"]["FindingsHmacKey"]
+    assert param["NoEcho"] is True and param["AllowedPattern"] == "^$|^.{32,}$"
+
+
 def test_the_export_role_writes_only_the_exports_prefix() -> None:
     role = RES["RdsExportRole"]["Properties"]
     assert role["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {
@@ -517,7 +600,11 @@ def test_config_stores_are_read_never_written_and_secrets_are_opt_in() -> None:
     secrets = next(s for s in statements() if s.get("Sid") == "ReadSecretValues")
     assert in_account(secrets["Resource"], "secretsmanager", "secret:")
     assert gates()["ReadSecretValues"] == ["SecretsValues"]
-    assert SCANNER["Parameters"]["SecretsRead"]["Default"] == "false"
+    # #109: empty (Mermera's setting, else off); the grant needs "true" from the template.
+    assert SCANNER["Parameters"]["SecretsRead"]["Default"] == ""
+    assert SCANNER["Conditions"]["SecretsValues"] == {
+        "Fn::Equals": [{"Ref": "SecretsRead"}, "true"]
+    }
 
 
 def test_time_series_and_keyspaces_are_select_only() -> None:
@@ -533,7 +620,9 @@ def test_time_series_and_keyspaces_are_select_only() -> None:
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:
     source = (PACKAGE / "config.py").read_text()
-    known = set(re.findall(r'e\.get\("([A-Z0-9_]+)"', source))
+    # IAM_GRANTS (#109) is read by the core's settings pull (runner_config.grants_from).
+    source += (REPO / "scanner/core/src/sensitive_data_core/runner_config.py").read_text()
+    known = set(re.findall(r'e(?:nv)?\.get\("([A-Z0-9_]+)"', source))
     env = RES["Function"]["Properties"]["Environment"]["Variables"]
     assert set(env) <= known, set(env) - known
     assert {"RESULTS_BUCKET", "DISCOVER", "FINDINGS_EVENT_BUS_ARN"} <= set(env)
@@ -614,7 +703,7 @@ def test_brokers_are_read_with_no_commit_and_no_consume() -> None:
         "mq:Update*",
         "mq:Reboot*",
     } <= denied
-    assert SCANNER["Parameters"]["MskRead"]["Default"] == "false"
+    assert SCANNER["Parameters"]["MskRead"]["Default"] == ""  # #109: Mermera's, else off
     assert SCANNER["Parameters"]["MqRead"]["Default"] == "false"
     source = (PACKAGE / "sources" / "brokers.py").read_text()
     assert "enable_auto_commit=False" in source and "commit(" not in source
@@ -669,7 +758,14 @@ def test_macie_is_imported_only_in_vendor_or_both_and_never_revealed() -> None:
     reads = next(s for s in statements() if s.get("Sid") == "ReadMacieFindings")
     assert actions(reads) == ["macie2:GetMacieSession", "macie2:ListFindings", "macie2:GetFindings"]
     assert gates()["ReadMacieFindings"] == ["MacieImport"]
-    assert SCANNER["Parameters"]["ScanMode"]["Default"] == "scanner"
+    # #109: empty (Mermera's setting, else scanner); the Macie reads only with vendor or both.
+    assert SCANNER["Parameters"]["ScanMode"]["Default"] == ""
+    assert SCANNER["Conditions"]["MacieImport"] == {
+        "Fn::Or": [
+            {"Fn::Equals": [{"Ref": "ScanMode"}, "vendor"]},
+            {"Fn::Equals": [{"Ref": "ScanMode"}, "both"]},
+        ]
+    }
     denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
     assert {
         "macie2:GetSensitiveDataOccurrences*",

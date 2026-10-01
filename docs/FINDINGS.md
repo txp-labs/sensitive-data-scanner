@@ -1,4 +1,4 @@
-# Findings, schema version 1.12
+# Findings, schema version 1.13
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.12"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.13"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -134,6 +134,21 @@ value shows up in findings, events, logs, exception messages or object reprs.
   hook only is on: the read is designed and not built), `linkedBy: location`
   on a finding linked by item only, and the `notAllowed` reason
   `archive_class` (a Cloud Storage Archive-class object). All additive.
+- Version 1.13 ([#109](https://github.com/txp-labs/sensitive-data-scanner/issues/109))
+  adds storage classes and settings from Mermera: on each object store in the
+  run summary, `storageClasses` (objects and bytes per storage class or tier,
+  whether each is read and why not), `storageClassesPartial` and
+  `costEstimate` (the cost to read the classes that charge per byte, from a
+  dated price table); the store gaps `needsRestore` and `needsRehydration`
+  and the coverage field `archived` (objects whose class has no read-only way
+  in, never `unreadable`); the `notAllowed` reasons `archive_class` for S3
+  Glacier Instant Retrieval and `cold_tier` for Azure Cold; and, on the
+  document, `settingsSource` (each setting Mermera may set: its value, and
+  whether it came from the deployment, Mermera or the default, with `gate:
+  iam` and the template parameter when the role lacks what it needs) and
+  `configPull` ([mermera-config.md](mermera-config.md)). All additive. An Azure
+  Archive-tier blob, counted under `skipped.archive_tier` before, is
+  `archived.needs_rehydration` from 1.13.
 
 ## Sources and modes (1.8)
 
@@ -195,6 +210,7 @@ the state or an event.
 | `linked` | In `both` mode: the ids of the other source's findings at the same location and class |
 | `linkedBy` | (1.12, #105) `location`: at least one link in `linked` is by location only, between a vendor alert that names no kind of data (Slack DLP's, class `other`) and findings of another source at the same item, whatever their class (`LINK_VENDOR_ALERTS_BY_LOCATION`, on by default) |
 | `scanMode` (document) | The mode each platform ran in |
+| `settingsSource`, `configPull` (document) | (1.13, #109) Each setting Mermera may set, as the run used it (`value`, `source`: `env`, `mermera` or `default`; `gate: iam`, `parameter` and `requested` when the deployed role lacks what the value needs; `hook` for a hook switched on), and how the pull of Mermera's settings went (`status`, `contract`, `error`, `applied`, `ignored`, `invalid`). The contract: [mermera-config.md](mermera-config.md) |
 | `vendorCoverage` (document) | Per importer: `vendor`, `platform`, `mode`, `status` (`read`, `not_enabled`, `access_denied`, `error`, `throttled`), `error`, `findings`, `covers` (the kinds it covers) and `limits`; (1.12) `toggle`, the setting that turns a `not_enabled` importer on (`GWS_ALERT_CENTER`) |
 
 `limits` name what a vendor's tool does not cover: `s3_only` (Macie reads S3
@@ -872,7 +888,8 @@ One entry per source says what was, and was not, read:
 | `disguised` | Objects and archive entries whose name claims another kind than their bytes are, read by content (1.9; present when not zero). Counted whether or not anything was found in them |
 | `duplicates` | (1.10) Objects not read because their bytes are an indexed object's ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); their findings carry `duplicateOf` |
 | `duplicatesAcross` | (1.11) Of `duplicates`, the objects whose original is in another store of the same account, subscription or project, found by the account's shared fingerprint table ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)) |
-| `notAllowed` | (1.10) Objects listed and not read because the store's own rules do not allow them, by reason: `key_filter` (a bucket's `keyInclude` / `keyExclude`, [ARCHITECTURE.md](ARCHITECTURE.md#discovery)); (1.12) `archive_class` (a Cloud Storage Archive-class object, with `GCS_READ_ARCHIVE` off). Present when not zero |
+| `notAllowed` | (1.10) Objects listed and not read because the store's own rules do not allow them, by reason: `key_filter` (a bucket's `keyInclude` / `keyExclude`, [ARCHITECTURE.md](ARCHITECTURE.md#discovery)); (1.12) `archive_class` (a Cloud Storage Archive-class object, with `GCS_READ_ARCHIVE` off; (1.13) an S3 Glacier Instant Retrieval object, with `S3_READ_GLACIER_IR` off); (1.13) `cold_tier` (an Azure Cold-tier blob, with `AZURE_READ_COLD_TIER` off). Present when not zero |
+| `archived` | (1.13, #109) Objects listed and not read because their class or tier has no read-only way in, by gap: `needs_restore` (S3 Glacier Flexible Retrieval, Deep Archive, Intelligent-Tiering's Archive and Deep Archive Access tiers; a restored copy is read), `needs_rehydration` (an Azure Archive-tier blob, or one being rehydrated). Never fetched, never `unreadable`. Present when not zero |
 | `relisted` | (1.11) How this kind of store is listed changed (its `listing:<kind>` component): the run listed it again from the start. Nothing unchanged was read for it ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)) |
 | `indexed`, `rescanned`, `rescanBacklog` | (1.10) Present when the source keeps an object index: the objects the index holds after the run, the objects read again this run though unchanged at their source by `rescanReason`, and the rescans still owed (objects whose recorded components are stale, and objects with no row met and not read). Later runs read the backlog within `RESCAN_PERCENT` of each source's budget |
 
@@ -910,7 +927,9 @@ coverage gap is visible rather than silent.
 | `error` | The AWS error name, for `error` |
 | `sizeBytes` | The table's or log group's size, when AWS reports it |
 | `samplePercent`, `maxObjectsPerPrefix` | The store's sampling, when it is sampled |
-| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat`; and (1.9) `disguised`, the store's objects and entries named as another kind than they are (read, by content); and (1.10) `notAllowed`, objects a bucket's key filter left out (never read) |
+| `gaps` | Counts listed but not read: `kmsDenied`, `unreadable`, `unsupportedFormat`; and (1.9) `disguised`, the store's objects and entries named as another kind than they are (read, by content); and (1.10) `notAllowed`, objects a bucket's key filter left out (never read), and (1.12, 1.13) those a storage class's setting left out; and (1.13) `needsRestore` and `needsRehydration`, objects whose class needs a restore (S3) or a rehydration (Azure) before anything can read them |
+| `storageClasses` | (1.13, #109) An S3 bucket's, Azure container's or Cloud Storage bucket's objects per storage class or tier, over its last complete listing pass (`storageClassesPartial: true`: the first pass so far): `objects`, `bytes`, `read`, and when not read `reason` (`archive_class`, `cold_tier`, `needs_restore`, `needs_rehydration`, or `not_implemented` for a hook switched on) and `toggle`. Classes are the provider's names (`STANDARD_IA`, `GLACIER_IR`, `DEEP_ARCHIVE`; `GLACIER_RESTORED` for a restored copy; `INTELLIGENT_TIERING_ARCHIVE_ACCESS`, `INTELLIGENT_TIERING_DEEP_ARCHIVE_ACCESS`; Azure's `Hot`, `Cool`, `Cold`, `Archive`, `Premium`; Cloud Storage's `STANDARD`, `NEARLINE`, `COLDLINE`, `ARCHIVE`). From the listing only |
+| `costEstimate` | (1.13, #109) What reading every object once would cost, for the classes that charge per byte and that the scanner can read now or with their setting on: `currency` (`USD`), `retrievalPerGb` and `requestsPer1k` by class, `estimatedToScanUsd` (the classes read now), `byClass` (each priced class, read or not), `priceDate`, `region`, and `regionFallback` when the region was priced as the platform's fallback. Classes that need a restore or rehydration have none. [COST.md](COST.md#reading-cold-storage-classes) |
 | `backlog` | More to read on the next run |
 | `logGroupClass`, `tableStatus`, `catalogObject` | Why an `unsupported` store is unsupported (`catalogObject`: `view`, `not_s3`, `resource_link`) |
 | `location` | A Glue table's S3 location, `bucket/prefix`, masked |
@@ -938,7 +957,7 @@ coverage gap is visible rather than silent.
 | `api` | (1.6) Cosmos DB: the account's API, `sql` (NoSQL), `mongodb`, `cassandra`, `gremlin` or `table`; only NoSQL and a MongoDB vCore cluster are read |
 | `networkRestricted` | (1.6) An Azure store that admits only selected networks or private endpoints; when the scanner is not among them it is the `network` gap |
 | `writeGrants` | (1.4) The databases runner: the write privileges the database user holds, by name (`superuser`, `table_write`, `INSERT`, `db_datawriter`, `MODIFY`, ...), when the store is refused as `db_user_can_write`; (1.5) for Amazon MQ, `console_access`, `queue_write`, `queue_admin`, `no_authorization_map` or `configuration_unreadable`, when refused as `user_can_write` |
-| `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`) |
+| `items`, `itemTypes`, `excluded` | (1.3) For Parameter Store and Secrets Manager: parameters or secrets listed; by type (or managed by another service); and those not read, by reason (`denied`, `not_allowed`, `tags_unreadable`, `secure_string`, `self`; (1.13) `scanner_own_credential`, the secret holding the scanner's own Mermera key, never read as data and not a gap) |
 
 `stores` lists the stores not read first, and holds at most 5,000
 (`storesTruncated`). `listErrors` names a listing that failed, by kind

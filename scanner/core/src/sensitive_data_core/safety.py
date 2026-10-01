@@ -74,6 +74,10 @@ EVENTS: Final = frozenset(
         # The run's lock was taken over by another run (this one outlived the stale age);
         # it is left for that run to release (#94).
         "run.lock_lost",
+        # Mermera's settings (#109): the pull failed (by status or error name), or a setting
+        # needs a grant the deployed role lacks (by setting and template parameter).
+        "config.pull_failed",
+        "config.gated",
     }
 )
 

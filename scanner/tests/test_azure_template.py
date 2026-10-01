@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO / "deploy" / "azure" / "main.json"
 BICEP = REPO / "deploy" / "azure"
 CONFIG = REPO / "scanner" / "azure" / "src" / "sensitive_data_azure" / "config.py"
+RUNNER_CONFIG = REPO / "scanner" / "core" / "src" / "sensitive_data_core" / "runner_config.py"
 
 # The built-in roles the template may assign, with their permissions as Azure defines
 # them (Azure built-in roles reference). A role not here fails the test; so does any
@@ -167,15 +168,18 @@ def test_the_read_role_list_is_exactly_the_read_roles() -> None:
     assert ids and all(i in BUILT_IN_ROLES for i in ids)
     assert VAULT_READ_ROLE not in ids  # only with readKeyVaultSecrets
     assert FILE_READ_ROLE not in ids  # only with readFileShares
-    assert "readKeyVaultSecrets ? [vaultReadRole] : []" in text
-    assert "readFileShares ? [fileReadRole] : []" in text
+    # Only when the parameter is true (#109: null, the default, leaves it to Mermera, which
+    # cannot grant a role: turned on there, it is reported gate: iam).
+    assert "readKeyVaultSecrets == true ? [vaultReadRole] : []" in text
+    assert "readFileShares == true ? [fileReadRole] : []" in text
 
 
 def test_key_vault_secrets_user_only_when_asked() -> None:
     t = load()
     roles = t["variables"]["roles"]
     assert "readKeyVaultSecrets" in roles and "vaultReadRole" in roles
-    assert t["parameters"]["readKeyVaultSecrets"]["defaultValue"] is False
+    p = t["parameters"]["readKeyVaultSecrets"]
+    assert p.get("nullable") is True and "defaultValue" not in p  # #109: unset by default
 
 
 def test_file_privileged_reader_only_when_asked() -> None:
@@ -183,7 +187,8 @@ def test_file_privileged_reader_only_when_asked() -> None:
     roles = t["variables"]["roles"]
     assert "readFileShares" in roles and "fileReadRole" in roles
     assert t["variables"]["fileReadRole"] == FILE_READ_ROLE
-    assert t["parameters"]["readFileShares"]["defaultValue"] is False
+    p = t["parameters"]["readFileShares"]
+    assert p.get("nullable") is True and "defaultValue" not in p  # #109: unset by default
 
 
 def test_the_state_writer_is_on_the_jobs_own_container_only() -> None:
@@ -231,7 +236,8 @@ def test_the_job_runs_as_its_system_assigned_identity_with_no_secret_for_azure()
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:
     names = set(re.findall(r"name: '([A-Z][A-Z0-9_]+)'", bicep("modules/job.bicep")))
-    code = CONFIG.read_text()
+    # IAM_GRANTS (#109) is read by the core's settings pull, beside the platform's config.
+    code = CONFIG.read_text() + RUNNER_CONFIG.read_text()
     assert names >= {"SCANNER_SITE", "STATE_CONTAINER_URL", "AZURE_MANAGEMENT_GROUP"}
     for name in names:
         assert f'"{name}"' in code, name
