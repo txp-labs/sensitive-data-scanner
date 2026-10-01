@@ -28,10 +28,10 @@ test('the compiled spec matches spec/*.yaml', () => {
   assert.equal(file, generated());
 });
 
-test('spec version 0.6, and any other version is refused', () => {
-  assert.equal(SPEC_VERSION, '0.6');
-  assert.equal(spec.specVersion, '0.6');
-  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.5' };
+test('spec version 0.7, and any other version is refused', () => {
+  assert.equal(SPEC_VERSION, '0.7');
+  assert.equal(spec.specVersion, '0.7');
+  const wrong = { ...(CLASSES_RAW as Record<string, unknown>), specVersion: '0.6' };
   assert.throws(() => parseSpec(wrong, NORMALIZE_RAW), /unsupported specVersion/);
 });
 

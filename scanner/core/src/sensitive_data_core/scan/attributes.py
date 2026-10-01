@@ -28,8 +28,12 @@ A keypad leaf, when no prompt path is configured at all, takes its own map's
 other short strings and key names as the prompt (a step labeled "Enter SSN").
 
 Every leaf that is not a keypad entry (prompts included) is also read as
-stored text, with its path and its map's short strings as context. Values
-exist only in memory while the item is scanned.
+stored text, with its own path and its map's labels as context, as JSON is
+read (#84): a label is a few words ("Date of birth"), never a sibling's key,
+never a configured prompt (it classes only its paired keypad entry) and never
+a sentence. A DOB prompt beside `startedAt` makes no birth date of it, and a
+value under a timestamp's name (`createdAt`, `endedAt`) is never one (#101).
+Values exist only in memory while the item is scanned.
 """
 
 from __future__ import annotations
@@ -44,7 +48,14 @@ from ..detect.analyzer import Analysis, Detection, Detector
 from ..detect.enhancer import humanize
 from ..engine.conversation import Turn, utf16_index
 from ..findings import Offset
-from .item import _HAS_CANDIDATE, MAX_LEAVES, REDACTION_MARKER, ItemResult, _Collector
+from .item import (
+    _HAS_CANDIDATE,
+    MAX_LEAVES,
+    REDACTION_MARKER,
+    ItemResult,
+    _Collector,
+    is_label,
+)
 from .paths import Path, Step, covers, generic, pointer_escape, render_path
 
 FORMAT = "dynamodb_item"
@@ -88,9 +99,10 @@ class AttributeRules:
 class Leaf:
     steps: tuple[Step, ...]
     text: str
-    context: str  # the enclosing map's short strings and key names
+    context: str  # the enclosing map's short strings and key names: a keypad entry's prompt
     list_pointer: str | None = None  # the innermost list the leaf is in
     order: tuple[float, int] = (0.0, 0)  # its element's place in that list
+    labels: str = ""  # the enclosing map's labels: stored text's context
 
     @property
     def path(self) -> Path:
@@ -127,6 +139,22 @@ def _local_context(m: dict[str, Any]) -> str:
     return humanize(" ".join(parts))
 
 
+def _local_labels(m: dict[str, Any], steps: tuple[Step, ...], rules: AttributeRules) -> str:
+    """A map's labels for its other values: short label strings that are not prompts."""
+    parts: list[str] = []
+    size = 0
+    for k, v in m.items():
+        if not (isinstance(v, dict) and is_label(v.get("S"))):
+            continue
+        if rules.prompts and rules.role((*steps, Step(key=str(k)))) == "prompt":
+            continue  # a prompt classes its paired keypad entry, nothing else
+        parts.append(v["S"])
+        size += len(v["S"])
+        if size > MAX_LOCAL_CONTEXT:
+            break
+    return humanize(" ".join(parts))
+
+
 def _order(
     fields: tuple[tuple[str, str], ...], index: int, order_by: str | None
 ) -> tuple[float, int]:
@@ -150,7 +178,7 @@ def iter_leaves(item: dict[str, Any], rules: AttributeRules) -> Iterator[Leaf]:
     def visit(
         av: Any,
         steps: tuple[Step, ...],
-        context: str,
+        context: tuple[str, str],
         where: tuple[str | None, tuple[float, int]],
         depth: int,
     ) -> Iterator[Leaf]:
@@ -161,9 +189,10 @@ def iter_leaves(item: dict[str, Any], rules: AttributeRules) -> Iterator[Leaf]:
             if not rules.read(steps):
                 return
             count += 1
-            yield Leaf(steps, str(av.get("S", av.get("N"))), context, where[0], where[1])
+            text = str(av.get("S", av.get("N")))
+            yield Leaf(steps, text, context[0], where[0], where[1], context[1])
         elif "M" in av and isinstance(av["M"], dict):
-            local = _local_context(av["M"])
+            local = (_local_context(av["M"]), _local_labels(av["M"], steps, rules))
             for k, v in av["M"].items():
                 yield from visit(v, (*steps, Step(key=str(k))), local, where, depth + 1)
         elif "L" in av and isinstance(av["L"], list):
@@ -183,9 +212,9 @@ def iter_leaves(item: dict[str, Any], rules: AttributeRules) -> Iterator[Leaf]:
                 if not rules.read(leaf_steps):
                     continue
                 count += 1
-                yield Leaf(leaf_steps, str(v), context, here, (float(i), i))
+                yield Leaf(leaf_steps, str(v), context[0], here, (float(i), i), context[1])
 
-    top = _local_context(item)
+    top = (_local_context(item), _local_labels(item, (), rules))
     for name, av in item.items():
         yield from visit(av, (Step(key=str(name)),), top, (None, (0.0, 0)), 1)
 
@@ -265,8 +294,10 @@ def scan_attributes(
             lists.setdefault(leaf.list_pointer, []).append((n, leaf, role))
         if role == "keypad" or not _HAS_CANDIDATE.search(leaf.text):
             continue
-        words = " ".join(str(s.key) for s in leaf.steps if s.key is not None)
-        analysis = detector.analyze_text(leaf.text, [humanize(words), leaf.context])
+        keys = [str(s.key) for s in leaf.steps if s.key is not None]
+        analysis = detector.analyze_text(
+            leaf.text, [humanize(" ".join(keys)), leaf.labels], name=keys[-1] if keys else None
+        )
         out.test_values += analysis.test_values
         out.suppressed += analysis.suppressed
         text, pointer = leaf.text, leaf.pointer

@@ -16,7 +16,7 @@ from presidio_analyzer.nlp_engine import NoOpNlpEngine
 
 from ..engine.conversation import Turn
 from ..engine.spec import Spec, load_spec
-from .enhancer import WINDOW_AFTER, WINDOW_BEFORE, SpecContextEnhancer
+from .enhancer import WINDOW_AFTER, WINDOW_BEFORE, SpecContextEnhancer, timestamp_name
 from .entities import (
     ENTITY_TO_CLASS,
     META_CONFIDENCE,
@@ -73,7 +73,7 @@ def build_engine(spec: Spec, now: _dt.date | None) -> AnalyzerEngine:
         SpecCreditCardRecognizer(spec),
         SpecUsSsnRecognizer(spec),
         SpecUsItinRecognizer(spec),
-        DateOfBirthRecognizer(now),
+        DateOfBirthRecognizer(spec, now),
         SpokenDigitsRecognizer(spec, now),
     ):
         registry.add_recognizer(rec)
@@ -166,13 +166,24 @@ class Detector:
         self._text = build_engine(self.spec, now)
         self._conversation = build_conversation_engine(self.spec, now)
 
-    def analyze_text(self, text: str, context: list[str] | None = None) -> Analysis:
+    def analyze_text(
+        self, text: str, context: list[str] | None = None, *, name: str | None = None
+    ) -> Analysis:
         """Stored text: card, SSN and ITIN patterns and checksums, dates of birth, spoken digits.
+
+        `name` is the field the text is the value of (a key, an attribute, a column). A field
+        named like a timestamp (`createdAt`, `hire_date`) holds no date of birth (#101).
 
         A text longer than `CHUNK_CHARS` is read in chunks that end at a line break, each
         with the context window around it (#77): Presidio's de-duplication compares every
         result with every other, so one large object with many findings would otherwise
         take time quadratic in its findings. A value belongs to the chunk it starts in."""
+        out = self._analyze_text(text, context)
+        if timestamp_name(name):
+            out.detections = [d for d in out.detections if d.cls != "dob"]
+        return out
+
+    def _analyze_text(self, text: str, context: list[str] | None) -> Analysis:
         if len(text) <= CHUNK_CHARS:
             results = self._text.analyze(text=text, language="en", context=context or [])
             return _analysis(results, None)

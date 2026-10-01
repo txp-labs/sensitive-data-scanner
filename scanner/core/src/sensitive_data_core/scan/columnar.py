@@ -165,7 +165,7 @@ class TableScanner:
         if not texts:
             return
         chunk = "\n".join(texts)
-        analysis = self.detector.analyze_text(chunk, context)
+        analysis = self.detector.analyze_text(chunk, context, name=col)
         self.result.test_values += analysis.test_values
         self.result.suppressed += analysis.suppressed
         kept = []

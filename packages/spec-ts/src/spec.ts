@@ -7,7 +7,7 @@
  */
 import { CLASSES_RAW, NORMALIZE_RAW } from './spec.generated.ts';
 
-export const SPEC_VERSION = '0.6';
+export const SPEC_VERSION = '0.7';
 
 const WS = '[ \\t\\r\\n]+';
 
@@ -90,6 +90,10 @@ export interface Spec {
   contextTurnsBefore: number;
   brands: readonly BrandRule[];
   normalize: NormalizeSpec;
+  /** (0.7) A date token followed at once by a match of this (sticky) is a timestamp: no value. */
+  timeOfDayRe: RegExp;
+  /** (0.7) Digit-run lengths that are epoch times: never dob. */
+  epochDigits: ReadonlySet<number>;
 }
 
 /** Escape a literal for a RegExp (the same characters Python's re.escape needs here). */
@@ -239,6 +243,8 @@ export function parseSpec(classesRaw: unknown, normalizeRaw: unknown): Spec {
   const carry = isRecord(classesRaw.promptCarryover) ? classesRaw.promptCarryover : {};
   const window = isRecord(classesRaw.contextWindow) ? classesRaw.contextWindow : {};
   const retryPrefixes = strings(classesRaw.retryPrefixes).map((p) => p.toLowerCase());
+  if (!isRecord(classesRaw.timestamps)) throw new Error('spec is missing timestamps');
+  const stamps = classesRaw.timestamps;
   return {
     specVersion: SPEC_VERSION,
     classes,
@@ -250,6 +256,8 @@ export function parseSpec(classesRaw: unknown, normalizeRaw: unknown): Spec {
     contextTurnsBefore: Number(window.turnsBefore ?? 2),
     brands: ((classesRaw.cardBrands as unknown[]) ?? []).map((b) => parseBrand(b as Raw)),
     normalize: parseNormalize(normalizeRaw),
+    timeOfDayRe: new RegExp(String(stamps.timeOfDay), 'iy'),
+    epochDigits: new Set(((stamps.epochDigits as unknown[]) ?? []).map(Number)),
   };
 }
 

@@ -2,7 +2,7 @@
 // Do not edit by hand: change the YAML and run `npm run gen:spec`.
 
 export const CLASSES_RAW: unknown = {
-  "specVersion": "0.6",
+  "specVersion": "0.7",
   "classes": {
     "us_ssn": {
       "severity": "high",
@@ -273,6 +273,13 @@ export const CLASSES_RAW: unknown = {
   "contextWindow": {
     "turnsBefore": 2
   },
+  "timestamps": {
+    "timeOfDay": "(?:t|[ \\t]+)[0-9]{1,2}:[0-9]{2}(?::[0-9]{2,})*(?:[ \\t]*(?:am|pm))?(?:z|[ \\t]*(?:utc|gmt)|[ \\t]*[+-][0-9]{2}:?[0-9]{2})?(?![0-9])",
+    "epochDigits": [
+      10,
+      13
+    ]
+  },
   "cardBrands": [
     {
       "brand": "discover",
@@ -408,7 +415,7 @@ export const CLASSES_RAW: unknown = {
 };
 
 export const NORMALIZE_RAW: unknown = {
-  "specVersion": "0.6",
+  "specVersion": "0.7",
   "steps": [
     {
       "strip_keypad_terminator": [

@@ -1253,9 +1253,78 @@ def lambda_log(g: Gen, n: int) -> str:
 
 # -------------------------------------------------------------------- hard negatives
 
+_RUN_PROMPTS = (
+    "Please enter your date of birth as eight digits, then press pound.",
+    "Please enter your date of birth.",
+    "Welcome to Example Health. For billing, press 1.",
+    "Thank you. Please hold while I verify that.",
+)
+
+
+def run_item(g: Gen, kind: str) -> dict[str, object]:
+    """A call-test run item as Stugum stores it (#101): ISO-8601 timestamps everywhere, an
+    epoch TTL, an HTTP date, and a bot's date-of-birth prompt beside the step timestamps.
+    No date of birth anywhere: every time is a hard negative."""
+    t = _dt.datetime(2026, 9, g.r.randint(1, 28), g.r.randint(0, 23), g.r.randint(0, 59),
+                     g.r.randint(0, 59), g.r.randint(0, 999) * 1000, tzinfo=_dt.UTC)  # fmt: skip
+
+    def stamp() -> str:
+        nonlocal t
+        t += _dt.timedelta(milliseconds=g.r.randint(200, 9000))
+        return g.neg(kind, t.isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+
+    created = stamp()
+    steps = []
+    for i in range(g.r.randint(2, 5)):
+        step: dict[str, object] = {
+            "kind": "waitForPrompt",
+            "stepIndex": i,
+            "observedText": _RUN_PROMPTS[0 if i == 0 else g.r.randrange(len(_RUN_PROMPTS))],
+            "startedAt": stamp(),
+            "endedAt": stamp(),
+        }
+        steps.append(step)
+    return {
+        "pk": "T#t_0000example",
+        "sk": "RUN#r_" + "".join(g.r.choice("abcdef") for _ in range(12)),
+        "createdAt": created,
+        "estimatedCostUpdatedAt": stamp(),
+        "lastHeardText": _RUN_PROMPTS[g.r.randrange(2)],
+        "stepResults": steps,
+        "assertions": [
+            {"name": "date of birth prompt heard", "passed": True, "evaluatedAt": stamp()},
+        ],
+        "updatedAt": stamp(),
+        "ttl": int(g.neg(kind, str(int(t.timestamp()) + 90 * 86400))),
+        "requestedAtMs": int(g.neg(kind, str(int(t.timestamp() * 1000)))),
+        "lastModified": g.neg(kind, t.strftime("%a, %d %b %Y %H:%M:%S GMT")),
+    }
+
+
+def marshal(v: object) -> dict[str, object]:
+    """A plain value as a DynamoDB attribute value (DynamoDB JSON)."""
+    if isinstance(v, bool):
+        return {"BOOL": v}
+    if isinstance(v, int | float):
+        return {"N": str(v)}
+    if isinstance(v, str):
+        return {"S": v}
+    if isinstance(v, list):
+        return {"L": [marshal(x) for x in v]}
+    if isinstance(v, dict):
+        return {"M": {k: marshal(x) for k, x in v.items()}}
+    return {"NULL": True}
+
 
 def negative_doc(g: Gen, kind: str) -> str:
     """One kind of hard negative, many times, in the context it lives in."""
+    if kind in ("ddb_item_timestamps", "json_item_timestamps"):
+        # One run item per line: DynamoDB JSON, read attribute by attribute as the DynamoDB
+        # source reads a table's items; or the same items as plain JSON (an export).
+        items = [run_item(g, kind) for _ in range(g.r.randint(6, 10))]
+        if kind == "ddb_item_timestamps":
+            return "".join(json.dumps(marshal(i)["M"]) + "\n" for i in items)
+        return "".join(json.dumps(i) + "\n" for i in items)
     lines = []
     for _ in range(g.r.randint(12, 20)):
         if kind == "order":
@@ -1338,7 +1407,12 @@ NEGATIVE_KINDS = [
     "masked_card",
     "test_cards",
     "social_media",
+    "ddb_item_timestamps",
+    "json_item_timestamps",
 ]
+# Where a kind is not plain text: DynamoDB items (`.ddb.jsonl`, read by the attribute
+# reader) and JSON Lines.
+NEGATIVE_SUFFIX = {"ddb_item_timestamps": ".ddb.jsonl", "json_item_timestamps": ".jsonl"}
 
 
 # -------------------------------------------------------------------- the corpus
@@ -1528,7 +1602,8 @@ def build_corpus(seed: int = SEED) -> list[Doc]:
         add(f"lake/customers/part-{i:05d}.snappy.parquet", "parquet", rows)
     for kind in NEGATIVE_KINDS:
         for i in range(4):
-            add(f"negatives/{kind}-{i:02d}.txt", f"neg:{kind}", lambda k=kind: negative_doc(g, k))  # type: ignore[misc]
+            name = f"negatives/{kind}-{i:02d}{NEGATIVE_SUFFIX.get(kind, '.txt')}"
+            add(name, f"neg:{kind}", lambda k=kind: negative_doc(g, k))  # type: ignore[misc]
     return docs
 
 

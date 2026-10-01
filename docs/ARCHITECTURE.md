@@ -1830,9 +1830,15 @@ placeholders (#94, from Stugum's find).
   map's other short strings and key names as its prompt (a step labeled
   "Enter SSN").
 - Every leaf that is not a keypad entry, prompts included, is read as stored
-  text, with its path and its map's short strings as context. That covers
+  text, with its path and its map's labels as context. That covers
   free text such as Stugum's `lastHeardText` and `errorMessage`, present on
-  failed or errored runs.
+  failed or errored runs. A label is a short string of at most four words
+  ("Date of birth"): never a sibling's key name, never a configured prompt
+  (it classes only its paired keypad entry) and never a sentence, so a
+  step's "please enter your date of birth" makes no birth date of the
+  `startedAt` beside it. A leaf named like a timestamp (`createdAt`,
+  `endedAt`, `evaluated_at`) holds no date of birth, and a date with a time
+  of day is never one (#101).
 - A **planted** path's findings carry `planted: true`, so a reviewer can
   tell data a test put there on purpose from a leak. Leave `planted` paths
   out with `exclude` to see leaks only.

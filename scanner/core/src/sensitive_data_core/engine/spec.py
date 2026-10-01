@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-SPEC_VERSION = "0.6"
+SPEC_VERSION = "0.7"
 
 WS = "[ \\t\\r\\n]+"
 
@@ -105,6 +105,10 @@ class Spec:
     context_turns_before: int
     brands: tuple[BrandRule, ...]
     normalize: NormalizeSpec
+    # (0.7) A date token followed by a match of this, at once, is a timestamp: no value.
+    time_of_day_re: re.Pattern[str] = field(repr=False)
+    # (0.7) Digit-run lengths that are epoch times: never dob.
+    epoch_digits: frozenset[int] = frozenset()
 
 
 def prompt_regex(phrase: str) -> re.Pattern[str]:
@@ -240,6 +244,7 @@ def parse_spec(classes_raw: dict[str, Any], normalize_raw: dict[str, Any]) -> Sp
     classes = {name: _class(name, c) for name, c in classes_raw["classes"].items()}
     carry = classes_raw.get("promptCarryover") or {}
     retry_prefixes = tuple(p.lower() for p in classes_raw.get("retryPrefixes") or ())
+    stamps = classes_raw["timestamps"]
     return Spec(
         spec_version=SPEC_VERSION,
         classes=classes,
@@ -251,6 +256,8 @@ def parse_spec(classes_raw: dict[str, Any], normalize_raw: dict[str, Any]) -> Sp
         context_turns_before=int((classes_raw.get("contextWindow") or {}).get("turnsBefore", 2)),
         brands=tuple(_brand(b) for b in classes_raw.get("cardBrands") or ()),
         normalize=_normalize(normalize_raw),
+        time_of_day_re=re.compile(stamps["timeOfDay"], re.I | re.A),
+        epoch_digits=frozenset(int(n) for n in stamps.get("epochDigits") or ()),
     )
 
 

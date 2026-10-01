@@ -52,6 +52,8 @@ export interface ClassifyOptions {
     /** The date plausibility is judged against (birth years may not be later). Default: today. */
     now?: Date;
 }
+/** Each date token followed at once by a time of day, with the time (spec 0.7). */
+export declare function timestampSpans(norm: string, timeOfDay: RegExp): [number, number][];
 /**
  * The turn text without a leading retry prefix, and whether it had one. A
  * prefix's words may be apart by any run of whitespace and . , ! ? ; : in the

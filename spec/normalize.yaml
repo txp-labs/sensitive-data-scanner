@@ -7,7 +7,7 @@
 # spec/README.md ("Normalization"), and vectors/normalize.jsonl holds
 # input/output pairs every implementation must reproduce. The JSON Schema is
 # spec/schema/normalize.schema.json.
-specVersion: "0.6"
+specVersion: "0.7"
 
 steps:
   # "123456789#" -> "123456789": a terminator key right after a digit.

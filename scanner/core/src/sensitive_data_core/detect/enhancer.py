@@ -54,6 +54,22 @@ def humanize(s: str) -> str:
 
 DOB_ENTITY = CLASS_TO_ENTITY["dob"]
 
+# A field whose name ends in one of these words holds a time, never a date of birth (#101):
+# `createdAt`, `updated_at`, `startTime`, `eventTimestamp`, `created`, `hire_date`.
+_TIMESTAMP_LAST_WORDS = frozenset({"at", "time", "timestamp", "created", "updated", "date"})
+# ... unless the name is a birth name: `birthDate`, `birth_date`, `dob_date`.
+_BIRTH_NAME = re.compile(r"birth|dob|born", re.I)
+
+
+def timestamp_name(name: str | None) -> bool:
+    """Whether a field (a key, an attribute, a column) is named like a timestamp, which makes
+    it negative context for `dob`: its value is never a date of birth."""
+    if not name or _BIRTH_NAME.search(name):
+        return False
+    words = re.split(r"[^a-z0-9]+", humanize(name).lower())
+    words = [w for w in words if w]
+    return bool(words) and words[-1] in _TIMESTAMP_LAST_WORDS
+
 
 def _between_dates(
     dates: list[tuple[int, int]], start: int, end: int, lo: int, hi: int

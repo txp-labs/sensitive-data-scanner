@@ -125,21 +125,42 @@ def _pointer_escape(s: str) -> str:
     return s.replace("~", "~0").replace("/", "~1")
 
 
+# A label is a few words ("SSN", "Date of birth", "Customer card number"). A longer string
+# is a sentence, a prompt ("Please enter your date of birth"), a message: it labels no
+# sibling value (#101).
+MAX_LABEL_WORDS = 4
+
+
+def is_label(v: Any) -> bool:
+    """A short string with no run of four digits and at most `MAX_LABEL_WORDS` words."""
+    return (
+        isinstance(v, str)
+        and len(v) <= 80
+        and not _LONG_DIGITS.search(v)
+        and len(v.split()) <= MAX_LABEL_WORDS
+    )
+
+
+def field_name(path: list[str]) -> str | None:
+    """The name a value is held under: the last key of its path that is not a list index."""
+    for p in reversed(path):
+        if not p.isdigit():
+            return p
+    return None
+
+
 def _labels(obj: dict[Any, Any]) -> list[str]:
-    """An object's labels: its short string values with no run of four digits ("SSN" in
-    `{"label": "SSN", "value": ...}`). Never its keys: a key names its own value only."""
-    return [
-        v
-        for v in obj.values()
-        if isinstance(v, str) and len(v) <= 80 and not _LONG_DIGITS.search(v)
-    ]
+    """An object's labels ("SSN" in `{"label": "SSN", "value": ...}`). Never its keys: a key
+    names its own value only."""
+    return [v for v in obj.values() if is_label(v)]
 
 
 def _json_leaves(collector: _Collector, detector: Detector, doc: Any, base: str) -> None:
     """Each string and number in a JSON document, read with its own key path and the labels
     of the objects that hold it as context (#75). Not the document's other keys: one
     `dateOfBirth` key in a log record must not make the record's `timestamp` a birth
-    date, nor an `ssn` key the routing number beside it an SSN."""
+    date, nor an `ssn` key the routing number beside it an SSN. A value under a
+    timestamp's name (`createdAt`) is never a birth date (#101)."""
     leaves = 0
 
     def visit(v: Any, path: list[str], labels: tuple[str, ...], depth: int) -> None:
@@ -155,7 +176,7 @@ def _json_leaves(collector: _Collector, detector: Detector, doc: Any, base: str)
                 return
             pointer = base + "".join("/" + _pointer_escape(p) for p in path)
             context = [humanize(" ".join(path)), humanize(" ".join(labels))[:MAX_DOC_CONTEXT]]
-            analysis = detector.analyze_text(text, context)
+            analysis = detector.analyze_text(text, context, name=field_name(path))
             collector.add(
                 analysis,
                 lambda d: [
@@ -354,7 +375,7 @@ def _csv_column(
         starts.append(pos)
         pos += e - s + 1
     chunk = "\n".join(text[s:e] for s, e in kept)
-    analysis = detector.analyze_text(chunk, [name])
+    analysis = detector.analyze_text(chunk, [name], name=name)
     detections = []
     where: dict[int, int] = {}
     for d in analysis.detections:
