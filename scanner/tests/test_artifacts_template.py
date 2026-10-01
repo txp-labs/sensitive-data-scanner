@@ -123,15 +123,16 @@ def test_the_role_writes_only_where_a_release_goes() -> None:
         for r in workspace
     } == REGIONS
     # Signer checks the source bucket with our credentials (v0.5.0's first run):
-    # read-only, bucket-level, and the listing only of signing/.
+    # read-only and bucket-level.
     checks = by_sid["SignerChecksTheBucket"]
     assert sorted(actions(checks)) == ["s3:GetBucketLocation", "s3:GetBucketVersioning"]
     bucket_re = r"^arn:\$\{AWS::Partition\}:s3:::\$\{BucketPrefix\}-([a-z0-9-]+)$"
     assert {re.sub(bucket_re, r"\1", r["Fn::Sub"]) for r in checks["Resource"]} == REGIONS
-    lists = by_sid["SignerListsTheSigningPrefix"]
+    lists = by_sid["SignerListsTheBucket"]
     assert actions(lists) == ["s3:ListBucket"]
     assert {re.sub(bucket_re, r"\1", r["Fn::Sub"]) for r in lists["Resource"]} == REGIONS
-    assert lists["Condition"] == {"StringLike": {"s3:prefix": ["signing/*"]}}
+    # No s3:prefix condition: Signer's own check sends none (v0.5.0's re-run).
+    assert "Condition" not in lists
     signs = [r["Fn::Sub"] for r in by_sid["SignWithEachRegionsProfile"]["Resource"]]
     assert {
         re.sub(

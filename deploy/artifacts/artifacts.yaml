@@ -371,6 +371,9 @@ Resources:
               # credentials before a job starts (versioning, location, a listing
               # of the signing/ prefix): without these, StartSigningJob fails
               # "S3 bucket ... not accessible" (v0.5.0's first run, 1 Oct 2026).
+              # The listing cannot be narrowed by s3:prefix: Signer's check sends
+              # none, and the condition then refuses it (v0.5.0's re-run). The
+              # bucket only holds public releases and signing scratch space.
               - Sid: SignerChecksTheBucket
                 Effect: Allow
                 Action:
@@ -384,7 +387,7 @@ Resources:
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2
-              - Sid: SignerListsTheSigningPrefix
+              - Sid: SignerListsTheBucket
                 Effect: Allow
                 Action: s3:ListBucket
                 Resource:
@@ -395,10 +398,6 @@ Resources:
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2
-                Condition:
-                  StringLike:
-                    s3:prefix:
-                      - signing/*
               - Sid: SignWithEachRegionsProfile
                 Effect: Allow
                 Action:
