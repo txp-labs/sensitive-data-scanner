@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner-db"
-version = "0.3.0"
+version = "0.4.0"
 description = "The databases-anywhere runner of the sensitive data scanner: a container that samples PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Snowflake and Databricks SQL with a read-only user, and reports findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"

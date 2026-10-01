@@ -15,12 +15,14 @@ leave it**: where, what kind, how many and how sure. Never a value.
   anywhere, and SaaS (Microsoft 365, Google Workspace, Slack, Jira and
   Confluence).
 
-> **Status: early.** Released: **v0.2.0** (29 Sep 2026). v0.3.0 is prepared
-> and not yet tagged; everything after it is on `main`, unreleased. Proven on
-> a real account so far: one DynamoDB table in a development AWS account, and
-> one SharePoint site in a test Microsoft 365 tenant. PostgreSQL and MySQL run
-> against real engines in containers in CI. Everything else, S3 and CloudWatch
-> Logs included, is tested against simulated services only.
+> **Status: early.** Released: **v0.4.0** (1 Oct 2026), which includes the
+> 0.3.0 that was prepared and never published. Proven on real accounts so
+> far: whole-account runs in two development AWS accounts (S3, CloudWatch
+> Logs, Lambda configuration, SSM, X-Ray, Step Functions and DynamoDB read
+> for real, with no values in the output), and one SharePoint site in a test
+> Microsoft 365 tenant. PostgreSQL and MySQL run against real engines in
+> containers in CI. Everything else, Azure, Google Cloud and most SaaS
+> included, is tested against simulated services only.
 > [Status and maturity](#status-and-maturity) says exactly what is proven.
 
 ## What it reads
@@ -173,10 +175,11 @@ All the documentation: [docs/README.md](docs/README.md).
 
 | Path | Proven how |
 |---|---|
-| AWS: DynamoDB | **Proven on a real account**, one table only: the v0.2.0 run of 29 Sep 2026 in a development AWS account read one DynamoDB table named in an explicit configuration (37 findings on the positive control, 0 on the negative); the four problems it found are fixed |
-| Microsoft 365: SharePoint | **Proven on a real account**, one site only: a run from `main` on 30 Sep 2026, locally, against one SharePoint site in a test tenant, with a certificate app and `Sites.Selected`. 72 files read; both planted findings found (a card in a `.docx` renamed `.png`, an SSN inside a zip); no values in the output. It found a site-naming bug ([#83](https://github.com/txp-labs/sensitive-data-scanner/issues/83)) |
+| AWS: whole-account runs | **Proven on real accounts**: whole-account runs (`DISCOVER=all`) in two development AWS accounts. mermera-dev on 30 Sep 2026: 776 stores discovered, 753 read over three runs, the rest reported with a reason. stugum-dev on 1 Oct 2026: 147 sources. No values in either run's output, and no leaks. In mermera-dev, CloudTrail shows no write by the scanner's role but to its own log stream. Neither run completed a first pass of every large store. The problems they found are fixed in v0.4.0 ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), [#101](https://github.com/txp-labs/sensitive-data-scanner/issues/101)), and the fixes are not yet re-run in a real account |
+| AWS: S3, CloudWatch Logs, Lambda configuration, SSM Parameter Store, X-Ray, Step Functions, DynamoDB | **Proven by real reads** in those runs. DynamoDB also by the v0.2.0 run of 29 Sep 2026 on one named table (37 findings on the positive control, 0 on the negative) |
+| Microsoft 365: SharePoint | **Proven on a real account**, one site only: a run from `main` on 30 Sep 2026, locally, against one SharePoint site in a test tenant, with a certificate app and `Sites.Selected`. 72 files read; both planted findings found (a card in a `.docx` renamed `.png`, an SSN inside a zip); no values in the output. It found a site-naming bug ([#83](https://github.com/txp-labs/sensitive-data-scanner/issues/83)), fixed in v0.4.0 |
 | Databases: PostgreSQL 16, MySQL 8.4 | Real engines in containers in CI: read-only users read, users that can write refused, data unchanged |
-| AWS: S3, CloudWatch Logs, every other AWS store, the StackSet rollout | Tested against simulated services (moto, botocore's Stubber); the template linted and checked against the code's calls. Not yet run in a real account. Whole-account runs are in progress and not yet complete |
+| AWS: every other store, the opt-in reads (RDS and Aurora by export included), the StackSet rollout across an organization | Tested against simulated services (moto, botocore's Stubber); the template linted and checked against the code's calls. Not yet read in a real account |
 | Azure, Google Cloud | Tested against simulated services; the Bicep and Terraform linted and tested offline. Not yet run in a real tenant or organization |
 | SaaS other than SharePoint (Microsoft 365 mail, OneDrive and Teams; Google Workspace; Slack; Jira; Confluence) | Tested against simulated vendor APIs. Not yet run against a real tenant |
 | SQL Server, Oracle, MongoDB, Snowflake, Databricks | Tested against simulated drivers only |

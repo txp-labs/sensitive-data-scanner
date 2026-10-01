@@ -58,7 +58,7 @@ Parameters:
   CodeS3Key:
     Type: String
     Default: ""
-    Description: For the zip, e.g. sensitive-data-scanner-0.3.0-lambda-python3.12-x86_64.zip
+    Description: For the zip, e.g. sensitive-data-scanner-0.4.0-lambda-python3.12-x86_64.zip
   Discover:
     Type: String
     Default: all

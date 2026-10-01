@@ -7,4 +7,4 @@ collections are sampled; and the findings document goes to the same sinks as
 every other runner (`sensitive_data_core.push`). See docs/DATABASES.md.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

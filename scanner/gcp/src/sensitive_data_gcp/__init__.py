@@ -9,4 +9,4 @@ findings contract, budgets, sampling and the readers are the core's
 (`sensitive_data_core`); Google's libraries are imported here and nowhere else.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

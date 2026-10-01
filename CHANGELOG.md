@@ -6,6 +6,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-01
+
+> **0.4.0 includes 0.3.0.** Version 0.3.0 was prepared on 29 Sep 2026
+> (versions, this changelog's section and its release notes) but never tagged
+> or published. Its changes are folded into 0.4.0 below, after 0.4.0's own
+> under each heading; there is no 0.3.0 release, tag, image or wheel.
+
 ### Spec
 - **Spec 0.7** ([#101](https://github.com/txp-labs/sensitive-data-scanner/issues/101); every change is listed for
   consumers in `spec/README.md`, "Changes from 0.6"):
@@ -58,6 +65,58 @@ bumps the minor version. Spec changes are listed under **Spec**.
     rebuilt. Stugum, which mirrors the spec, needs the new exclusion.
   - Benchmark, stored text: `us_ssn` precision 0.781 to 1.000, `us_itin`
     0.907 to 1.000.
+- **Spec 0.4** ([#26](https://github.com/txp-labs/sensitive-data-scanner/issues/26), asked for as 0.3.1; the spec has
+  no patch version, and a phrase that changes matches is a minor bump. Every
+  change is listed for consumers in `spec/README.md`, "Changes from 0.3"):
+  - `us_ssn` and `us_itin` gain `(?:nine|9)[- ]digit social(?: security)?(?:
+    number)?(?! media)`, so "Please say your nine digit social." arms them.
+    "social" alone still arms nothing, "nine digit social media account
+    number" arms only `account_number`, and "19 digit social code" arms
+    nothing.
+  - The `us_ssn` comment in `classes.yaml` now describes the letter-and-digit
+    boundary the implementations apply.
+  - `specVersion` is `"0.4"`; the JSON Schemas follow.
+- Vectors: five cases in `vectors/prompt-phrases.jsonl`, near-misses
+  included, passed by the Python engine, the Presidio path and the
+  TypeScript package alike.
+- `@txp-labs/sensitive-data-spec` exports `promptRegex`, the spec's prompt
+  boundary around a phrase, and its README explains why the package version
+  follows releases while `SPEC_VERSION` follows the spec. `dist/` is rebuilt.
+- **Spec 0.3** ([#11](https://github.com/txp-labs/sensitive-data-scanner/issues/11); every change is listed for consumers in
+  `spec/README.md`, "Changes from 0.2", which Stugum mirrors):
+  - Prompt phrases match only with neither a letter nor a digit on each
+    side; the implementations apply the boundary, so phrases no longer carry
+    `\b`. "stubborn" no longer arms `dob`.
+  - Tolerant variants for dropped words: `social(?: security)? number`,
+    `taxpayer id(?:entification)? number`, `birth ?date`, `cvc`,
+    `(?:three|four|3|4)[- ]digit (?:security )?code`, the number on the
+    front (card) or back (cvv) of your card, and one `us_ssn_last4` phrase
+    that takes "last four digits of your Social Security number".
+  - Retry prefixes are runs of words that may be apart by whitespace and
+    `. , ! ? ; :` ("Sorry, I didn't get that!"), still only at the start of a
+    turn; two "catch"/"get" variants are added.
+  - `card.promptedWithoutShape` is removed: every class is `low` when a
+    prompted value passes no shape.
+  - `specVersion` is `"0.3"`; the JSON Schemas follow.
+- Vectors: `vectors/prompt-phrases.jsonl`, a case for each rule with its
+  near-misses, passed by the Python engine, the Presidio path and the
+  TypeScript package alike.
+- **Spec 0.2** ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15); every change is listed for consumers in
+  `spec/README.md`, "Changes from 0.1", which Stugum mirrors):
+  - Keypad (`dtmf`) answers may be keyed in parts: `answerWindowChannels:
+    [dtmf]` replaces `neverJoinChannels`. The parts join within one answer
+    window and never across a turn of another speaker.
+  - A menu or question turn (`menuOrQuestionTurns`: `?`, `press`, `reply`,
+    `say`, `enter`, ...) ends a pending value, like a prompt; a backchannel
+    still does not.
+  - A new class, `us_itin` (severity `high`, the same as `us_ssn`): 9xx area,
+    groups 50-65, 70-88, 90-92 and 94-99; armed by SSN and ITIN prompts;
+    context words include the SSN words; standalone when formatted; the IRS
+    advertising range 987-65-4320 to 4329 in `testNumbers`. `987654320`
+    moves there from `us_ssn.dummyValues`.
+  - `specVersion` is `"0.2"`; the JSON Schemas follow.
+- Vectors: `vectors/answer-windows.jsonl` and `vectors/itin.jsonl`, passed by
+  the Python engine, the Presidio path and the TypeScript package alike.
 
 ### Feature
 - **Azure, step 1: the package, Blob Storage and ADLS Gen2** ([#21](https://github.com/txp-labs/sensitive-data-scanner/issues/21), step 4):
@@ -663,6 +722,170 @@ bumps the minor version. Spec changes are listed under **Spec**.
   as findings. Globs match the whole key (`*` also matches `/`). S3 buckets,
   named or discovered, and S3 directory buckets
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
+- Redshift and Redshift Serverless ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  discovery (`DISCOVER` kind `redshift`: `DescribeClusters`, `ListWorkgroups`,
+  `ListNamespaces`) and, opt-in (`REDSHIFT_READ=iam` or `db_user`), sampled
+  read-only SQL through the Redshift Data API with no stored password: the
+  scanner's own IAM identity, or temporary credentials for an existing
+  read-only database user. Column-level findings (`store_field`). Paused
+  clusters, stores not configured for reading, and users that can see no
+  table are reported (`paused`, `read_not_configured`, `no_grant`). The
+  UNLOAD trade-off is documented in docs/ARCHITECTURE.md.
+- OpenSearch ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5): managed domains
+  (`ListDomainNames`, `DescribeDomains`) and Serverless collections are
+  discovered (`DISCOVER` kind `opensearch`); each domain's open indices are
+  sampled with signed HTTPS GETs only (`_cat/indices`, `_search?size=n`,
+  `OPENSEARCH_DOCS_PER_INDEX`, `OPENSEARCH_MAX_INDICES`), and each document
+  read field by field (`store_field`, `readBy: search`). VPC-only domains
+  (`vpc_only`), refused domains (`access_denied`) and Serverless collections
+  (opt-in, `OPENSEARCH_SERVERLESS_READ`) are reported.
+- Snapshots, backups and file systems ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - EBS (`DISCOVER` kind `ebs`): volumes and this account's snapshots; each
+    volume read through its latest snapshot with the EBS direct APIs
+    (`EBS_DIRECT_READ`, opt-in; `EBS_BLOCKS_PER_SNAPSHOT`), sampled blocks'
+    printable text, no volume created or attached. Volumes with no snapshot,
+    archived snapshots and older snapshots are reported.
+  - AWS Backup (`backup`): vaults with their recovery points by type, reported
+    as `backup_copy` (EBS points are read as EBS snapshots).
+  - DocumentDB (including elastic clusters) and Neptune (`documentdb`,
+    `neptune`): reported as `no_snapshot_export`.
+  - EFS and FSx (`efs`, `fsx`): reported as `needs_task`; the opt-in Fargate
+    file-system task is designed in docs/ARCHITECTURE.md, not built.
+- Streams and queues ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - Kinesis Data Streams (`kinesis`): each shard sampled from `TRIM_HORIZON`
+    (`KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS`), never checkpointed:
+    no lease, no sequence number kept.
+  - Firehose (`firehose`): every S3 location a delivery stream writes to
+    (destination, error output, backup) is read by the S3 source, once; the
+    bucket's own source leaves those prefixes to it.
+  - SQS (`sqs`): dead-letter queues only, opt-in (`SQS_DLQ_READ`), received
+    with `VisibilityTimeout=0` and never deleted; a DLQ with its own redrive
+    policy is never read (`redrive_would_change`), and live queues never
+    (`live_queue`).
+- Parameter Store and Secrets Manager ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  one store each per account and region, with the allow and deny rules
+  applied to each parameter or secret by name or tag. Parameter values are
+  read ten at a time, `SecureString` decrypted through SSM (`SSM_DECRYPT`, on
+  by default). Secrets are always listed, and read only with `SECRETS_READ`
+  (off by default); sensitive data in a secret is a finding, and the secret
+  is never reported.
+- Other stores ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
+  - Timestream for LiveAnalytics (`timestream`): one sampled read-only query
+    per table (`TIMESTREAM_MAX_ROWS`, `TIMESTREAM_LOOKBACK_DAYS`), by column;
+    InfluxDB instances reported (`no_read_path`).
+  - Keyspaces (`keyspaces`): one sampled CQL query per table over TLS, signed
+    with the role (`cassandra-driver` and `cassandra-sigv4`, new
+    dependencies; `KEYSPACES_MAX_ROWS`), by column.
+  - ElastiCache and MemoryDB (`elasticache`, `memorydb`): reported as
+    `in_memory` with their snapshots counted; an exported snapshot in S3 (an
+    `.rdb` file) is read by the S3 source as its text runs (format `rdb`).
+- The run summary's coverage table by store (docs/ARCHITECTURE.md): what is
+  scanned, what is opt-in, what is coverage only, and why.
+- The adapter interface (`sources/base.py`, `Adapter`) and the generic
+  sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
+  discovery, the budget and the run summary through them, with no cloud in
+  the core. The RDS Data API mode now runs on the same SQL pass.
+- Findings schema **1.3** (additive): the `store_field` resource, the
+  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`,
+  `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`,
+  `elasticache`, `memorydb`, `timestream` and `keyspaces` kinds, the `block`,
+  `cql` and `rdb` formats, the store reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
+  `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
+  `live_queue`, `redrive_would_change`, `no_s3_destination`, `in_memory` and
+  `no_read_path`, and the store
+  fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
+  `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue`,
+  `approximateMessages`, `items`, `itemTypes`, `excluded` and `snapshots`.
+- `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
+  describe permissions, and, only when reading, the Data API on this
+  account's clusters and workgroups, its own statements only, and the
+  credential call for the mode chosen. User creation, `JoinGroup` and
+  batch statements are denied. OpenSearch: describe and list,
+  `es:ESHttpGet` on this account's domains (every other HTTP verb denied),
+  and, only with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on its
+  collections. Snapshots, backups and file systems: describe and list, and,
+  only with `EbsDirectRead`, `ebs:ListSnapshotBlocks`/`GetSnapshotBlock` on
+  this region's snapshots and `kms:Decrypt` through EBS; every snapshot,
+  volume, backup and file-system write is denied. Streams and queues: list,
+  describe and Kinesis `GetShardIterator`/`GetRecords`; `kms:Decrypt` through
+  Kinesis; only with `SqsDlqRead`, `sqs:ReceiveMessage` and `kms:Decrypt`
+  through SQS; message deletes, visibility changes, sends, purges and every
+  stream and queue write are denied. Parameter Store and Secrets Manager:
+  list; `ssm:GetParameters` on this account's parameters and, with
+  `SsmDecrypt`, `kms:Decrypt` through SSM; only with `SecretsRead`,
+  `secretsmanager:GetSecretValue` on this account's secrets and
+  `kms:Decrypt` through Secrets Manager; parameter and secret writes denied.
+  Caches and time series: describe and list; `timestream:Select` on this
+  account's tables and `cassandra:Select` on its keyspaces; cache, snapshot
+  copy and export, Timestream and Keyspaces writes denied.
+- Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
+  lists the S3 buckets in its region, the CloudWatch log groups and the
+  DynamoDB tables in its account, and reads each with the existing adapters.
+  No list to write. The explicit configuration keeps working, and is read
+  first; a store it names is read as configured.
+- Allow and deny overrides (`DISCOVER_ALLOW`, `DISCOVER_DENY`) by name glob
+  or by tag, optionally per kind (`s3:prod-*`, `tag:scan=false`). Deny wins,
+  and a store whose tags cannot be read while a deny-by-tag rule exists is
+  not read. The scanner's own bucket and log group are never read.
+- Per-store sampling (`DISCOVER_SAMPLING`): a percentage, and for S3 a cap on
+  objects per "directory" (`S3_MAX_OBJECTS_PER_PREFIX`); DynamoDB tables are
+  sampled by parallel-scan segment (`DYNAMODB_SAMPLE_PERCENT`), and a table
+  over `DYNAMODB_MAX_TABLE_BYTES` after sampling is skipped as too large.
+- Per-run budget by kind (`MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`,
+  `MAX_TABLE_ITEMS_PER_RUN`) and wall time (`MAX_RUN_SECONDS`), within the
+  existing item and byte budget. Stores the budget does not reach are
+  deferred, and the next run starts with them; each store resumes from its
+  own cursor.
+- The run summary: the findings document's `discovery` lists every store,
+  read or not, and why (`denied`, `not_allowed`, `self`, `too_large`,
+  `unsupported`, `unsupported_format`, `kms_access`, `access_denied`,
+  `tags_unreadable`, deferred for `budget`), with counts of objects not read
+  for KMS, unreadable or unsupported formats. A failed listing is named.
+- `SpecUsItinRecognizer` in the Presidio pipeline, and `us_itin` findings
+  (severity `high`).
+- `@txp-labs/sensitive-data-spec` exports `isMenuOrQuestion` and
+  `itinStructureValid`.
+
+- Columnar and data-lake formats in S3: Parquet and ORC (pyarrow, one row
+  group or stripe at a time through ranged GETs, up to `COLUMNAR_MAX_ROWS`),
+  Avro (a small reader of its own; every codec), and zstd as well as gzip
+  CSV and JSON lines. Files without an extension are recognized by their
+  magic bytes. Findings name the column, and offsets the row and column.
+- Glue Data Catalog discovery (`DISCOVER` with `glue`): each table is read
+  at its S3 location, and findings name the database, table and column.
+  CSV tables are read with the catalog's columns and SerDe delimiter; views,
+  non-S3 tables and resource links are reported, not read. A bucket leaves
+  its tables' prefixes to them.
+- Lake Formation is respected: the scanner reads with its own IAM only and
+  never asks Lake Formation for access. A denial is reported as
+  `lake_formation`; `GLUE_LAKE_FORMATION=skip` leaves registered tables
+  unread and reported.
+
+- RDS and Aurora by snapshot export (`DISCOVER` with `rds`): the latest
+  automated snapshot of each cluster and standalone instance is exported to
+  the results bucket's `exports/rds/` prefix with the customer's KMS key
+  (`RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN`), read as Parquet by
+  column, and deleted. Findings name the engine, cluster, database and
+  `schema.table.column`. At most `MAX_EXPORTS_PER_RUN` exports start per run,
+  and a store is exported again after `EXPORT_MIN_INTERVAL_DAYS`. No
+  database credentials and no load on the database.
+- An opt-in read-only SQL mode for small Aurora databases (`RDS_DATA_API`,
+  off by default): `SELECT … LIMIT n` per table through the Data API, in a
+  transaction that is always rolled back (read-only on PostgreSQL), with
+  quoted identifiers and bound parameters.
+- DynamoDB Export to S3 for tables too large to Scan (`DYNAMODB_EXPORT`):
+  point-in-time, no read capacity used, read like the DynamoDB source and
+  deleted afterwards. A large table without point-in-time recovery is
+  reported as `pitr_off`.
+
+- Estate rollout: `deploy/scanner.yaml` puts the scanner in one account and
+  region (results bucket, function, schedule, and least-privilege read-only
+  IAM per source, with explicit denies on writes elsewhere and on Lake
+  Formation), and `deploy/estate-stackset.yaml` deploys it through a
+  service-managed StackSet to every account of the organizational units and
+  every region named, including accounts that join later, with findings
+  pushed to the existing central EventBridge bus. Releases attach both
+  templates.
 
 ### Fixed
 - **Timestamps were classed as dates of birth**
@@ -837,6 +1060,40 @@ bumps the minor version. Spec changes are listed under **Spec**.
   prefix are read; the others are counted as listed and never scanned. A
   table without a string sort key is reported as an error on the read.
   With `partition`, the read is still a `Query`.
+
+From the first run in a real account (folded in from 0.3.0; stugum-dev,
+[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)), which read
+one DynamoDB table only; S3 and CloudWatch Logs did not run:
+- **A missing state file on the first run.** Without `s3:ListBucket`, S3
+  answers a missing object with 403, not 404, and the first run failed.
+  - The runner now counts a 403 on the state file as "no state yet" when the
+    lock it has just written can be read. A KMS denial, or a denial that also
+    covers the lock, still fails the run.
+  - `docs/ARCHITECTURE.md` now lists `s3:ListBucket` on the results bucket
+    (on the results prefix, if there is one). `scanner.yaml` already
+    granted it; `test_template.py` now keeps it there.
+- **Configuration beyond Lambda's 4 KB of environment variables.** The
+  settings can also come from a JSON document: the invoke payload's
+  `config`, or a file named by `CONFIG_LOCATION` (or the payload's
+  `configLocation`), either an S3 object or an SSM parameter.
+  - The document uses the variable names. The payload wins over the file,
+    and the file over the environment.
+  - A name the scanner does not read is an error.
+  - Environment variables alone work as before.
+  - `scanner.yaml` takes `ConfigLocation`, with `ssm:GetParameter` only
+    under `/sensitive-data-scanner/`.
+- **Console links on findings with a masked key.** A finding now loses its
+  link only when a name the link carries was masked.
+  - A DynamoDB item keyed by a tenant id with a bare nine-digit run keeps
+    its link to the table. The link names the table, never the key.
+  - The same holds for a masked column (S3 table objects, RDS, Redshift) or
+    index (OpenSearch).
+  - The no-leak suite covers a `T#t_…` key.
+- **`SHA256SUMS` names every asset as GitHub serves it.** buildx's
+  `owner~repo~id.dockerbuild` record is served as
+  `owner.repo.id.dockerbuild`, so `sha256sum -c` reported it missing. The
+  release workflow renames such files before checksumming, then checks the
+  published names against the list.
 
 ### Changed
 - **SaaS attachments and files are rescanned when their reader changes**
@@ -1069,6 +1326,17 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `kms:ListAliases` (which keys are AWS managed; metadata only, the one KMS
   action not conditioned on `kms:ViaService`, and the template test holds it
   to that). Keyspaces' `GetTable` is the `cassandra:Select` it already had.
+- A bucket or table name holding a number that could be a card or an SSN is
+  now masked in findings, like an object key, and a finding whose log group
+  or stream name was masked no longer carries a console link (the link held
+  the name unmasked). The no-leak suite covers discovery, with stores whose
+  names hold values, the columnar formats and catalog, with values in cells,
+  column names, nested keys and table names, and the RDS export and Data API
+  paths, with values in cluster, database, table and column names.
+- A nine-digit run in a name is now masked whatever separator and digits
+  follow it (`orders-123456789-1`); before, a following `-1` let it through.
+  RDS findings carry the snapshot's time, not its name, which repeats the
+  cluster's.
 
 ### Findings schema
 - `schemaVersion` is now **1.11**, additive ([#67](https://github.com/txp-labs/sensitive-data-scanner/issues/67)):
@@ -1140,6 +1408,14 @@ bumps the minor version. Spec changes are listed under **Spec**.
   `snowflake` and `databricks` kinds, the reasons `db_user_can_write`,
   `grants_unverifiable` and `driver_missing`, and the store field
   `writeGrants`.
+- `schemaVersion` is now **1.2**, additive: the `discovery` summary,
+  `kmsDenied` in coverage, `#` allowed in a masked bucket or table name,
+  `column` and `catalog` on an S3 object, the `rds_column` resource, the
+  `parquet`, `orc`, `avro` and `sql` formats, the `glue_table` and `rds`
+  coverage kinds, the `columnar` skip kind, and the `lake_formation`,
+  `export_not_configured`, `export_pending`, `export_failed`, `no_snapshot`
+  and `pitr_off` reasons. EventBridge parts now also split `coverage` and
+  `discovery.stores`.
 
 ### Docs
 - **`docs/COST.md`** ([#78](https://github.com/txp-labs/sensitive-data-scanner/issues/78)): the cost of a run and of a first full
@@ -1228,6 +1504,12 @@ bumps the minor version. Spec changes are listed under **Spec**.
   docker run, a Kubernetes CronJob, an ECS task and Azure Container
   Instances, with the image sizes. `docs/ARCHITECTURE.md`: the design for
   hosting the EFS and FSx file-system task in the same image.
+- `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,
+  the run summary, columnar formats, Glue and Lake Formation, RDS and
+  DynamoDB exports, the estate rollout, and the IAM per source.
+  `docs/FINDINGS.md`: schema 1.2, the run summary, and column and database
+  findings. `docs/RELEASING.md`: which formats the image and the zip read,
+  and the templates attached to a release.
 
 ### Internal
 - **DynamoDB reserved words, audited**
@@ -1327,275 +1609,6 @@ bumps the minor version. Spec changes are listed under **Spec**.
   - Releases attach the core's wheel beside the scanner's; the release's
     version check covers every package in the workspace. The no-leak suite's
     source audit reads every package.
-
-## 0.3.0 — 2026-09-29
-
-### Spec
-- **Spec 0.4** ([#26](https://github.com/txp-labs/sensitive-data-scanner/issues/26), asked for as 0.3.1; the spec has
-  no patch version, and a phrase that changes matches is a minor bump. Every
-  change is listed for consumers in `spec/README.md`, "Changes from 0.3"):
-  - `us_ssn` and `us_itin` gain `(?:nine|9)[- ]digit social(?: security)?(?:
-    number)?(?! media)`, so "Please say your nine digit social." arms them.
-    "social" alone still arms nothing, "nine digit social media account
-    number" arms only `account_number`, and "19 digit social code" arms
-    nothing.
-  - The `us_ssn` comment in `classes.yaml` now describes the letter-and-digit
-    boundary the implementations apply.
-  - `specVersion` is `"0.4"`; the JSON Schemas follow.
-- Vectors: five cases in `vectors/prompt-phrases.jsonl`, near-misses
-  included, passed by the Python engine, the Presidio path and the
-  TypeScript package alike.
-- `@txp-labs/sensitive-data-spec` exports `promptRegex`, the spec's prompt
-  boundary around a phrase, and its README explains why the package version
-  follows releases while `SPEC_VERSION` follows the spec. `dist/` is rebuilt.
-- **Spec 0.3** ([#11](https://github.com/txp-labs/sensitive-data-scanner/issues/11); every change is listed for consumers in
-  `spec/README.md`, "Changes from 0.2", which Stugum mirrors):
-  - Prompt phrases match only with neither a letter nor a digit on each
-    side; the implementations apply the boundary, so phrases no longer carry
-    `\b`. "stubborn" no longer arms `dob`.
-  - Tolerant variants for dropped words: `social(?: security)? number`,
-    `taxpayer id(?:entification)? number`, `birth ?date`, `cvc`,
-    `(?:three|four|3|4)[- ]digit (?:security )?code`, the number on the
-    front (card) or back (cvv) of your card, and one `us_ssn_last4` phrase
-    that takes "last four digits of your Social Security number".
-  - Retry prefixes are runs of words that may be apart by whitespace and
-    `. , ! ? ; :` ("Sorry, I didn't get that!"), still only at the start of a
-    turn; two "catch"/"get" variants are added.
-  - `card.promptedWithoutShape` is removed: every class is `low` when a
-    prompted value passes no shape.
-  - `specVersion` is `"0.3"`; the JSON Schemas follow.
-- Vectors: `vectors/prompt-phrases.jsonl`, a case for each rule with its
-  near-misses, passed by the Python engine, the Presidio path and the
-  TypeScript package alike.
-- **Spec 0.2** ([#15](https://github.com/txp-labs/sensitive-data-scanner/issues/15); every change is listed for consumers in
-  `spec/README.md`, "Changes from 0.1", which Stugum mirrors):
-  - Keypad (`dtmf`) answers may be keyed in parts: `answerWindowChannels:
-    [dtmf]` replaces `neverJoinChannels`. The parts join within one answer
-    window and never across a turn of another speaker.
-  - A menu or question turn (`menuOrQuestionTurns`: `?`, `press`, `reply`,
-    `say`, `enter`, ...) ends a pending value, like a prompt; a backchannel
-    still does not.
-  - A new class, `us_itin` (severity `high`, the same as `us_ssn`): 9xx area,
-    groups 50-65, 70-88, 90-92 and 94-99; armed by SSN and ITIN prompts;
-    context words include the SSN words; standalone when formatted; the IRS
-    advertising range 987-65-4320 to 4329 in `testNumbers`. `987654320`
-    moves there from `us_ssn.dummyValues`.
-  - `specVersion` is `"0.2"`; the JSON Schemas follow.
-- Vectors: `vectors/answer-windows.jsonl` and `vectors/itin.jsonl`, passed by
-  the Python engine, the Presidio path and the TypeScript package alike.
-
-### Feature
-- Redshift and Redshift Serverless ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
-  discovery (`DISCOVER` kind `redshift`: `DescribeClusters`, `ListWorkgroups`,
-  `ListNamespaces`) and, opt-in (`REDSHIFT_READ=iam` or `db_user`), sampled
-  read-only SQL through the Redshift Data API with no stored password: the
-  scanner's own IAM identity, or temporary credentials for an existing
-  read-only database user. Column-level findings (`store_field`). Paused
-  clusters, stores not configured for reading, and users that can see no
-  table are reported (`paused`, `read_not_configured`, `no_grant`). The
-  UNLOAD trade-off is documented in docs/ARCHITECTURE.md.
-- OpenSearch ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5): managed domains
-  (`ListDomainNames`, `DescribeDomains`) and Serverless collections are
-  discovered (`DISCOVER` kind `opensearch`); each domain's open indices are
-  sampled with signed HTTPS GETs only (`_cat/indices`, `_search?size=n`,
-  `OPENSEARCH_DOCS_PER_INDEX`, `OPENSEARCH_MAX_INDICES`), and each document
-  read field by field (`store_field`, `readBy: search`). VPC-only domains
-  (`vpc_only`), refused domains (`access_denied`) and Serverless collections
-  (opt-in, `OPENSEARCH_SERVERLESS_READ`) are reported.
-- Snapshots, backups and file systems ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
-  - EBS (`DISCOVER` kind `ebs`): volumes and this account's snapshots; each
-    volume read through its latest snapshot with the EBS direct APIs
-    (`EBS_DIRECT_READ`, opt-in; `EBS_BLOCKS_PER_SNAPSHOT`), sampled blocks'
-    printable text, no volume created or attached. Volumes with no snapshot,
-    archived snapshots and older snapshots are reported.
-  - AWS Backup (`backup`): vaults with their recovery points by type, reported
-    as `backup_copy` (EBS points are read as EBS snapshots).
-  - DocumentDB (including elastic clusters) and Neptune (`documentdb`,
-    `neptune`): reported as `no_snapshot_export`.
-  - EFS and FSx (`efs`, `fsx`): reported as `needs_task`; the opt-in Fargate
-    file-system task is designed in docs/ARCHITECTURE.md, not built.
-- Streams and queues ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
-  - Kinesis Data Streams (`kinesis`): each shard sampled from `TRIM_HORIZON`
-    (`KINESIS_RECORDS_PER_SHARD`, `KINESIS_MAX_SHARDS`), never checkpointed:
-    no lease, no sequence number kept.
-  - Firehose (`firehose`): every S3 location a delivery stream writes to
-    (destination, error output, backup) is read by the S3 source, once; the
-    bucket's own source leaves those prefixes to it.
-  - SQS (`sqs`): dead-letter queues only, opt-in (`SQS_DLQ_READ`), received
-    with `VisibilityTimeout=0` and never deleted; a DLQ with its own redrive
-    policy is never read (`redrive_would_change`), and live queues never
-    (`live_queue`).
-- Parameter Store and Secrets Manager ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
-  one store each per account and region, with the allow and deny rules
-  applied to each parameter or secret by name or tag. Parameter values are
-  read ten at a time, `SecureString` decrypted through SSM (`SSM_DECRYPT`, on
-  by default). Secrets are always listed, and read only with `SECRETS_READ`
-  (off by default); sensitive data in a secret is a finding, and the secret
-  is never reported.
-- Other stores ([#14](https://github.com/txp-labs/sensitive-data-scanner/issues/14), step 5):
-  - Timestream for LiveAnalytics (`timestream`): one sampled read-only query
-    per table (`TIMESTREAM_MAX_ROWS`, `TIMESTREAM_LOOKBACK_DAYS`), by column;
-    InfluxDB instances reported (`no_read_path`).
-  - Keyspaces (`keyspaces`): one sampled CQL query per table over TLS, signed
-    with the role (`cassandra-driver` and `cassandra-sigv4`, new
-    dependencies; `KEYSPACES_MAX_ROWS`), by column.
-  - ElastiCache and MemoryDB (`elasticache`, `memorydb`): reported as
-    `in_memory` with their snapshots counted; an exported snapshot in S3 (an
-    `.rdb` file) is read by the S3 source as its text runs (format `rdb`).
-- The run summary's coverage table by store (docs/ARCHITECTURE.md): what is
-  scanned, what is opt-in, what is coverage only, and why.
-- The adapter interface (`sources/base.py`, `Adapter`) and the generic
-  sampled SQL pass (`scan/sql.py`): every new kind of store plugs into
-  discovery, the budget and the run summary through them, with no cloud in
-  the core. The RDS Data API mode now runs on the same SQL pass.
-- Findings schema **1.3** (additive): the `store_field` resource, the
-  `redshift`, `opensearch`, `ebs`, `backup`, `documentdb`, `neptune`, `efs`,
-  `fsx`, `kinesis`, `firehose`, `sqs`, `ssm`, `secretsmanager`,
-  `elasticache`, `memorydb`, `timestream` and `keyspaces` kinds, the `block`,
-  `cql` and `rdb` formats, the store reasons `read_not_configured`, `paused`, `no_grant`, `vpc_only`,
-  `no_snapshot_export`, `needs_task`, `backup_copy`, `archived`,
-  `live_queue`, `redrive_would_change`, `no_s3_destination`, `in_memory` and
-  `no_read_path`, and the store
-  fields `deployment`, `database`, `state`, `resource`, `olderSnapshots`,
-  `recoveryPoints`, `fileSystemType`, `destinations`, `deadLetterQueue`,
-  `approximateMessages`, `items`, `itemTypes`, `excluded` and `snapshots`.
-- `deploy/scanner.yaml`: `RedshiftRead` and `RedshiftDbUser`; Redshift
-  describe permissions, and, only when reading, the Data API on this
-  account's clusters and workgroups, its own statements only, and the
-  credential call for the mode chosen. User creation, `JoinGroup` and
-  batch statements are denied. OpenSearch: describe and list,
-  `es:ESHttpGet` on this account's domains (every other HTTP verb denied),
-  and, only with `OpenSearchServerlessRead`, `aoss:APIAccessAll` on its
-  collections. Snapshots, backups and file systems: describe and list, and,
-  only with `EbsDirectRead`, `ebs:ListSnapshotBlocks`/`GetSnapshotBlock` on
-  this region's snapshots and `kms:Decrypt` through EBS; every snapshot,
-  volume, backup and file-system write is denied. Streams and queues: list,
-  describe and Kinesis `GetShardIterator`/`GetRecords`; `kms:Decrypt` through
-  Kinesis; only with `SqsDlqRead`, `sqs:ReceiveMessage` and `kms:Decrypt`
-  through SQS; message deletes, visibility changes, sends, purges and every
-  stream and queue write are denied. Parameter Store and Secrets Manager:
-  list; `ssm:GetParameters` on this account's parameters and, with
-  `SsmDecrypt`, `kms:Decrypt` through SSM; only with `SecretsRead`,
-  `secretsmanager:GetSecretValue` on this account's secrets and
-  `kms:Decrypt` through Secrets Manager; parameter and secret writes denied.
-  Caches and time series: describe and list; `timestream:Select` on this
-  account's tables and `cassandra:Select` on its keyspaces; cache, snapshot
-  copy and export, Timestream and Keyspaces writes denied.
-- Discovery (`DISCOVER=all`, or any of `s3`, `logs`, `dynamodb`): each run
-  lists the S3 buckets in its region, the CloudWatch log groups and the
-  DynamoDB tables in its account, and reads each with the existing adapters.
-  No list to write. The explicit configuration keeps working, and is read
-  first; a store it names is read as configured.
-- Allow and deny overrides (`DISCOVER_ALLOW`, `DISCOVER_DENY`) by name glob
-  or by tag, optionally per kind (`s3:prod-*`, `tag:scan=false`). Deny wins,
-  and a store whose tags cannot be read while a deny-by-tag rule exists is
-  not read. The scanner's own bucket and log group are never read.
-- Per-store sampling (`DISCOVER_SAMPLING`): a percentage, and for S3 a cap on
-  objects per "directory" (`S3_MAX_OBJECTS_PER_PREFIX`); DynamoDB tables are
-  sampled by parallel-scan segment (`DYNAMODB_SAMPLE_PERCENT`), and a table
-  over `DYNAMODB_MAX_TABLE_BYTES` after sampling is skipped as too large.
-- Per-run budget by kind (`MAX_OBJECTS_PER_RUN`, `MAX_LOG_EVENTS_PER_RUN`,
-  `MAX_TABLE_ITEMS_PER_RUN`) and wall time (`MAX_RUN_SECONDS`), within the
-  existing item and byte budget. Stores the budget does not reach are
-  deferred, and the next run starts with them; each store resumes from its
-  own cursor.
-- The run summary: the findings document's `discovery` lists every store,
-  read or not, and why (`denied`, `not_allowed`, `self`, `too_large`,
-  `unsupported`, `unsupported_format`, `kms_access`, `access_denied`,
-  `tags_unreadable`, deferred for `budget`), with counts of objects not read
-  for KMS, unreadable or unsupported formats. A failed listing is named.
-- `SpecUsItinRecognizer` in the Presidio pipeline, and `us_itin` findings
-  (severity `high`).
-- `@txp-labs/sensitive-data-spec` exports `isMenuOrQuestion` and
-  `itinStructureValid`.
-
-- Columnar and data-lake formats in S3: Parquet and ORC (pyarrow, one row
-  group or stripe at a time through ranged GETs, up to `COLUMNAR_MAX_ROWS`),
-  Avro (a small reader of its own; every codec), and zstd as well as gzip
-  CSV and JSON lines. Files without an extension are recognized by their
-  magic bytes. Findings name the column, and offsets the row and column.
-- Glue Data Catalog discovery (`DISCOVER` with `glue`): each table is read
-  at its S3 location, and findings name the database, table and column.
-  CSV tables are read with the catalog's columns and SerDe delimiter; views,
-  non-S3 tables and resource links are reported, not read. A bucket leaves
-  its tables' prefixes to them.
-- Lake Formation is respected: the scanner reads with its own IAM only and
-  never asks Lake Formation for access. A denial is reported as
-  `lake_formation`; `GLUE_LAKE_FORMATION=skip` leaves registered tables
-  unread and reported.
-
-- RDS and Aurora by snapshot export (`DISCOVER` with `rds`): the latest
-  automated snapshot of each cluster and standalone instance is exported to
-  the results bucket's `exports/rds/` prefix with the customer's KMS key
-  (`RDS_EXPORT_ROLE_ARN`, `RDS_EXPORT_KMS_KEY_ARN`), read as Parquet by
-  column, and deleted. Findings name the engine, cluster, database and
-  `schema.table.column`. At most `MAX_EXPORTS_PER_RUN` exports start per run,
-  and a store is exported again after `EXPORT_MIN_INTERVAL_DAYS`. No
-  database credentials and no load on the database.
-- An opt-in read-only SQL mode for small Aurora databases (`RDS_DATA_API`,
-  off by default): `SELECT … LIMIT n` per table through the Data API, in a
-  transaction that is always rolled back (read-only on PostgreSQL), with
-  quoted identifiers and bound parameters.
-- DynamoDB Export to S3 for tables too large to Scan (`DYNAMODB_EXPORT`):
-  point-in-time, no read capacity used, read like the DynamoDB source and
-  deleted afterwards. A large table without point-in-time recovery is
-  reported as `pitr_off`.
-
-- Estate rollout: `deploy/scanner.yaml` puts the scanner in one account and
-  region (results bucket, function, schedule, and least-privilege read-only
-  IAM per source, with explicit denies on writes elsewhere and on Lake
-  Formation), and `deploy/estate-stackset.yaml` deploys it through a
-  service-managed StackSet to every account of the organizational units and
-  every region named, including accounts that join later, with findings
-  pushed to the existing central EventBridge bus. Releases attach both
-  templates.
-
-### Fixed
-From the first run in a real account (stugum-dev,
-[#24](https://github.com/txp-labs/sensitive-data-scanner/issues/24)), which read
-one DynamoDB table only; S3 and CloudWatch Logs did not run:
-- **A missing state file on the first run.** Without `s3:ListBucket`, S3
-  answers a missing object with 403, not 404, and the first run failed.
-  - The runner now counts a 403 on the state file as "no state yet" when the
-    lock it has just written can be read. A KMS denial, or a denial that also
-    covers the lock, still fails the run.
-  - `docs/ARCHITECTURE.md` now lists `s3:ListBucket` on the results bucket
-    (on the results prefix, if there is one). `scanner.yaml` already
-    granted it; `test_template.py` now keeps it there.
-- **Configuration beyond Lambda's 4 KB of environment variables.** The
-  settings can also come from a JSON document: the invoke payload's
-  `config`, or a file named by `CONFIG_LOCATION` (or the payload's
-  `configLocation`), either an S3 object or an SSM parameter.
-  - The document uses the variable names. The payload wins over the file,
-    and the file over the environment.
-  - A name the scanner does not read is an error.
-  - Environment variables alone work as before.
-  - `scanner.yaml` takes `ConfigLocation`, with `ssm:GetParameter` only
-    under `/sensitive-data-scanner/`.
-- **Console links on findings with a masked key.** A finding now loses its
-  link only when a name the link carries was masked.
-  - A DynamoDB item keyed by a tenant id with a bare nine-digit run keeps
-    its link to the table. The link names the table, never the key.
-  - The same holds for a masked column (S3 table objects, RDS, Redshift) or
-    index (OpenSearch).
-  - The no-leak suite covers a `T#t_…` key.
-- **`SHA256SUMS` names every asset as GitHub serves it.** buildx's
-  `owner~repo~id.dockerbuild` record is served as
-  `owner.repo.id.dockerbuild`, so `sha256sum -c` reported it missing. The
-  release workflow renames such files before checksumming, then checks the
-  published names against the list.
-
-### Findings schema
-- `schemaVersion` is now **1.2**, additive: the `discovery` summary,
-  `kmsDenied` in coverage, `#` allowed in a masked bucket or table name,
-  `column` and `catalog` on an S3 object, the `rds_column` resource, the
-  `parquet`, `orc`, `avro` and `sql` formats, the `glue_table` and `rds`
-  coverage kinds, the `columnar` skip kind, and the `lake_formation`,
-  `export_not_configured`, `export_pending`, `export_failed`, `no_snapshot`
-  and `pitr_off` reasons. EventBridge parts now also split `coverage` and
-  `discovery.stores`.
-
-### Internal
 - CI lints the templates with cfn-lint, and `test_template.py` checks that the
   scanner's role allows only reads and aimed writes, that every AWS call the
   code makes is allowed, that every allowed action is documented, and that
@@ -1609,27 +1622,6 @@ one DynamoDB table only; S3 and CloudWatch Logs did not run:
 - `packages/spec-ts/dist/` is committed, so the package can be consumed by
   git commit (package managers do not build git dependencies). A CI job
   rebuilds it and fails if it differs. `exports` still points at `dist/`.
-
-### Security
-- A bucket or table name holding a number that could be a card or an SSN is
-  now masked in findings, like an object key, and a finding whose log group
-  or stream name was masked no longer carries a console link (the link held
-  the name unmasked). The no-leak suite covers discovery, with stores whose
-  names hold values, the columnar formats and catalog, with values in cells,
-  column names, nested keys and table names, and the RDS export and Data API
-  paths, with values in cluster, database, table and column names.
-- A nine-digit run in a name is now masked whatever separator and digits
-  follow it (`orders-123456789-1`); before, a following `-1` let it through.
-  RDS findings carry the snapshot's time, not its name, which repeats the
-  cluster's.
-
-### Docs
-- `docs/ARCHITECTURE.md`: discovery, the overrides, sampling, the budget,
-  the run summary, columnar formats, Glue and Lake Formation, RDS and
-  DynamoDB exports, the estate rollout, and the IAM per source.
-  `docs/FINDINGS.md`: schema 1.2, the run summary, and column and database
-  findings. `docs/RELEASING.md`: which formats the image and the zip read,
-  and the templates attached to a release.
 
 ## 0.2.0 — 2026-09-29
 
