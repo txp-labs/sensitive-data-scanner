@@ -11,7 +11,7 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label: { default: Code }
-        Parameters: [ImageUri, CodeS3BucketPrefix, CodeS3Key]
+        Parameters: [ImageUri, CodeS3BucketPrefix, CodeS3Key, CodeSigningProfileVersionArn]
       - Label: { default: What to read }
         Parameters:
           [Discover, DiscoverAllow, DiscoverDeny, DiscoverSampling, AllowKmsDecrypt, KmsAllowedKeyArns, ConfigLocation]
@@ -56,12 +56,27 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      For the zip: a bucket per region named <prefix>-<region>, readable by
-      the organization, holding CodeS3Key.
+      For the zip: a bucket per region named <prefix>-<region>, holding
+      CodeS3Key. txp-labs publishes every release's signed zip at
+      txp-labs-sensitive-data-scanner-<region>, key
+      releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip
+      (docs/RELEASING.md, Where the code is).
   CodeS3Key:
     Type: String
     Default: ""
-    Description: For the zip, e.g. sensitive-data-scanner-0.4.0-lambda-python3.12-x86_64.zip
+    Description: For the zip, e.g. releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip
+  CodeSigningProfileVersionArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(arn:aws[a-z-]*:signer:[a-z0-9-]+:[0-9]{12}:/signing-profiles/[A-Za-z0-9_]+/[A-Za-z0-9]+)?$"
+    ConstraintDescription: an AWS Signer signing profile version ARN, or empty
+    Description: >-
+      For the zip: enforce Lambda code signing. The function then accepts only
+      a zip signed by this profile version. txp-labs signs each region's zip
+      with that region's profile: use this region's version ARN (docs/RELEASING.md,
+      or releases/<version>/signing.json in the region's bucket), e.g. in us-west-2
+      arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5.
+      Empty: no code signing config. Not used with ImageUri.
   Discover:
     Type: String
     Default: all
@@ -357,6 +372,9 @@ Parameters:
 
 Conditions:
   UseImage: !Not [!Equals [!Ref ImageUri, ""]]
+  SignedZip: !And
+    - !Not [!Condition UseImage]
+    - !Not [!Equals [!Ref CodeSigningProfileVersionArn, ""]]
   HasBus: !Not [!Equals [!Ref FindingsEventBusArn, ""]]
   KmsDecrypt: !Equals [!Ref AllowKmsDecrypt, "true"]
   KmsKeyAllowList: !Not [!Equals [!Join [",", !Ref KmsAllowedKeyArns], ""]]
@@ -1546,6 +1564,18 @@ Resources:
               - ec2:UnassignPrivateIpAddresses
             Resource: "*"
 
+  # The zip's code signing (CodeSigningProfileVersionArn): Lambda refuses a zip
+  # that this profile version did not sign, or that was changed after signing.
+  CodeSigningConfig:
+    Type: AWS::Lambda::CodeSigningConfig
+    Condition: SignedZip
+    Properties:
+      Description: sensitive-data-scanner's zip must be signed by the release's signing profile
+      AllowedPublishers:
+        SigningProfileVersionArns: [!Ref CodeSigningProfileVersionArn]
+      CodeSigningPolicies:
+        UntrustedArtifactOnDeployment: Enforce
+
   Function:
     Type: AWS::Lambda::Function
     # The role holds these already (ManagedPolicyArns); named here too, so the function
@@ -1569,6 +1599,7 @@ Resources:
         - ImageUri: !Ref ImageUri
         - S3Bucket: !Sub ${CodeS3BucketPrefix}-${AWS::Region}
           S3Key: !Ref CodeS3Key
+      CodeSigningConfigArn: !If [SignedZip, !GetAtt CodeSigningConfig.CodeSigningConfigArn, !Ref AWS::NoValue]
       Handler: !If [UseImage, !Ref AWS::NoValue, sensitive_data_scanner.handler.handler]
       Runtime: !If [UseImage, !Ref AWS::NoValue, python3.12]
       Architectures: [x86_64]
