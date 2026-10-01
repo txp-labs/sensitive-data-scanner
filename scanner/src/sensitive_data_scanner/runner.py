@@ -445,6 +445,51 @@ def _plan_discovered(
                     add(store, one)
 
 
+# #105 (docs/limitations.md): the setting that turns on what a store left unread, by its kind
+# and reason. A store's own source may already name one (SSM_DECRYPT, VPC_SUBNET_IDS, ...).
+TOGGLES: dict[tuple[str, str], str] = {
+    ("redshift", "read_not_configured"): "REDSHIFT_READ",
+    ("ebs", "read_not_configured"): "EBS_DIRECT_READ",
+    ("sqs", "read_not_configured"): "SQS_DLQ_READ",
+    ("msk", "read_not_configured"): "MSK_READ",
+    ("mq", "read_not_configured"): "MQ_READ",
+    ("ecr", "read_not_configured"): "ECR_READ",
+    ("sagemaker", "read_not_configured"): "SAGEMAKER_READ",
+    ("eventbridge_archive", "read_not_configured"): "EVENTBRIDGE_REPLAY",
+    ("rds", "export_not_configured"): "RDS_EXPORT_ROLE_ARN",
+    ("neptune_analytics", "export_not_configured"): "NEPTUNE_ANALYTICS_EXPORT_ROLE_ARN",
+    ("dynamodb", "too_large"): "DYNAMODB_EXPORT",
+}
+
+
+def name_toggles(
+    config: Config,
+    stores: list[Store],
+    sources: list[Any],
+    notes: dict[str, tuple[str | None, dict[str, Any]]],
+) -> None:
+    """Name, on each store left unread, the setting that would read it (#105)."""
+    by_id = {s.id: s for s in sources}
+    for st in stores:
+        if st.toggle or not st.reason:
+            continue
+        toggle = TOGGLES.get((st.kind, st.reason))
+        if st.reason == "too_large" and config.dynamodb_export:
+            toggle = None  # export is on: the table is too large for another reason
+        if st.reason == "vpc_only" and not config.vpc_attached:
+            toggle = "VPC_SUBNET_IDS"
+        if st.reason == "kms_access" and config.kms_allowed_key_arns:
+            toggle = "KMS_ALLOWED_KEY_ARNS"  # its key may be one the allow-list leaves out
+        if st.reason == "budget" and any(
+            getattr(by_id.get(i), "quota", None) is not None
+            and notes.get(i, (None, {}))[0] == "budget"
+            for i in st.source_ids
+        ):
+            toggle = "MAX_EXPORTS_PER_RUN"  # an export waits for the next run's quota
+        if toggle:
+            st.name_toggle(toggle)
+
+
 def indexes_for(config: Config, clients: Clients, state: dict[str, Any]) -> Indexes | None:
     """The run's object indexes (#67), in the results bucket under `state/index/`, keyed by
     the salt in the state document; None with `OBJECT_INDEX` off."""
@@ -604,6 +649,7 @@ def run_scan(
             elif st.status == "pending" and st.source_ids:
                 st.status = "deferred"
                 st.reason = "budget"
+        name_toggles(config, stores, sources, notes)
         run_summary = (
             summary(stores, found.list_errors if found else {}) if config.discover else None
         )

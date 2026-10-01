@@ -14,10 +14,13 @@ Metadata:
         Parameters: [ImageUri, CodeS3BucketPrefix, CodeS3Key]
       - Label: { default: What to read }
         Parameters:
-          [Discover, DiscoverAllow, DiscoverDeny, DiscoverSampling, AllowKmsDecrypt, ConfigLocation]
+          [Discover, DiscoverAllow, DiscoverDeny, DiscoverSampling, AllowKmsDecrypt, KmsAllowedKeyArns, ConfigLocation]
       - Label: { default: "Exports: RDS, Aurora, large DynamoDB tables" }
         Parameters:
-          [RdsExportKmsKeyArn, EnableDynamoDBExport, DynamoDBExportKmsKeyArn]
+          [RdsExportKmsKeyArn, EnableDynamoDBExport, DynamoDBExportKmsKeyArn, MaxExportsPerRun, ExportMinIntervalDays]
+      - Label: { default: "Limitations and their toggles (docs/limitations.md, #105)" }
+        Parameters:
+          [GlueLakeFormation, TimestreamRead, KeyspacesRead, FilesystemTaskEnabled, VpcSubnetIds, VpcSecurityGroupIds]
       - Label: { default: Opt-in read-only SQL (Data API) }
         Parameters: [DataApiTargets, DataApiClusterArns, DataApiSecretArns]
       - Label: { default: "Redshift and Redshift Serverless (opt-in reads)" }
@@ -101,6 +104,15 @@ Parameters:
       scanner can read stores encrypted with customer managed keys whose key
       policy allows the account. Without it, those stores are reported as
       kms_access.
+  KmsAllowedKeyArns:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      KMS_ALLOWED_KEY_ARNS - optional allow-list of this account's customer
+      managed keys that kms:Decrypt may use, still only through each service
+      (kms:ViaService). Empty: any key whose key policy allows the account,
+      through a service only. A store under a key left out is kms_access
+      (docs/limitations.md, A3).
   RdsExportKmsKeyArn:
     Type: String
     Default: ""
@@ -116,6 +128,70 @@ Parameters:
     Type: String
     Default: ""
     Description: Optional KMS key for DynamoDB exports (else SSE-S3).
+  MaxExportsPerRun:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 20
+    Description: >-
+      MAX_EXPORTS_PER_RUN - exports (RDS and Aurora snapshots, DynamoDB tables,
+      Neptune Analytics graphs, EventBridge replays) a run may start. Past it, a
+      store is deferred (budget) and names this setting (docs/limitations.md, A1).
+  ExportMinIntervalDays:
+    Type: Number
+    Default: 7
+    MinValue: 0
+    MaxValue: 365
+    Description: >-
+      EXPORT_MIN_INTERVAL_DAYS - the fewest days between two exports of the same
+      store; in between, the last export's findings stand.
+  GlueLakeFormation:
+    Type: String
+    AllowedValues: [read, skip]
+    Default: read
+    Description: >-
+      GLUE_LAKE_FORMATION - read (Lake Formation tables are read with the
+      scanner's own IAM; a table Lake Formation denies is reported
+      lake_formation) or skip (every Lake Formation table is reported
+      lake_formation, naming this setting).
+  TimestreamRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: >-
+      TIMESTREAM_READ - one sampled read-only query per Timestream for
+      LiveAnalytics table (timestream:Select). Off: tables are reported
+      read_not_configured.
+  KeyspacesRead:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: >-
+      KEYSPACES_READ - one sampled SELECT per Amazon Keyspaces table
+      (cassandra:Select). Off: tables are reported read_not_configured.
+  FilesystemTaskEnabled:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      FILESYSTEM_TASK_ENABLED - the read-only file-system task for EFS, FSx and
+      file-level EBS (attaching a volume is a write, so it would be a task of
+      its own with its own role). A hook: the task is not built yet, so on,
+      file systems are reported not_implemented; off, needs_task.
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      VPC_SUBNET_IDS - attach the function to this account's VPC (with
+      VpcSecurityGroupIds), to reach OpenSearch domains inside it. The subnets
+      need a route to AWS's APIs (a NAT gateway or VPC endpoints). Empty: such
+      stores are reported vpc_only (docs/limitations.md, A6).
+  VpcSecurityGroupIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      VPC_SECURITY_GROUP_IDS - the function's security groups when VpcSubnetIds
+      is set (egress to the stores and AWS's APIs only).
   DataApiTargets:
     Type: String
     Default: ""
@@ -171,11 +247,11 @@ Parameters:
   SsmDecrypt:
     Type: String
     AllowedValues: ["true", "false"]
-    Default: "true"
+    Default: "false"
     Description: >-
       SSM_DECRYPT - read SecureString parameters, decrypted through SSM
-      (kms:Decrypt with kms:ViaService ssm.<region>). Off: they are counted,
-      not read.
+      (kms:Decrypt with kms:ViaService ssm.<region>). Off (the default since
+      #105): they are counted, not read, and the store names SSM_DECRYPT.
   SecretsRead:
     Type: String
     AllowedValues: ["true", "false"]
@@ -283,6 +359,10 @@ Conditions:
   UseImage: !Not [!Equals [!Ref ImageUri, ""]]
   HasBus: !Not [!Equals [!Ref FindingsEventBusArn, ""]]
   KmsDecrypt: !Equals [!Ref AllowKmsDecrypt, "true"]
+  KmsKeyAllowList: !Not [!Equals [!Join [",", !Ref KmsAllowedKeyArns], ""]]
+  TimestreamReads: !Equals [!Ref TimestreamRead, "true"]
+  KeyspacesReads: !Equals [!Ref KeyspacesRead, "true"]
+  VpcAttached: !Not [!Equals [!Join [",", !Ref VpcSubnetIds], ""]]
   RdsExport: !Not [!Equals [!Ref RdsExportKmsKeyArn, ""]]
   DynamoDBExport: !Equals [!Ref EnableDynamoDBExport, "true"]
   DynamoDBExportKey: !And
@@ -385,6 +465,7 @@ Resources:
         - !If [DynamoDBExport, !Ref DynamoDBExportPermissions, !Ref AWS::NoValue]
         - !If [DataApi, !Ref DataApiPermissions, !Ref AWS::NoValue]
         - !If [RedshiftReads, !Ref RedshiftReadPermissions, !Ref AWS::NoValue]
+        - !If [VpcAttached, !Ref VpcNetworkInterfacePermissions, !Ref AWS::NoValue]
       Policies:
         - PolicyName: scanner
           PolicyDocument:
@@ -533,16 +614,22 @@ Resources:
                   - timestream:ListTagsForResource
                   - timestream-influxdb:ListDbInstances
                 Resource: "*"
-              - Sid: SelectTimestreamTables
-                Effect: Allow
-                Action: timestream:Select
-                Resource: !Sub arn:${AWS::Partition}:timestream:${AWS::Region}:${AWS::AccountId}:database/*/table/*
+              - !If
+                - TimestreamReads
+                - Sid: SelectTimestreamTables
+                  Effect: Allow
+                  Action: timestream:Select
+                  Resource: !Sub arn:${AWS::Partition}:timestream:${AWS::Region}:${AWS::AccountId}:database/*/table/*
+                - !Ref AWS::NoValue
               # Keyspaces: listing reads the system keyspaces, and a sample reads a table;
               # both are cassandra:Select, the only Keyspaces permission.
-              - Sid: SelectKeyspaces
-                Effect: Allow
-                Action: cassandra:Select
-                Resource: !Sub arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*
+              - !If
+                - KeyspacesReads
+                - Sid: SelectKeyspaces
+                  Effect: Allow
+                  Action: cassandra:Select
+                  Resource: !Sub arn:${AWS::Partition}:cassandra:${AWS::Region}:${AWS::AccountId}:/keyspace/*
+                - !Ref AWS::NoValue
               # --- Group 7, read by default (#35): Step Functions history, Lambda
               # environment variables (counts only), X-Ray traces, CodeCommit files
               - Sid: ReadWorkflowsFunctionsTracesAndCode
@@ -968,7 +1055,7 @@ Resources:
             - Sid: DecryptSnapshotsThroughEbs
               Effect: Allow
               Action: kms:Decrypt
-              Resource: "*"
+              Resource: !If [KmsKeyAllowList, !Ref KmsAllowedKeyArns, "*"]
               Condition:
                 StringEquals:
                   kms:ViaService:
@@ -987,7 +1074,7 @@ Resources:
             - Sid: DecryptQueuesThroughSqs
               Effect: Allow
               Action: kms:Decrypt
-              Resource: "*"
+              Resource: !If [KmsKeyAllowList, !Ref KmsAllowedKeyArns, "*"]
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub sqs.${AWS::Region}.amazonaws.com
@@ -1009,7 +1096,7 @@ Resources:
             - Sid: DecryptParametersThroughSsm
               Effect: Allow
               Action: kms:Decrypt
-              Resource: "*"
+              Resource: !If [KmsKeyAllowList, !Ref KmsAllowedKeyArns, "*"]
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
@@ -1026,7 +1113,7 @@ Resources:
             - Sid: DecryptSecretsThroughSecretsManager
               Effect: Allow
               Action: kms:Decrypt
-              Resource: "*"
+              Resource: !If [KmsKeyAllowList, !Ref KmsAllowedKeyArns, "*"]
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
@@ -1051,7 +1138,7 @@ Resources:
             - Sid: DecryptThroughS3AndDynamoDB
               Effect: Allow
               Action: kms:Decrypt
-              Resource: "*"
+              Resource: !If [KmsKeyAllowList, !Ref KmsAllowedKeyArns, "*"]
               Condition:
                 StringEquals:
                   kms:ViaService:
@@ -1439,6 +1526,26 @@ Resources:
                 - !Sub arn:${AWS::Partition}:redshift:${AWS::Region}:${AWS::AccountId}:dbname:*/*
             - !Ref AWS::NoValue
 
+  # The function in the customer's VPC (#105, opt-in): what Lambda needs to place and remove
+  # its network interfaces there, as AWSLambdaVPCAccessExecutionRole grants it. Nothing else.
+  VpcNetworkInterfacePermissions:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: VpcAttached
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LambdaVpcNetworkInterfaces
+            Effect: Allow
+            Action:
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeSubnets
+              - ec2:DeleteNetworkInterface
+              - ec2:AssignPrivateIpAddresses
+              - ec2:UnassignPrivateIpAddresses
+            Resource: "*"
+
   Function:
     Type: AWS::Lambda::Function
     # The role holds these already (ManagedPolicyArns); named here too, so the function
@@ -1467,6 +1574,11 @@ Resources:
       Architectures: [x86_64]
       MemorySize: !Ref MemorySize
       Timeout: 900
+      VpcConfig: !If
+        - VpcAttached
+        - SubnetIds: !Ref VpcSubnetIds
+          SecurityGroupIds: !Ref VpcSecurityGroupIds
+        - !Ref AWS::NoValue
       # No reserved concurrency: the results bucket's lock allows one run at a
       # time, and reserving would fail in accounts at the default quota.
       Environment:
@@ -1490,6 +1602,15 @@ Resources:
           SQS_DLQ_READ: !Ref SqsDlqRead
           SSM_DECRYPT: !Ref SsmDecrypt
           SECRETS_READ: !Ref SecretsRead
+          KMS_ALLOWED_KEY_ARNS: !Join [",", !Ref KmsAllowedKeyArns]
+          MAX_EXPORTS_PER_RUN: !Ref MaxExportsPerRun
+          EXPORT_MIN_INTERVAL_DAYS: !Ref ExportMinIntervalDays
+          GLUE_LAKE_FORMATION: !Ref GlueLakeFormation
+          TIMESTREAM_READ: !Ref TimestreamRead
+          KEYSPACES_READ: !Ref KeyspacesRead
+          FILESYSTEM_TASK_ENABLED: !Ref FilesystemTaskEnabled
+          VPC_SUBNET_IDS: !Join [",", !Ref VpcSubnetIds]
+          VPC_SECURITY_GROUP_IDS: !Join [",", !Ref VpcSecurityGroupIds]
           SCAN_MODE: !Ref ScanMode
           MSK_READ: !Ref MskRead
           MQ_READ: !Ref MqRead

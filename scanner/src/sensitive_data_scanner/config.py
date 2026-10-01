@@ -420,6 +420,24 @@ def _bool(v: str | None) -> bool:
     return (v or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _arns(v: str | None) -> tuple[str, ...]:
+    out = tuple(dict.fromkeys(_list(v)))
+    if any(not _ARN.match(a) for a in out):
+        raise ValueError("KMS_ALLOWED_KEY_ARNS must be a list of ARNs")
+    return out
+
+
+_SUBNET = re.compile(r"^subnet-[0-9a-f]{8,17}$")
+_SECURITY_GROUP = re.compile(r"^sg-[0-9a-f]{8,17}$")
+
+
+def _ids(v: str | None, pattern: re.Pattern[str]) -> tuple[str, ...]:
+    out = tuple(dict.fromkeys(_list(v)))
+    if any(not pattern.match(i) for i in out):
+        raise ValueError("VPC_SUBNET_IDS or VPC_SECURITY_GROUP_IDS has an id it does not accept")
+    return out
+
+
 @dataclass(frozen=True)
 class Config:
     results_bucket: str
@@ -484,11 +502,20 @@ class Config:
     # SQS: dead-letter queues are received from (VisibilityTimeout=0) only when on.
     sqs_dlq_read: bool = False
     sqs_messages_per_queue: int = 100
-    # SSM Parameter Store: SecureString values are decrypted through SSM unless off.
-    # Secrets Manager: listed always, read only when on.
-    ssm_decrypt: bool = True
+    # SSM Parameter Store: SecureString values are decrypted through SSM only when on (off by
+    # default since #105). Secrets Manager: listed always, read only when on.
+    ssm_decrypt: bool = False
     secrets_read: bool = False
-    # Timestream and Keyspaces: one sampled read-only query per table.
+    # #105 (docs/limitations.md): the keys kms:Decrypt may use, through each service only
+    # (empty: any key the key policy allows, through a service); the opt-in file-system task
+    # (a hook: EFS and FSx stay a reported gap); the VPC the function is attached to, if any.
+    kms_allowed_key_arns: tuple[str, ...] = ()
+    filesystem_task: bool = False
+    vpc_subnet_ids: tuple[str, ...] = ()
+    vpc_security_group_ids: tuple[str, ...] = ()
+    # Timestream and Keyspaces: one sampled read-only query per table, unless off (#105).
+    timestream_read: bool = True
+    keyspaces_read: bool = True
     timestream_max_rows: int = 1000
     timestream_lookback_days: int = 1
     keyspaces_max_rows: int = 1000
@@ -546,6 +573,11 @@ class Config:
     # report when it has one (and named as a recommendation when it has none).
     s3_inventory: bool = True
     s3_inventory_min_objects: int = 1_000_000
+
+    @property
+    def vpc_attached(self) -> bool:
+        """Whether the function runs in the customer's VPC (`VPC_SUBNET_IDS`, #105)."""
+        return bool(self.vpc_subnet_ids)
 
     @property
     def exports_prefix(self) -> str:
@@ -621,8 +653,14 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         kinesis_max_shards=_int(e.get("KINESIS_MAX_SHARDS"), 50, 1, 10_000),
         sqs_dlq_read=_bool(e.get("SQS_DLQ_READ")),
         sqs_messages_per_queue=_int(e.get("SQS_MESSAGES_PER_QUEUE"), 100, 1, 1000),
-        ssm_decrypt=_bool(e.get("SSM_DECRYPT", "true")),
+        ssm_decrypt=_bool(e.get("SSM_DECRYPT")),
         secrets_read=_bool(e.get("SECRETS_READ")),
+        kms_allowed_key_arns=_arns(e.get("KMS_ALLOWED_KEY_ARNS")),
+        filesystem_task=_bool(e.get("FILESYSTEM_TASK_ENABLED")),
+        vpc_subnet_ids=_ids(e.get("VPC_SUBNET_IDS"), _SUBNET),
+        vpc_security_group_ids=_ids(e.get("VPC_SECURITY_GROUP_IDS"), _SECURITY_GROUP),
+        timestream_read=_bool(e.get("TIMESTREAM_READ", "true")),
+        keyspaces_read=_bool(e.get("KEYSPACES_READ", "true")),
         timestream_max_rows=_int(e.get("TIMESTREAM_MAX_ROWS"), 1000, 1, 100_000),
         timestream_lookback_days=_int(e.get("TIMESTREAM_LOOKBACK_DAYS"), 1, 1, 3650),
         keyspaces_max_rows=_int(e.get("KEYSPACES_MAX_ROWS"), 1000, 1, 100_000),
@@ -675,6 +713,8 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         raise ValueError("EVENTBRIDGE_REPLAY needs the scanner's own replay queue")
     if config.redshift_read == "db_user" and not config.redshift_db_user:
         raise ValueError("REDSHIFT_READ=db_user needs REDSHIFT_DB_USER")
+    if bool(config.vpc_subnet_ids) != bool(config.vpc_security_group_ids):
+        raise ValueError("VPC_SUBNET_IDS and VPC_SECURITY_GROUP_IDS go together")
     return config
 
 

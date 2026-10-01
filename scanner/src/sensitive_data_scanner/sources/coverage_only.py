@@ -6,8 +6,10 @@
   scanner holds no database credentials: `no_snapshot_export`.
 - **EFS** and **FSx**: a file system is read by mounting it inside its VPC.
   The scanner's Lambda is not in the VPC and mounts nothing, so each is
-  reported as `needs_task`: the opt-in file-system task
-  (docs/ARCHITECTURE.md) is the way to read it.
+  reported as `needs_task` with `toggle: FILESYSTEM_TASK_ENABLED`: the opt-in
+  file-system task (docs/ARCHITECTURE.md) is the way to read it. That setting
+  is a hook (#105): the task is designed, not built, so turned on it gives
+  `not_implemented`, never a silent pass (docs/limitations.md, A5).
 
 Each is listed with the kind's own describe call, decided by the allow and
 deny rules like every store, and then reported.
@@ -81,6 +83,14 @@ class ClusterAdapter:
         return None
 
 
+def _file_system_gap(ctx: Context, store: Store) -> None:
+    """EFS and FSx: the file-system task reads them; it is a hook only (#105)."""
+    if ctx.config.filesystem_task:
+        store.not_implemented("FILESYSTEM_TASK_ENABLED")
+    else:
+        store.toggle_off("FILESYSTEM_TASK_ENABLED", "needs_task")
+
+
 class EfsAdapter:
     kind = "efs"
 
@@ -100,7 +110,7 @@ class EfsAdapter:
                     continue
                 decide(store, ctx.config)
                 if store.status == "pending":
-                    store.skip("needs_task")
+                    _file_system_gap(ctx, store)
 
     def source(self, ctx: Context, store: Store) -> None:
         return None
@@ -126,7 +136,7 @@ class FsxAdapter:
                     continue
                 decide(store, ctx.config)
                 if store.status == "pending":
-                    store.skip("needs_task")
+                    _file_system_gap(ctx, store)
 
     def source(self, ctx: Context, store: Store) -> None:
         return None

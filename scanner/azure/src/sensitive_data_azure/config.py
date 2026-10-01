@@ -24,6 +24,16 @@ reported by a fixed code, never by its value.
   off by default.
 - `AZURE_FILES_READ`: `on` reads Azure Files shares' files (Storage File Data
   Privileged Reader, over REST with the backup intent); off by default.
+- `AZURE_LOG_ANALYTICS`: `off` lists Log Analytics workspaces and reads none
+  (each `read_not_configured`); on by default (#105).
+- `AZURE_READ_SNAPSHOTS`: a hook (#105): reading a disk snapshot needs a SAS
+  export, a write, and no reader is built; on, each snapshot is
+  `not_implemented`; off (the default), `needs_sas_export`.
+- `AZURE_COSMOS_READER_POLICY`: a hook (#105), set by the Bicep parameter
+  `assignCosmosReaderPolicy`: the Azure Policy that would give the identity
+  Cosmos DB Built-in Data Reader on every NoSQL account is not built; on, a
+  NoSQL account the identity cannot read is `not_implemented`.
+  docs/limitations.md lists every limitation and its setting.
 - `AZURE_DB_PRINCIPAL`: the identity's name as a PostgreSQL or MySQL user.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
   `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
@@ -189,6 +199,11 @@ class Settings:
     keyvault_secrets_read: bool = False
     # Azure Files shares' files: off by default (Storage File Data Privileged Reader).
     files_read: bool = False
+    # #105 (docs/limitations.md): Log Analytics (on), and two hooks, off: disk snapshots by
+    # SAS export, and the Azure Policy that would grant Cosmos DB's reader role everywhere.
+    log_analytics_read: bool = True
+    read_snapshots: bool = False
+    cosmos_reader_policy: bool = False
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None
@@ -314,6 +329,15 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     files = _on(e.get("AZURE_FILES_READ"))
     if files is None:
         raise ConfigError("azure_files_read")
+    log_analytics = _on(e.get("AZURE_LOG_ANALYTICS") or "on")
+    if log_analytics is None:
+        raise ConfigError("azure_log_analytics")
+    snapshots = _on(e.get("AZURE_READ_SNAPSHOTS"))
+    if snapshots is None:
+        raise ConfigError("azure_read_snapshots")
+    cosmos_policy = _on(e.get("AZURE_COSMOS_READER_POLICY"))
+    if cosmos_policy is None:
+        raise ConfigError("azure_cosmos_reader_policy")
     try:
         db_read = _kinds(e.get("AZURE_DB_READ"), (), DATABASE_KINDS)
     except ConfigError:
@@ -371,4 +395,7 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         logs_max_rows=_int(e.get("LOGS_MAX_ROWS_PER_TABLE"), 500, 1, 30_000),
         keyvault_secrets_read=keyvault,
         files_read=files,
+        log_analytics_read=log_analytics,
+        read_snapshots=snapshots,
+        cosmos_reader_policy=cosmos_policy,
     )

@@ -11,6 +11,7 @@ detects, how it stays safe, and how proven each path is.
 | [AZURE.md](AZURE.md) | The Azure scanner: stores and the roles each needs, findings, settings, deploying the Bicep at a management group |
 | [GCP.md](GCP.md) | The Google Cloud scanner: stores and the permissions each needs, Sensitive Data Protection's profiles, findings, settings, deploying the Terraform |
 | [DATABASES.md](DATABASES.md) | The databases runner: engines and how each is kept read-only, settings, tables unchanged since the last read, deploying with docker, Kubernetes, ECS or Azure Container Instances |
+| [limitations.md](limitations.md) | Every deliberate limitation, on every platform: what is not read and why, the setting that changes it, its default, and how a store left unread shows up |
 | [SAAS.md](SAAS.md) | The SaaS scanner: Microsoft 365, Google Workspace, Slack, Jira and Confluence, consent and read-only grants, vendor detection (Purview, Workspace DLP, Slack DLP), settings, deploying |
 
 ## Cost

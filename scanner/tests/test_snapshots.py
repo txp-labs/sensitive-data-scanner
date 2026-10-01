@@ -380,3 +380,41 @@ def test_printable_text_keeps_runs_that_could_hold_a_value() -> None:
     text = printable_text(raw)
     assert "card 4539 on file" in text and "ssn 123" in text
     assert "just words" not in text  # no digit: cannot hold a value
+
+
+def test_the_file_system_task_is_a_hook_named_on_and_off(env: Env) -> None:
+    """A5 (#105): EFS and FSx name FILESYSTEM_TASK_ENABLED, off by default; on, the task is not
+    built, so each is `not_implemented`, never a silent pass."""
+    fs = {
+        "FileSystems": [
+            {
+                "OwnerId": "123456789012",
+                "CreationToken": "t",
+                "FileSystemId": "fs-0abc",
+                "CreationTime": T1,
+                "LifeCycleState": "available",
+                "NumberOfMountTargets": 1,
+                "SizeInBytes": {"Value": 4096},
+                "PerformanceMode": "generalPurpose",
+                "Tags": [],
+            }
+        ]
+    }
+    s = stubs(env, "efs")
+    s["efs"].add_response("describe_file_systems", fs)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"efs"})))
+    assert doc is not None
+    valid(doc)
+    st = stores(doc)[("efs", "fs-0abc")]
+    assert (st["reason"], st["toggle"]) == ("needs_task", "FILESYSTEM_TASK_ENABLED")
+    s["efs"].add_response("describe_file_systems", fs)
+    doc = env.run(config(s3_targets=[], discover=frozenset({"efs"}), filesystem_task=True))
+    assert doc is not None
+    valid(doc)
+    st = stores(doc)[("efs", "fs-0abc")]
+    assert (st["status"], st["reason"], st["toggle"]) == (
+        "skipped",
+        "not_implemented",
+        "FILESYSTEM_TASK_ENABLED",
+    )
+    assert read_config({"RESULTS_BUCKET": "x"}).filesystem_task is False

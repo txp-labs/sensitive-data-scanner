@@ -183,6 +183,24 @@ def test_topics_are_coverage_only_dead_letter_topics_named() -> None:
     # Subscriptions unreadable: whether a topic is a dead-letter topic is unknown.
     assert s[("pubsub", f"{OTHER}/pay-dlq")]["reason"] == "needs_subscription"
     assert not any(m == "POST" and "pubsub" in u for m, u, _ in c.requests)
+    # #105 (C5): a dead-letter topic names the reader's hook; a live topic names nothing.
+    assert dlq["toggle"] == "GCP_READ_PUBSUB_DLQ"
+    assert "toggle" not in s[("pubsub", f"{PROJECT}/orders")]
+
+
+def test_the_dead_letter_reader_is_a_hook_that_says_not_implemented() -> None:
+    """C5 (#105): GCP_READ_PUBSUB_DLQ on: the reader is not built, so a dead-letter topic is
+    `not_implemented`, and still nothing is pulled or created."""
+    c, _ = cloud()
+    s = stores(run(c, "pubsub", GCP_READ_PUBSUB_DLQ="on"))
+    dlq = s[("pubsub", f"{PROJECT}/orders-dlq")]
+    assert (dlq["status"], dlq["reason"], dlq["toggle"]) == (
+        "skipped",
+        "not_implemented",
+        "GCP_READ_PUBSUB_DLQ",
+    )
+    assert s[("pubsub", f"{PROJECT}/orders")]["reason"] == "live_queue"
+    assert not any(m == "POST" and "pubsub" in u for m, u, _ in c.requests)
 
 
 def test_snapshots_are_coverage_only_grouped_by_disk() -> None:

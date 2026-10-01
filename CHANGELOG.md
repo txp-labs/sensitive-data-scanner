@@ -6,6 +6,71 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- **Every deliberate limitation is documented, with a setting**
+  ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)):
+  [docs/limitations.md](docs/limitations.md) lists, on every platform, what is
+  not read and why, the setting that changes it (the environment variable and
+  the deploy template's parameter), its default, and how a store left unread
+  shows up. It is linked from the README and each platform guide.
+  - A store left unread because a setting is off now names that setting
+    (`toggle`), and a setting that is only a hook (its reader designed, not
+    built) gives the reason `not_implemented` when turned on, never a silent
+    no-op: `FILESYSTEM_TASK_ENABLED` (EFS, FSx), `AZURE_READ_SNAPSHOTS`,
+    `AZURE_COSMOS_READER_POLICY` (Bicep `assignCosmosReaderPolicy`),
+    `GCP_SQLSERVER` and `GCP_READ_PUBSUB_DLQ`.
+  - New settings, wired through the templates: AWS `KMS_ALLOWED_KEY_ARNS`
+    (`KmsAllowedKeyArns`, an allow-list on every `kms:Decrypt`, still only
+    through each service), `TIMESTREAM_READ` and `KEYSPACES_READ` (on; off
+    also drops `timestream:Select` or `cassandra:Select`),
+    `FILESYSTEM_TASK_ENABLED`, and `VPC_SUBNET_IDS` / `VPC_SECURITY_GROUP_IDS`
+    (`VpcSubnetIds`, `VpcSecurityGroupIds`: the function joins the VPC, with
+    exactly the network-interface permissions of
+    `AWSLambdaVPCAccessExecutionRole`, and reads an OpenSearch domain's VPC
+    endpoint); `scanner.yaml` also takes `MaxExportsPerRun`,
+    `ExportMinIntervalDays` and `GlueLakeFormation` for the settings it did
+    not expose. Azure `AZURE_LOG_ANALYTICS` (`readLogAnalytics`, on),
+    `AZURE_READ_SNAPSHOTS` (`readDiskSnapshots`) and
+    `AZURE_COSMOS_READER_POLICY`. Google Cloud `GCP_SPANNER` and `GCP_ALLOYDB`
+    (`read_spanner`, `read_alloydb`, on: off, the Terraform leaves out the role
+    holding their exception permissions, now roles of their own),
+    `GCS_READ_ARCHIVE` (`read_archive_objects`), `GCP_SQLSERVER`
+    (`read_sqlserver`) and `GCP_READ_PUBSUB_DLQ` (`read_pubsub_dead_letters`).
+    SaaS `M365_MAIL`, `GWS_ALERT_CENTER`, `LINK_VENDOR_ALERTS_BY_LOCATION` and
+    `ATLASSIAN_AUTH_MODE`, set in the `deploy/saas` examples. Shipped names are
+    kept (`MAX_EXPORTS_PER_RUN`, `EXPORT_MIN_INTERVAL_DAYS`,
+    `GLUE_LAKE_FORMATION`, `SSM_DECRYPT`, `SECRETS_READ`, `AZURE_DB_READ`,
+    `AZURE_FILES_READ`).
+  - SaaS `both` mode links a Slack DLP event, which names no kind of data, to
+    the scanner's findings at the same item (`linkedBy: location`).
+
+### Changed
+- **Defaults that changed** ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)),
+  to match the approved table in the issue:
+  - `SSM_DECRYPT` (`SsmDecrypt`) is **off**: Parameter Store `SecureString`s
+    are counted, not decrypted, unless it is turned on (it was on).
+  - Cloud Storage **Archive-class objects are not read** unless
+    `GCS_READ_ARCHIVE` is on (every storage class was read): each is counted
+    as `notAllowed: archive_class`, for its retrieval fee.
+  - `LINK_VENDOR_ALERTS_BY_LOCATION` is on: in `both` mode, Slack DLP events
+    are linked by item (they were never linked). Purview's alerts name no item
+    this scanner reads, so they stay unlinked.
+  - Atlassian signs in with an API token unless `ATLASSIAN_AUTH_MODE=oauth`:
+    a deployment using OAuth (3LO) must now set it, or the run stops with
+    `atlassian_auth_mode`.
+
+### Findings schema
+- `schemaVersion` is now **1.12**, additive
+  ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)):
+  `toggle` on a store (and on a `not_enabled` importer's `vendorCoverage`),
+  the store reason `not_implemented`, `linkedBy: location` on a finding, and
+  the `notAllowed` reason `archive_class`.
+
+### Docs
+- [docs/limitations.md](docs/limitations.md), and each guide's settings and
+  coverage tables name the new settings and defaults
+  ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)).
+
 ## 0.4.0 — 2026-10-01
 
 > **0.4.0 includes 0.3.0.** Version 0.3.0 was prepared on 29 Sep 2026

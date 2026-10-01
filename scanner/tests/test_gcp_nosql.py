@@ -163,6 +163,23 @@ def test_spanner_is_sampled_in_single_use_read_only_transactions() -> None:
     )
 
 
+def test_spanner_off_lists_databases_and_opens_no_session() -> None:
+    """C2 (#105): GCP_SPANNER off (on by default): each database is `read_not_configured`,
+    naming the setting, and no session (one of the named exceptions) is ever made."""
+    c, n = cloud()
+    doc = run(c, GCP_SPANNER="off")
+    s = stores(doc)
+    for name in ("inst-main/ledger", "inst-main/pgledger"):
+        st = s[("spanner", name)]
+        assert (st["status"], st["reason"], st["toggle"]) == (
+            "skipped",
+            "read_not_configured",
+            "GCP_SPANNER",
+        )
+    assert n.sessions == [] and n.sql == []
+    assert not found(doc, "spanner")
+
+
 def test_bigtable_reads_the_latest_cells_and_the_row_key() -> None:
     c, n = cloud()
     doc = run(c, BIGTABLE_MAX_ROWS="50")

@@ -30,6 +30,14 @@ its value.
   needs an IAM database user for the service account.
 - `GCP_DB_PRINCIPAL`: the service account's email, whose IAM database users
   are logged in as.
+- #105 (docs/limitations.md): `GCP_SPANNER` and `GCP_ALLOYDB` (on by
+  default; off, those stores are `read_not_configured`, and the deployment
+  leaves out their exception permissions); `GCS_READ_ARCHIVE` (off by default:
+  Archive-class objects are counted, `notAllowed.archive_class`, not read,
+  for their retrieval fees); and two hooks, off by default, whose readers are
+  not built: `GCP_SQLSERVER` (Cloud SQL for SQL Server) and
+  `GCP_READ_PUBSUB_DLQ` (dead-letter topics). On, a hook's stores are
+  `not_implemented`.
 - `DB_SCHEMAS`, `DB_MAX_ROWS_PER_TABLE`, `DB_MAX_TABLES`,
   `DB_STATEMENT_TIMEOUT_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`: as the databases
   runner's.
@@ -188,6 +196,13 @@ class Settings:
     logging_private_read: bool = False
     # Secret Manager's values: off by default, counts only when on.
     secret_manager_read: bool = False
+    # #105 (docs/limitations.md): Spanner and AlloyDB reads (on), Archive-class objects
+    # (off), and two hooks (off): Cloud SQL for SQL Server and Pub/Sub dead-letter topics.
+    spanner_read: bool = True
+    alloydb_read: bool = True
+    gcs_read_archive: bool = False
+    sqlserver_read: bool = False
+    pubsub_dlq_read: bool = False
     # Cloud SQL and AlloyDB (opt-in): which kinds are read, as whom, and how much.
     db_read: tuple[str, ...] = ()
     db_principal: str | None = None
@@ -344,6 +359,19 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     secrets = _on(e.get("SECRET_MANAGER_READ"))
     if secrets is None:
         raise ConfigError("secret_manager_read")
+    toggles: dict[str, bool] = {}
+    # Each setting, its default, and the fixed code a wrong value is reported by (`name`).
+    for setting, default, name in (
+        ("GCP_SPANNER", "on", "gcp_spanner"),
+        ("GCP_ALLOYDB", "on", "gcp_alloydb"),
+        ("GCS_READ_ARCHIVE", "off", "gcs_read_archive"),
+        ("GCP_SQLSERVER", "off", "gcp_sqlserver"),
+        ("GCP_READ_PUBSUB_DLQ", "off", "gcp_read_pubsub_dlq"),
+    ):
+        got = _on(e.get(setting) or default)
+        if got is None:
+            raise ConfigError(name)
+        toggles[setting] = got
     try:
         db_read = _kinds(e.get("GCP_DB_READ"), (), DATABASE_KINDS)
     except ConfigError:
@@ -396,6 +424,11 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
         logging_max_logs=_int(e.get("LOGGING_MAX_LOGS"), 200, 1, 5000),
         logging_private_read=private,
         secret_manager_read=secrets,
+        spanner_read=toggles["GCP_SPANNER"],
+        alloydb_read=toggles["GCP_ALLOYDB"],
+        gcs_read_archive=toggles["GCS_READ_ARCHIVE"],
+        sqlserver_read=toggles["GCP_SQLSERVER"],
+        pubsub_dlq_read=toggles["GCP_READ_PUBSUB_DLQ"],
         db_read=db_read,
         db_principal=principal,
         db_schemas=_list(e.get("DB_SCHEMAS")),

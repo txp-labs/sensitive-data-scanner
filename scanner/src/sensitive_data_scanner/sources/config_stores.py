@@ -8,8 +8,10 @@ the summary (`excluded`). A finding names one parameter or secret
 
 **SSM Parameter Store** (`DISCOVER` includes `ssm`): `DescribeParameters`,
 then `GetParameters` ten at a time. `SecureString` values are decrypted
-through SSM (`SSM_DECRYPT`, on by default; `kms:Decrypt` with
-`kms:ViaService` `ssm.<region>`); with it off they are counted, not read.
+through SSM only with `SSM_DECRYPT` on (**off by default** since #105;
+`kms:Decrypt` with `kms:ViaService` `ssm.<region>`); with it off they are
+counted, not read (`excluded.secure_string`), and the store names the setting
+(`toggle: SSM_DECRYPT`): `read_not_configured` when nothing else is left.
 
 **Secrets Manager** (`secretsmanager`): `ListSecrets` always, so every secret
 is in the summary. Reading is **off by default** (`SECRETS_READ`): a secret
@@ -125,11 +127,16 @@ class SsmAdapter:
                 excluded["secure_string"] = n
         if excluded:
             store.extra["excluded"] = dict(sorted(excluded.items()))
+        if excluded.get("secure_string"):
+            store.name_toggle("SSM_DECRYPT")  # what reads the SecureStrings left out
         if not params:
             store.status = "scanned"  # listed: nothing in it
             return
         if not kept:
-            store.skip("denied" if excluded.get("denied") else "not_allowed")
+            if excluded.get("secure_string") and not (excluded.keys() - {"secure_string", "self"}):
+                store.toggle_off("SSM_DECRYPT")
+            else:
+                store.skip("denied" if excluded.get("denied") else "not_allowed")
             return
         store.extra["names"] = kept
         store.extra["itemFacts"] = {k: item_facts[k] for k in kept if k in item_facts}
@@ -183,7 +190,7 @@ class SecretsAdapter:
             store.status = "scanned"
             return
         if not ctx.config.secrets_read:
-            store.skip("read_not_configured")
+            store.toggle_off("SECRETS_READ")
             return
         if not kept:
             store.skip("denied" if excluded.get("denied") else "not_allowed")

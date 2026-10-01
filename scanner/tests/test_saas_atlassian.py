@@ -92,7 +92,17 @@ def test_settings(tmp_path: Path) -> None:
         ({}, "atlassian_credential"),
         ({"ATLASSIAN_API_TOKEN": "made-up"}, "atlassian_secret_in_env"),
         ({"ATLASSIAN_API_TOKEN_FILE": "/t", "ATLASSIAN_EMAIL": "nope"}, "atlassian_email"),
-        ({"ATLASSIAN_OAUTH_CLIENT_ID": "abcdefgh12"}, "atlassian_credential"),
+        # #105 (D4): API-token mode is the default; OAuth settings need ATLASSIAN_AUTH_MODE.
+        ({"ATLASSIAN_OAUTH_CLIENT_ID": "abcdefgh12"}, "atlassian_auth_mode"),
+        (
+            {"ATLASSIAN_AUTH_MODE": "oauth", "ATLASSIAN_OAUTH_CLIENT_ID": "abcdefgh12"},
+            "atlassian_credential",
+        ),
+        (
+            {"ATLASSIAN_AUTH_MODE": "oauth", "ATLASSIAN_API_TOKEN_FILE": "/t"},
+            "atlassian_auth_mode",
+        ),
+        ({"ATLASSIAN_AUTH_MODE": "basic"}, "atlassian_auth_mode"),
     ):
         with pytest.raises(ConfigError) as err:
             read_settings({**base, **bad})
@@ -165,6 +175,7 @@ def test_oauth_rotates_its_refresh_token_and_byok(tmp_path: Path) -> None:
     refresh.write_text("made-up-refresh-0")
     s = settings(
         tmp_path,
+        ATLASSIAN_AUTH_MODE="oauth",
         ATLASSIAN_OAUTH_CLIENT_ID="abcdefgh12",
         ATLASSIAN_OAUTH_CLIENT_SECRET_FILE=str(secret),
         ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE=str(refresh),

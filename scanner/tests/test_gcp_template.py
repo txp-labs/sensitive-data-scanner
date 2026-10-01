@@ -55,12 +55,25 @@ OPT_IN_ROLES = {
         "read_secrets",
         {"secretmanager.secrets.get", "secretmanager.versions.access"},
     ),
-    "database_permissions": (
-        "read_databases",
+    "database_permissions": ("read_databases", {"cloudsql.instances.login"}),
+}
+# (#105, docs/limitations.md) Roles made by default, each under its own variable, holding the
+# named exceptions: off, the role (and its exceptions) is not made.
+DEFAULT_ON_ROLES = {
+    "spanner_permissions": (
+        "read_spanner",
+        {
+            "spanner.databases.beginReadOnlyTransaction",
+            "spanner.databases.select",
+            "spanner.sessions.create",
+            "spanner.sessions.delete",
+        },
+    ),
+    "alloydb_permissions": (
+        "read_alloydb",
         {
             "alloydb.clusters.generateClientCertificate",
             "alloydb.users.login",
-            "cloudsql.instances.login",
             "serviceusage.services.use",
         },
     ),
@@ -137,6 +150,31 @@ def test_opt_in_permissions_sit_in_their_own_roles_off_by_default() -> None:
         assert re.search(rf"var\.{variable} \? \{{ \w+ = \{{[^}}]*local\.{local}", source), local
     # Secret access and database logins are never in the default role.
     assert not any(verb(p) in OPT_IN_VERBS for p in t["locals"]["read_permissions"])
+
+
+def test_every_named_exception_sits_in_a_role_its_toggle_can_turn_off() -> None:
+    """#105 (C2): the exceptions are Spanner's (GCP_SPANNER) and AlloyDB's (GCP_ALLOYDB), each in
+    a role of its own that is made only with its variable on (the default), never the read role."""
+    t = load()
+    source = (DEPLOY / "main.tf").read_text()
+    held: set[str] = set()
+    for local, (variable, expected) in DEFAULT_ON_ROLES.items():
+        perms = set(t["locals"][local])
+        assert perms == expected, local
+        held |= perms
+        assert not perms & set(t["locals"]["read_permissions"]), local
+        assert t["variable"][variable]["default"] is True
+        assert re.search(rf"var\.{variable} \? \{{ \w+ = \{{[^}}]*local\.{local}", source), local
+    assert set(EXCEPTIONS) <= held
+    env = {
+        "GCP_SPANNER": "read_spanner",
+        "GCP_ALLOYDB": "read_alloydb",
+        "GCS_READ_ARCHIVE": "read_archive_objects",
+        "GCP_SQLSERVER": "read_sqlserver",
+        "GCP_READ_PUBSUB_DLQ": "read_pubsub_dead_letters",
+    }
+    for name, variable in env.items():
+        assert re.search(rf"{name}\s+= var\.{variable} \? \"on\" : \"off\"", source), name
 
 
 def test_sdp_profiles_are_listed_only_in_vendor_or_both() -> None:
@@ -279,7 +317,8 @@ def test_every_custom_role_fits_googles_limits_with_every_opt_in_on() -> None:
     made = re.findall(
         r'\{ \w+ = \{ id = "(\w+)", title = "([^"]+)", permissions = local\.(\w+) \}', source
     )
-    assert len(made) == 1 + len(OPT_IN_ROLES) + 1  # read, the opt-ins, SDP profiles
+    # read, the opt-ins, SDP profiles, and the roles made by default (#105)
+    assert len(made) == 1 + len(OPT_IN_ROLES) + 1 + len(DEFAULT_ON_ROLES)
     (role,) = load()["resource"]["google_organization_iam_custom_role"].values()
     description = str(role["description"])
     for role_id, title, local in made:

@@ -24,12 +24,25 @@ run "defaults_read_only" {
   command = plan
 
   assert {
-    condition     = keys(google_organization_iam_custom_role.scanner) == ["reader"]
-    error_message = "By default only the read role is made."
+    condition     = keys(google_organization_iam_custom_role.scanner) == ["reader", "spanner"]
+    error_message = "By default only the read role and Spanner's (read_spanner, on by default) are made."
   }
   assert {
-    condition     = length(google_organization_iam_member.scanner) == 1 && length(google_folder_iam_member.scanner) == 0
-    error_message = "The organization scope binds the read role at the organization only."
+    condition     = length(google_organization_iam_member.scanner) == 2 && length(google_folder_iam_member.scanner) == 0
+    error_message = "The organization scope binds the read roles at the organization only."
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.name => e.value
+      if contains(["GCP_SPANNER", "GCP_ALLOYDB", "GCS_READ_ARCHIVE", "GCP_SQLSERVER", "GCP_READ_PUBSUB_DLQ"], e.name)
+      } == {
+      GCP_SPANNER         = "on"
+      GCP_ALLOYDB         = "on"
+      GCS_READ_ARCHIVE    = "off"
+      GCP_SQLSERVER       = "off"
+      GCP_READ_PUBSUB_DLQ = "off"
+    }
+    error_message = "Each limitation's toggle reaches the job with its default (docs/limitations.md)."
   }
   assert {
     condition     = length(google_secret_manager_secret.push) == 0
@@ -88,11 +101,11 @@ run "opt_ins_and_folders" {
   }
 
   assert {
-    condition     = length(google_organization_iam_custom_role.scanner) == 5
-    error_message = "Each opt-in adds its own role."
+    condition     = length(google_organization_iam_custom_role.scanner) == 7
+    error_message = "Each opt-in adds its own role (with Spanner's, and AlloyDB's with the databases)."
   }
   assert {
-    condition     = length(google_folder_iam_member.scanner) == 10 && length(google_organization_iam_member.scanner) == 0
+    condition     = length(google_folder_iam_member.scanner) == 14 && length(google_organization_iam_member.scanner) == 0
     error_message = "Each role is bound at each folder, and not at the organization."
   }
   assert {
@@ -105,5 +118,38 @@ run "opt_ins_and_folders" {
       "GCP_DB_PRINCIPAL",
     )
     error_message = "Database reads name the service account as the principal."
+  }
+}
+
+run "limitations_toggled" {
+  # #105: Spanner and AlloyDB off drop their roles (and the exception permissions in them);
+  # the hooks and Archive-class reads on reach the job as on.
+  command = plan
+
+  variables {
+    read_databases           = true
+    read_spanner             = false
+    read_alloydb             = false
+    read_archive_objects     = true
+    read_sqlserver           = true
+    read_pubsub_dead_letters = true
+  }
+
+  assert {
+    condition     = keys(google_organization_iam_custom_role.scanner) == ["databases", "reader"]
+    error_message = "Spanner off and AlloyDB off leave out their roles."
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_job.scanner.template[0].template[0].containers[0].env : e.name => e.value
+      if contains(["GCP_SPANNER", "GCP_ALLOYDB", "GCS_READ_ARCHIVE", "GCP_SQLSERVER", "GCP_READ_PUBSUB_DLQ"], e.name)
+      } == {
+      GCP_SPANNER         = "off"
+      GCP_ALLOYDB         = "off"
+      GCS_READ_ARCHIVE    = "on"
+      GCP_SQLSERVER       = "on"
+      GCP_READ_PUBSUB_DLQ = "on"
+    }
+    error_message = "Each toggle reaches the job as set."
   }
 }

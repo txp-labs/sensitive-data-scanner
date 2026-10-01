@@ -32,12 +32,8 @@ locals {
     "datastore.databases.getMetadata",
     "datastore.entities.get",
     "datastore.entities.list",
-    # Spanner: a database's dialect and key, then SQL in single-use read-only transactions.
-    "spanner.databases.beginReadOnlyTransaction",
+    # Spanner: a database's dialect and key (discovery; its reads are local.spanner_permissions).
     "spanner.databases.get",
-    "spanner.databases.select",
-    "spanner.sessions.create",
-    "spanner.sessions.delete",
     # Bigtable: the clusters' keys, then readRows.
     "bigtable.clusters.list",
     "bigtable.tables.readRows",
@@ -55,15 +51,25 @@ locals {
     "cloudsql.databases.list",
     "cloudsql.instances.get",
   ]
+  # On by default (read_spanner, GCP_SPANNER; #105): SQL in single-use read-only
+  # transactions, and the session two of the named exceptions need.
+  spanner_permissions = [
+    "spanner.databases.beginReadOnlyTransaction",
+    "spanner.databases.select",
+    "spanner.sessions.create",
+    "spanner.sessions.delete",
+  ]
   # Opt-in: Data Access audit logs (Private Logs Viewer's one permission).
   private_log_permissions = ["logging.privateLogEntries.list"]
   # Opt-in: Secret Manager's values (counts only) and each secret's key.
   secret_permissions = ["secretmanager.secrets.get", "secretmanager.versions.access"]
-  # Opt-in: IAM database authentication to Cloud SQL and AlloyDB, and AlloyDB's cluster CA.
-  database_permissions = [
+  # Opt-in: IAM database authentication to Cloud SQL.
+  database_permissions = ["cloudsql.instances.login"]
+  # With read_databases, unless read_alloydb is off (GCP_ALLOYDB; #105): AlloyDB's IAM
+  # login, with two of the named exceptions (its cluster CA, and the quota project).
+  alloydb_permissions = [
     "alloydb.clusters.generateClientCertificate",
     "alloydb.users.login",
-    "cloudsql.instances.login",
     "serviceusage.services.use",
   ]
 
@@ -76,9 +82,11 @@ locals {
 
   roles = merge(
     { reader = { id = "sdsScannerReader", title = "Sensitive data scanner: read", permissions = local.read_permissions } },
+    var.read_spanner ? { spanner = { id = "sdsScannerSpanner", title = "Sensitive data scanner: Spanner", permissions = local.spanner_permissions } } : {},
     var.read_private_logs ? { private_logs = { id = "sdsScannerPrivateLogs", title = "Sensitive data scanner: private logs", permissions = local.private_log_permissions } } : {},
     var.read_secrets ? { secrets = { id = "sdsScannerSecrets", title = "Sensitive data scanner: secrets", permissions = local.secret_permissions } } : {},
     var.read_databases ? { databases = { id = "sdsScannerDatabases", title = "Sensitive data scanner: database login", permissions = local.database_permissions } } : {},
+    var.read_databases && var.read_alloydb ? { alloydb = { id = "sdsScannerAlloyDb", title = "Sensitive data scanner: AlloyDB login", permissions = local.alloydb_permissions } } : {},
     var.scan_mode != "scanner" ? { sdp = { id = "sdsScannerSdpProfiles", title = "Sensitive data scanner: SDP profiles", permissions = local.sdp_permissions } } : {},
   )
 
@@ -99,6 +107,12 @@ locals {
     SCAN_MODE                 = var.scan_mode != "scanner" ? var.scan_mode : ""
     SDP_LOCATIONS             = var.scan_mode != "scanner" ? join(",", var.sdp_locations) : ""
     GCS_INVENTORY_MIN_OBJECTS = tostring(var.gcs_inventory_min_objects)
+    # The limitations' toggles (docs/limitations.md, #105), always explicit.
+    GCP_SPANNER         = var.read_spanner ? "on" : "off"
+    GCP_ALLOYDB         = var.read_alloydb ? "on" : "off"
+    GCS_READ_ARCHIVE    = var.read_archive_objects ? "on" : "off"
+    GCP_SQLSERVER       = var.read_sqlserver ? "on" : "off"
+    GCP_READ_PUBSUB_DLQ = var.read_pubsub_dead_letters ? "on" : "off"
   }) : k => v if v != "" }
 
   apis = concat(var.scan_mode != "scanner" ? ["dlp.googleapis.com"] : [], [

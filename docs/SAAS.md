@@ -9,6 +9,10 @@ servers never read your SaaS content for this**: they receive findings, the
 same as from the cloud scanners, so they stay out of what your content is in
 scope for.
 
+**Deliberate limitations.** What this scanner does not read, why, the setting
+that changes each and its default, and how a store left unread shows up:
+[limitations.md](limitations.md) (D1 to D5).
+
 It is the same detection, findings contract, budgets, sampling, readers and
 coverage summary as the cloud scanners (the cloud-neutral core,
 `scanner/core`), in its own package (`scanner/saas`, `sensitive_data_saas`)
@@ -414,7 +418,9 @@ no link.
   scanner sends them only to your site (`ATLASSIAN_SITE`, `acme.atlassian.net`)
   as HTTP basic authentication. `ATLASSIAN_API_TOKEN` in the environment is
   refused.
-- **OAuth 2.0 (3LO)**: an app in the Atlassian developer console with exactly
+- **OAuth 2.0 (3LO)**, chosen by name with `ATLASSIAN_AUTH_MODE=oauth`
+  (#105; the default is `token`, the API token above, and each mode refuses
+  the other's settings): an app in the Atlassian developer console with exactly
   the classic scopes `read:jira-work`, `read:confluence-content.all`,
   `read:confluence-space.summary`, `readonly:content.attachment:confluence` and
   `offline_access` (for the refresh token), authorized once by a site admin.
@@ -474,7 +480,7 @@ configuration error.
 |---|---|---|---|---|
 | Microsoft Purview DLP (`vendor:purview`) | Graph security alerts from DLP (`GET /security/alerts_v2`, `serviceSource eq 'microsoftDataLossPrevention'`), updated since the last run | `SecurityAlert.Read.All` (application) | no: an alert names no Graph item, and no kind of data | `alerts_only`, `policy_matches_only`, `item_not_linkable`, `no_data_class` |
 | Google Workspace DLP (`vendor:google_workspace_dlp`) | The Alert Center's `DlpRuleViolation` alerts, created since the last run, one finding per detector | domain-wide delegation of `https://www.googleapis.com/auth/apps.alerts`, as `GWS_ADMIN_USER` | yes, for Drive: the document id is the same `itemHash`, and a predefined detector the same class | `alerts_only`, `policy_matches_only` |
-| Slack DLP (`vendor:slack_dlp`) | Audit Logs API events (`GET https://api.slack.com/audit/v1/logs`) for `SLACK_DLP_AUDIT_ACTIONS` (default `native_dlp_rule_matched`) | an org-level token with `auditlogs:read` (Enterprise Grid), in `SLACK_AUDIT_TOKEN_FILE` | the same `itemHash` for a message or file, but not linked: an event names no kind of data | `enterprise_grid_only`, `policy_matches_only`, `no_data_class` |
+| Slack DLP (`vendor:slack_dlp`) | Audit Logs API events (`GET https://api.slack.com/audit/v1/logs`) for `SLACK_DLP_AUDIT_ACTIONS` (default `native_dlp_rule_matched`) | an org-level token with `auditlogs:read` (Enterprise Grid), in `SLACK_AUDIT_TOKEN_FILE` | by location only (#105): the same `itemHash` for a message or file, whatever the class, since an event names no kind of data (`linkedBy: location`; `LINK_VENDOR_ALERTS_BY_LOCATION=off` never links it) | `enterprise_grid_only`, `policy_matches_only`, `no_data_class` |
 
 **Why Purview is imported here, not by the Azure scanner.** Purview DLP
 watches Microsoft 365 content; its alerts are read through Microsoft Graph with
@@ -488,7 +494,8 @@ offers no read-only scope for it. The scanner only lists alerts, and the
 delegated administrator must hold an admin role whose Alert Center privilege
 is **View** only (Admin console > Account > Admin roles > a custom role >
 Security > Alert Center > View access): Google refuses any change whatever the
-scope. The strict test names it as its one exception, with this reason.
+scope. The strict test names it as its one exception, with this reason. `GWS_ALERT_CENTER=off` (#105) leaves the
+Alert Center unread, and the scope unused.
 
 **Content Explorer** counts (Purview) are not in Graph, only in its
 PowerShell export, so they are not imported. Slack's DLP action names are the
@@ -561,12 +568,19 @@ by its id.
 | `SLACK_EKM_KEY_ID` | | Your Slack EKM key's id |
 | `ATLASSIAN_SITE` | | Your Cloud site (`acme.atlassian.net`); set to scan Jira and Confluence |
 | `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN_FILE` | | A read-only account's address and API token (file) |
-| `ATLASSIAN_OAUTH_CLIENT_ID`, `ATLASSIAN_OAUTH_CLIENT_SECRET_FILE`, `ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE` | | Or OAuth 2.0 (3LO); the refresh token file must be writable |
+| `ATLASSIAN_AUTH_MODE` | `token` | (#105) `token` (the API token, recommended) or `oauth` (3LO); the other mode's settings are refused (`atlassian_auth_mode`) |
+| `ATLASSIAN_OAUTH_CLIENT_ID`, `ATLASSIAN_OAUTH_CLIENT_SECRET_FILE`, `ATLASSIAN_OAUTH_REFRESH_TOKEN_FILE` | | Or OAuth 2.0 (3LO), with `ATLASSIAN_AUTH_MODE=oauth`; the refresh token file must be writable |
 | `JIRA_PROJECTS`, `CONFLUENCE_SPACES` | every one the sign-in can browse | Project and space keys |
 | `ISSUES_MAX_PER_PROJECT`, `PAGES_MAX_PER_SPACE` | 500, 500 | Issues or pages read per project or space per run |
 | `ATLASSIAN_BYOK_KEY_ID` | | Your Atlassian Cloud BYOK key's id |
 | `SCAN_MODE`, `SCAN_MODE_M365`, `SCAN_MODE_GOOGLE_WORKSPACE`, `SCAN_MODE_SLACK` | `scanner` | Each vendor's mode ([Vendor detection](#vendor-detection-scanner-vendor-or-both-55)); Atlassian is `scanner` only |
 | `SLACK_AUDIT_TOKEN_FILE`, `SLACK_DLP_AUDIT_ACTIONS` | , `native_dlp_rule_matched` | Slack's org-level audit token (a file), and the DLP actions read |
+| `M365_MAIL` | on | (#105) `off` lists mailboxes and reads none (`read_not_configured`, naming the setting); on, mail is read only once the grant is proved scoped |
+| `GWS_ALERT_CENTER` | on | (#105) In `vendor` or `both` mode: `off` imports no Alert Center alerts, and `vendorCoverage` says `not_enabled`, naming the setting |
+| `LINK_VENDOR_ALERTS_BY_LOCATION` | on | (#105) In `both` mode: a vendor alert that names no kind of data (Slack DLP's) is linked to the scanner's findings at the same item, `linkedBy: location`; off, never linked |
+
+Every limitation and its setting, with how a store left unread shows up, is
+in [limitations.md](limitations.md).
 
 At least one of `FINDINGS_HTTPS_URL` and `FINDINGS_FILE` is required.
 

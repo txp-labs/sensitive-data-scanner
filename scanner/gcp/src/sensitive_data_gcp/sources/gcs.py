@@ -24,6 +24,9 @@ Nothing is written, copied, rewritten or composed.
   store's `network` gap; a missing permission is `access_denied`; a
   requester-pays bucket (reading would bill the job's project) is
   `requester_pays`.
+- An Archive-class object is counted (`notAllowed`: `archive_class`), not read:
+  reading it has a retrieval fee. `GCS_READ_ARCHIVE` on reads it like any other
+  (#105; the store names that setting, docs/limitations.md).
 
 **Encryption (1.5).** Every object is encrypted at rest. A finding says under
 which key: the object's own `kmsKeyName` (a CMEK, `customer_managed_key`, named
@@ -123,6 +126,7 @@ class GcsAdapter:
             max_rows=s.columnar_max_rows,
             skew_seconds=s.skew_seconds,
             inventory_min_objects=s.gcs_inventory_min_objects,
+            read_archive=s.gcs_read_archive,
         )
 
 
@@ -168,8 +172,10 @@ class GcsSource:
         columnar: bool | None = None,
         page_size: int = 1000,
         inventory_min_objects: int = 1_000_000,
+        read_archive: bool = False,
     ) -> None:
         self.inventory_min_objects = inventory_min_objects
+        self.read_archive = read_archive
         self.rest = rest
         self.t = target
         self.prefix = prefix
@@ -336,6 +342,11 @@ class GcsSource:
         self._op.seen(name)
         if name.endswith("/") or size == 0:
             return cur_dir, cur_n, None  # a folder placeholder or an empty object
+        if not self.read_archive and str(obj.get("storageClass") or "").upper() == "ARCHIVE":
+            # #105: an Archive-class object's read has a retrieval fee: counted, not read,
+            # unless GCS_READ_ARCHIVE is on (the store names that setting).
+            cov.not_allowed["archive_class"] = cov.not_allowed.get("archive_class", 0) + 1
+            return cur_dir, cur_n, None
         updated = _time(obj.get("updated"))
         changed = since is None or updated is None or updated > since
         decision = self._op.decide(name, changed=changed, marker=gcs_marker(obj))

@@ -48,6 +48,22 @@ Parameters:
   M365Sites:
     Type: String
     Default: ""
+  M365Mail:
+    Type: String
+    AllowedValues: ["on", "off"]
+    Default: "on"
+    Description: >-
+      M365_MAIL - read mailboxes once the mail grant is proved scoped (on), or
+      list them and read none (off) (docs/limitations.md, D3).
+  LinkVendorAlertsByLocation:
+    Type: String
+    AllowedValues: ["on", "off"]
+    Default: "on"
+    Description: >-
+      LINK_VENDOR_ALERTS_BY_LOCATION - in both mode, link a vendor alert that
+      names no kind of data to the scanner's findings at the same item
+      (linkedBy location). Purview's alerts name no item, so they stay
+      unlinked (docs/limitations.md, D2).
   StateBucket:
     Type: String
     Description: A bucket of yours for the scanner's state object.
@@ -175,6 +191,8 @@ Resources:
             - { Name: M365_GROUPS, Value: !Ref M365Groups }
             - { Name: M365_MAIL_SCOPE_CHECK, Value: !Ref M365MailScopeCheck }
             - { Name: M365_SITES, Value: !Ref M365Sites }
+            - { Name: M365_MAIL, Value: !Ref M365Mail }
+            - { Name: LINK_VENDOR_ALERTS_BY_LOCATION, Value: !Ref LinkVendorAlertsByLocation }
             - { Name: STATE_LOCATION, Value: !Sub "s3://${StateBucket}/${StateKey}" }
             - { Name: FINDINGS_HTTPS_URL, Value: !Ref FindingsHttpsUrl }
             - { Name: FINDINGS_HMAC_KEY_FILE, Value: /run/secrets/sds/push-key }

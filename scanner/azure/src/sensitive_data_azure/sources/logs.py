@@ -117,7 +117,10 @@ class LogAnalyticsAdapter:
             )
             store.table = WorkspaceTarget(rid, name, str(row.get("customerId") or ""))
             out.stores.append(store)
-            apply_rules(store, ctx.settings.allow, ctx.settings.deny)
+            if apply_rules(store, ctx.settings.allow, ctx.settings.deny) and not (
+                ctx.settings.log_analytics_read
+            ):
+                store.toggle_off("AZURE_LOG_ANALYTICS")  # #105: listed, not read
 
     def source(self, ctx: Context, store: Store) -> LogAnalyticsSource | None:
         t = store.table
