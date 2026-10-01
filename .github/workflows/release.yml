@@ -414,7 +414,7 @@ jobs:
   aws-publish:
     # The Lambda zip, signed with AWS Signer in every approved region by that
     # region's profile and published to its bucket at releases/<version>/ (with
-    # its .sha256 and signing.json), and the
+    # its .sha256 and signing.json, and scanner.yaml for Launch Stack), and the
     # Lambda image copied (same digest) to ECR, which replicates it to the same
     # regions. The account and its role: deploy/artifacts/. Without the
     # repository variable ARTIFACTS_ROLE_ARN every step after the first is
@@ -467,6 +467,13 @@ jobs:
         with:
           name: artifacts
           path: dist
+      # The tag's deploy/scanner.yaml, published below for the Launch Stack links (#117).
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+          path: src
       - if: steps.gate.outputs.enabled == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -548,6 +555,36 @@ jobs:
             put_once "${region}" "${bucket}" "${prefix}/signing.json" "signed/${region}.signing.json"
             # What customers download must be the signed zip, byte for byte.
             test "$(curl -fsS "${url}/${prefix}/${name}" | sha256sum | awk '{print $1}')" = "${sha}"
+          done
+      - name: Publish scanner.yaml to each region (the Launch Stack template)
+        # #117: releases/<version>/scanner.yaml in every region's bucket, so a CloudFormation
+        # quick-create link works in each (README.md, docs/QUICKSTART.md). Write-once like the
+        # zip; the release role's PutObject on releases/* covers it (deploy/artifacts).
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          template="src/deploy/scanner.yaml"
+          # The template must deploy this release's own zip by default.
+          grep -qF "Default: releases/${VERSION}/sensitive-data-scanner-${VERSION}-lambda-python3.12-x86_64.zip" "${template}"
+          sha=$(sha256sum "${template}" | awk '{print $1}')
+          key="releases/${VERSION}/scanner.yaml"
+          for region in ${ARTIFACT_REGIONS}; do
+            bucket="${BUCKET_PREFIX}-${region}"
+            if out=$(aws s3api put-object --region "${region}" --bucket "${bucket}" --key "${key}" \
+                --body "${template}" --content-type "text/yaml" --if-none-match '*' 2>&1); then
+              echo "s3://${bucket}/${key}"
+            elif grep -q PreconditionFailed <<<"${out}"; then
+              echo "::notice::s3://${bucket}/${key} was already published; kept"
+            else
+              echo "${out}"
+              exit 1
+            fi
+            # Anyone can read it, and it is this tag's template, byte for byte.
+            got=$(curl -fsS "https://${bucket}.s3.${region}.amazonaws.com/${key}" | sha256sum | awk '{print $1}')
+            if [ "${got}" != "${sha}" ]; then
+              echo "::error::s3://${bucket}/${key} is not this tag's deploy/scanner.yaml"
+              exit 1
+            fi
           done
       - name: Copy the Lambda image to ECR (replicated to every region)
         if: steps.gate.outputs.enabled == 'true'

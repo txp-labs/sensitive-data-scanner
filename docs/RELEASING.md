@@ -19,7 +19,7 @@ pinned by digest.
 | `sensitive-data-scanner-saas-deploy.tar.gz` | The SaaS scanner's deploy examples: `deploy/saas` (ECS, Azure Container Apps, Cloud Run, Kubernetes) |
 | `sensitive-data-scanner-gcp-terraform.tar.gz` | The Google Cloud deployment: the `deploy/gcp` Terraform module, with its provider lock file |
 | `sensitive_data_scanner-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_core-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_db-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_azure-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_gcp-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_saas-X.Y.Z-py3-none-any.whl` | The Python packages: the AWS scanner, the cloud-neutral core every runner depends on (with the spec, the findings schema and the licenses inside), the databases runner (its drivers are extras), the Azure scanner, the Google Cloud scanner and the SaaS scanner. There is no sdist: the source release is the tag |
-| `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout) |
+| `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout). Both default to the release's own signed zip in the region, with code signing enforced. `scanner.yaml` is also in every approved region's bucket, for the Launch Stack links ([Where the code is](#where-the-code-is), [QUICKSTART.md](QUICKSTART.md)) |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the five images (syft); each image's SBOM is also attached to it in GHCR as a signed cosign attestation |
 | `IMAGE_DIGEST`, `DB_IMAGE_DIGEST`, `AZURE_IMAGE_DIGEST`, `GCP_IMAGE_DIGEST`, `SAAS_IMAGE_DIGEST` | Each image's digest |
 | `owner.repo.<id>.dockerbuild` | buildx's record of each image build (its inputs and timings), attached as it comes |
@@ -37,6 +37,10 @@ pinned by digest.
      `package-lock.json`'s own version;
    - rename `## Unreleased` in `CHANGELOG.md` to `## X.Y.Z — YYYY-MM-DD` and
      leave a fresh `## Unreleased` above it;
+   - run `uv run python ../scripts/launch_stack.py --write` (from `scanner/`): it
+     points the Launch Stack links in `README.md` and `docs/QUICKSTART.md`, and
+     the `CodeS3Key` default of `deploy/scanner.yaml` and
+     `deploy/estate-stackset.yaml`, at X.Y.Z. A test fails until it is run;
    - optionally add `docs/release-notes/vX.Y.Z.md`, which the Release puts
      above the changelog section: what the release proves, and what it does
      not.
@@ -57,7 +61,9 @@ pinned by digest.
      build, push to GHCR, SBOM, cosign signature and SBOM attestation) run in parallel.
    - `aws-publish` signs the zip with AWS Signer in every region, with that
      region's profile, publishes it to the region's bucket with its
-     `.sha256` and `signing.json`, and copies the Lambda image to ECR
+     `.sha256` and `signing.json`, publishes the tag's `deploy/scanner.yaml`
+     there too (write-once, read back anonymously; the Launch Stack links open
+     it), and copies the Lambda image to ECR
      ([Where the code is](#where-the-code-is)). Without the repository
      variable `ARTIFACTS_ROLE_ARN` it logs a notice ("AWS publishing
      skipped") and does nothing else. Its role trusts only `release.yml` at a
@@ -94,6 +100,7 @@ ap-southeast-2**.
 | The signed Lambda zip | `s3://txp-labs-sensitive-data-scanner-<region>/releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip` |
 | Its SHA-256 | the same key plus `.sha256` |
 | How it was signed | `releases/<version>/signing.json`: `version`, `region`, `key`, `sha256`, `signingProfileName`, `signingProfileVersionArn` (the one to allow in that region), `platformId`, `signingJobId` |
+| The CloudFormation template (from the release after 0.5.0, #117) | `releases/<version>/scanner.yaml`, at `https://txp-labs-sensitive-data-scanner-<region>.s3.<region>.amazonaws.com/releases/<version>/scanner.yaml`: the tag's `deploy/scanner.yaml`, whose defaults deploy that version's zip from the region's bucket with code signing enforced. The Launch Stack links open it in CloudFormation's quick-create page |
 | The Lambda image | `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:<version>`, the same digest as in GHCR |
 
 For example, 0.5.0 in eu-west-1:
@@ -107,7 +114,8 @@ For example, 0.5.0 in eu-west-1:
   digest anyway.
 - In `deploy/scanner.yaml`: `CodeS3BucketPrefix=txp-labs-sensitive-data-scanner`
   and `CodeS3Key=releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip`
-  for the zip, or `ImageUri=895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner@sha256:…`
+  for the zip (the defaults, for the template's own version, #117), or
+  `ImageUri=895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner@sha256:…`
   for the image.
 
 **Lambda code signing.** Each region's zip is signed in that region by its
@@ -134,10 +142,12 @@ curl -fsS https://txp-labs-sensitive-data-scanner-eu-west-1.s3.eu-west-1.amazona
   | jq -r .signingProfileVersionArn
 ```
 
-To enforce it, pass your region's ARN as `scanner.yaml`'s
-`CodeSigningProfileVersionArn` (in an estate StackSet, which passes one
-value to every region, set it per region with stack-instance parameter
-overrides). The template attaches a code signing config with
+`scanner.yaml` enforces it by default (#117): its
+`CodeSigningProfileVersionArn` defaults to `release`, which takes this
+table's ARN for the stack's own region (the template's `ReleaseSigning`
+mapping, held equal to this table and to `release.yml` by a test), so one
+value serves every region of an estate StackSet. Pass an ARN to allow
+another profile version, or leave it empty for no code signing config. The template attaches a code signing config with
 `UntrustedArtifactOnDeployment: Enforce`, so Lambda refuses a zip this
 profile did not sign or that changed after signing. Or allow it in your own
 code signing config, for example in us-west-2:

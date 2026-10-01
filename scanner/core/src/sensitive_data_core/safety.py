@@ -78,6 +78,9 @@ EVENTS: Final = frozenset(
         # needs a grant the deployed role lacks (by setting and template parameter).
         "config.pull_failed",
         "config.gated",
+        # The standalone report (#117): report.html and findings.csv beside the findings
+        # document could not be written (by error name); the findings document was.
+        "report.failed",
     }
 )
 

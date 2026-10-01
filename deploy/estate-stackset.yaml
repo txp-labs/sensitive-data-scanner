@@ -42,18 +42,21 @@ Parameters:
       the region's registry domain, or use the zip.
   CodeS3BucketPrefix:
     Type: String
-    Default: ""
+    Default: txp-labs-sensitive-data-scanner
+    Description: For the zip, as scanner.yaml takes it (default txp-labs' release bucket per region).
   CodeS3Key:
     Type: String
-    Default: ""
+    # Kept equal to scanner.yaml's default by scripts/launch_stack.py (#117).
+    Default: releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip
   CodeSigningProfileVersionArn:
     Type: String
-    Default: ""
+    Default: release
     Description: >-
-      For the zip, the signing profile version scanner.yaml enforces (empty for
-      none). Each region has its own (docs/RELEASING.md): with more than one
-      region, leave this empty and set it per region with stack-instance
-      parameter overrides.
+      For the zip, the signing profile version scanner.yaml enforces. release
+      (the default): each region's own txp-labs profile version, from
+      scanner.yaml's table, so one value serves every region. An ARN holds in
+      one region only (set it per region with stack-instance parameter
+      overrides). Empty: none.
   Discover:
     Type: String
     Default: all

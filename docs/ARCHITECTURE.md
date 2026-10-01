@@ -42,7 +42,8 @@ Lambda: sensitive_data_scanner.handler.handler   (container image or zip)
         ├── S3: ListObjectsV2, GetObject ──────────► results bucket
         │     named or discovered buckets             findings/latest.json
         ├── CloudWatch Logs: FilterLogEvents          findings/runs/<runId>.json
-        │     named or discovered log groups          state/ (cursors, lock)
+        │     named or discovered log groups          findings/report.html, findings.csv
+        │                                             state/ (cursors, lock)
         ├── DynamoDB: DescribeTable, Query / Scan
         │     named or discovered tables
         ├── RDS, Aurora, Glue tables, Redshift, ... (discovered; see Discovery)
@@ -126,6 +127,17 @@ One run:
 5. **Findings.**
    - The run writes the document to `findings/runs/<runId>.json` and
      `findings/latest.json`, then state for the next run.
+   - Next to it, the **standalone report** (#117): `findings/report.html`,
+     one self-contained page (inline CSS, no script, no request of any kind,
+     light and dark, printable), and `findings/findings.csv`, one row per
+     finding location. The core makes both from the document alone
+     (`sensitive_data_core/report.py`, `report_files`), masking every string
+     again, so the other runners can write them too; `tests/test_no_leak.py`
+     checks neither holds a value. `REPORT_CTA=false` (`ReportCta`) leaves out
+     the footer's line about Mermera's early access. A report that cannot be
+     written is logged (`report.failed`) and does not fail the run. A sample,
+     made from the benchmark corpus:
+     [docs/sample-report/](sample-report/report.html).
    - With `FINDINGS_EVENT_BUS_ARN` set, it also sends the document to that
      bus as `Findings v1` events (see Delivery). The events client is made
      in the bus's own region, taken from its ARN (`arn:aws:events:<region>:...`),
@@ -2084,12 +2096,14 @@ management or delegated-admin account
      profile: `CodeS3BucketPrefix` `txp-labs-sensitive-data-scanner` and
      `CodeS3Key`
      `releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip`.
-     To have Lambda refuse any other code, also pass
-     `CodeSigningProfileVersionArn`, the region's profile version ARN
-     ([RELEASING.md](RELEASING.md#where-the-code-is), or the region's
-     `releases/<version>/signing.json`), as a per-region stack-instance
-     override: the template then attaches a code signing config that
-     enforces it.
+     These are the templates' defaults (#117), naming the release the
+     template was published with. `CodeSigningProfileVersionArn` defaults to
+     `release`: the template looks up the region's own profile version
+     ([RELEASING.md](RELEASING.md#where-the-code-is)) and attaches a code
+     signing config that enforces it, so Lambda refuses any other code and
+     one StackSet value serves every region. An ARN instead holds in one
+     region only (a per-region stack-instance override); empty turns code
+     signing off.
 
    To host the code yourself instead, push the release image to your own
    ECR repository, replicate it to every region scanned, and give the

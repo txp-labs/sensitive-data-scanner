@@ -598,6 +598,9 @@ class Config:
     # #109: the template's own secret holding the Mermera key (FINDINGS_HMAC_KEY_SECRET): the
     # Secrets Manager source never reads it as data. An ARN, not a value.
     own_secret_arn: str | None = None
+    # #117: the standalone report (findings/report.html and findings.csv) ends with a soft
+    # call to action for Mermera's early access; REPORT_CTA=false leaves it out.
+    report_cta: bool = True
     settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
@@ -791,6 +794,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
             e.get("FINDINGS_HMAC_KEY_SECRET"),
         ),
         own_secret_arn=_own_secret(e.get("FINDINGS_HMAC_KEY_SECRET")),
+        report_cta=_bool(e.get("REPORT_CTA") or "true"),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn

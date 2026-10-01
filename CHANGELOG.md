@@ -6,6 +6,54 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- **A standalone report, and a one-click quick start on AWS** ([#117](https://github.com/txp-labs/sensitive-data-scanner/issues/117)):
+  - Every AWS run writes `findings/report.html` and `findings/findings.csv`
+    next to `findings/latest.json` in its results bucket. The page is one
+    self-contained file (inline CSS, no script, no request of any kind, a
+    Content-Security-Policy that forbids them; light and dark; printable):
+    what was scanned and what was not, each gap with the setting that would
+    read it; findings by data type, by store and by location, with console
+    links; the storage-class inventory and cost-to-scan estimate (schema
+    1.13); the scanner version, the run, and where its code's signature is.
+    The CSV has one row per finding location (type, severity, count,
+    confidence, store, location, region, first and last seen), with cells
+    that would start a spreadsheet formula quoted.
+  - The core makes both from the findings document alone
+    (`sensitive_data_core.report.report_files`), masking every string
+    again, so the other runners can write them too. The no-leak suite now
+    reads both outputs as written, entity-decoded, URL-decoded, as page text
+    and with digit groups joined, for values planted in the data and in
+    bucket, key, log group and stream names; and the sample below against
+    every value planted in the benchmark corpus. Snapshot tests, and an
+    accessibility check (one h1, no skipped heading level, captioned tables
+    with scoped headers, link text, WCAG AA contrast in both color schemes
+    measured from the page's own CSS).
+  - `REPORT_CTA` (`ReportCta`, on by default) ends the page with one line
+    inviting the reader to Mermera's early access; `false` leaves it out. A
+    report that cannot be written is logged (`report.failed`) and does not
+    fail the run.
+  - `deploy/scanner.yaml` (and `estate-stackset.yaml`) now default to the
+    release's own signed zip in the stack's region (`CodeS3BucketPrefix`
+    `txp-labs-sensitive-data-scanner`, `CodeS3Key` of the template's version)
+    and to `CodeSigningProfileVersionArn` `release`: that region's txp-labs
+    signing profile version, from a table in the template, so code signing
+    is enforced by default and one StackSet value serves every region.
+    New parameter `MaxBytesPerRun` (`MAX_BYTES_PER_RUN`), and the `Report`
+    output.
+  - The release workflow publishes `scanner.yaml` to every approved
+    region's bucket at `releases/<version>/scanner.yaml`, write-once and
+    read back anonymously, so CloudFormation's quick-create works in each.
+    [docs/QUICKSTART.md](docs/QUICKSTART.md) and the README have a Launch
+    Stack link per region (us-east-1, us-east-2, us-west-2, ca-central-1,
+    eu-west-1, eu-central-1, ap-southeast-2) with a 256 MiB first run, and
+    the steps to run it, open the report and remove it.
+    `scripts/launch_stack.py` keeps the links and the templates' defaults on
+    the current version. The links work from the first release made after
+    this change.
+  - A sample report from the benchmark corpus:
+    [docs/sample-report/](docs/sample-report/report.html), with a screenshot.
+
 ### Fixed
 - **The release role can let AWS Signer check its buckets** ([#108](https://github.com/txp-labs/sensitive-data-scanner/issues/108)):
   v0.5.0's first release run stopped at `StartSigningJob` with "S3 bucket ...

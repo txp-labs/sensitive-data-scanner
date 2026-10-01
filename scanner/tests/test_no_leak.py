@@ -12,9 +12,11 @@ exception carries a message from below.
 from __future__ import annotations
 
 import ast
+import html
 import json
 import logging
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +71,22 @@ def leaks(blob: str) -> list[str]:
     if re.search(rf"\b{DIGIT_WORD}(?:[ ,]+{DIGIT_WORD}){{3,}}\b", blob, re.I):
         found.append("<spoken digits>")
     return found
+
+
+def views(blob: str) -> list[tuple[str, str]]:
+    """An output as each reader of it could see it (#117): as written; with HTML entities
+    decoded (`&#52;` and `&amp;`); URL-decoded (a console link's `prefix=`); as an HTML
+    page's text, tags removed; and that text with the spaces, dashes and dots between
+    digits removed, so a value split by markup or grouping is found too."""
+    unescaped = html.unescape(blob)
+    page_text = html.unescape(re.sub(r"<[^>]*>", "", blob))
+    return [
+        ("raw", blob),
+        ("entities decoded", unescaped),
+        ("url decoded", urllib.parse.unquote_plus(unescaped)),
+        ("page text", page_text),
+        ("digits joined", re.sub(r"(?<=[0-9])[ .\-](?=[0-9])", "", page_text)),
+    ]
 
 
 def chat_document(case: dict[str, Any]) -> str:
@@ -155,8 +173,11 @@ def test_no_value_in_findings_events_or_logs(
         if obj["Key"].startswith("findings/"):
             data = env.clients.s3.get_object(Bucket=RESULTS, Key=obj["Key"])["Body"].read()
             outputs[obj["Key"]] = data.decode()
+    # The standalone report (#117) is written beside the findings document.
+    assert {"findings/report.html", "findings/findings.csv"} <= set(outputs)
     for name, blob in outputs.items():
-        assert leaks(blob) == [], name
+        for view, text in views(blob):
+            assert leaks(text) == [], (name, view)
 
 
 def ddb_items() -> list[dict[str, Any]]:
@@ -3096,3 +3117,93 @@ def test_no_vendor_snippet_or_matched_text_passes_through_the_saas_importers(
             assert leaks(blob) == [], (i, where)
             for text in secret_texts:
                 assert text not in blob, (i, where, text)
+
+
+# ------------------------------------------------------------------ the standalone report (#117)
+
+
+def _report_outputs(env: Env) -> dict[str, str]:
+    s3 = env.clients.s3
+    return {
+        key: s3.get_object(Bucket=RESULTS, Key=key)["Body"].read().decode()
+        for key in ("findings/report.html", "findings/findings.csv")
+    }
+
+
+def test_no_value_leaves_the_report_or_the_csv(
+    env: Env, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """report.html and findings.csv (#117), from a run whose data holds values in every
+    stored form and whose store, key, log group and stream names hold them too (dashed,
+    spaced, in markup, behind a spreadsheet formula), searched as written, entity-decoded,
+    URL-decoded, as page text and with digit groups joined."""
+    import sensitive_data_scanner.handler  # noqa: F401 - sets library log levels as in Lambda
+
+    s3 = env.clients.s3
+    bucket = f"{CARDS['visa']}-exports"
+    s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+    names = [
+        f"cust/{dashed(SSN_A)}/statement.txt",
+        f"cards/{spaced(CARDS['amex'])}.txt",
+        f"<b>{SSN_B}</b>&amp;{CARDS['mastercard']}.txt",
+        f'=HYPERLINK("{CARDS["discover"]}").csv',
+        f"+{SSN_B}.log",
+    ]
+    for i, key in enumerate(names):
+        body = STORED[i % len(STORED)][1]
+        s3.put_object(Bucket=bucket, Key=key, Body=body.encode())
+    for key, body in STORED:
+        env.put(key, body)
+    t = epoch_ms(__import__("datetime").datetime.now(__import__("datetime").UTC)) - 3_600_000
+    env.log(f"/app/cust-{SSN_B}", f"stream-{CARDS['jcb']}", [(t, f"ssn {dashed(SSN_A)}")])
+    sent = _bus(env)
+    doc = env.run(
+        config(
+            discover=frozenset({"s3", "cloudwatch_logs"}),
+            event_bus_arn="arn:aws:events:x:1:b/c",
+        )
+    )
+    assert doc is not None
+    assert doc["findingsTotal"] >= len(names)
+    out = _report_outputs(env) | _outputs(env, sent, capsys, caplog)
+    assert out["findings/report.html"].count("#") > 20  # the names are there, masked
+    for name, blob in out.items():
+        for view, text in views(blob):
+            assert leaks(text) == [], (name, view)
+
+
+def test_the_report_masks_a_name_that_was_not_masked_upstream() -> None:
+    """The report masks every string it takes from the document again, so a name that
+    slipped past masking upstream (a future adapter's bug) is masked here too."""
+    from sensitive_data_core.report import findings_csv, report_html
+
+    doc = json.loads((Path(__file__).parent / "fixtures" / "report" / "findings.json").read_text())
+    doc["findings"][0]["resource"]["key"] = f"leak/{CARDS['visa']}/{dashed(SSN_A)}.csv"
+    doc["findings"][1]["resource"]["key"] = f"leak/{SSN_B}"
+    doc["discovery"]["stores"][0]["name"] = f"wh-{spaced(CARDS['amex'])}"
+    doc["coverage"][0]["target"] = f"{CARDS['jcb']}/"
+    doc["listErrors"] = {}
+    for blob in (report_html(doc), report_html(doc, cta=False), findings_csv(doc)):
+        for view, text in views(blob):
+            assert leaks(text) == [], view
+
+
+def test_no_value_planted_in_the_benchmark_corpus_reaches_the_sample_report() -> None:
+    """docs/sample-report/ is made from the benchmark corpus (tests/sample_report.py):
+    none of the values planted there, sensitive or a look-alike, is in it, in any view."""
+    from bench_corpus import build_corpus
+
+    sample = Path(__file__).resolve().parents[2] / "docs" / "sample-report"
+    planted_values = {
+        re.sub(r"[^0-9]", "", v)
+        for d in build_corpus()
+        for v in d.values
+        if len(re.sub(r"[^0-9]", "", v)) >= 9
+    }
+    assert len(planted_values) > 500
+    for name in ("report.html", "findings.csv"):
+        blob = (sample / name).read_text()
+        for view, text in views(blob):
+            joined = re.sub(r"(?<=[0-9])[^0-9A-Za-z<>]{1,3}(?=[0-9])", "", text)
+            found = [v for v in planted_values if re.search(rf"(?<![0-9]){v}(?![0-9])", joined)]
+            assert found == [], (name, view, len(found))

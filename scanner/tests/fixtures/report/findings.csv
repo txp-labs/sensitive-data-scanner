@@ -1,0 +1,8 @@
+finding_id,data_type,severity,count,occurrences,confidence,store_kind,store,location,region,first_seen,last_seen,at_rest_encryption,source,console_link
+00000000000000000000000000000001,card,high,42,42,high,s3,example-exports,billing/2026/09/cards.csv,us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,https://us-west-2.console.aws.amazon.com/s3/object/example-exports?region=us-west-2&bucketType=general&prefix=billing%2F2026%2F09%2Fcards.csv&versionId=null
+00000000000000000000000000000002,us_ssn,high,3,3,medium,s3,example-exports,'=cmd|calc/####-##-####.txt,us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,
+00000000000000000000000000000003,card,high,1,1,high,cloudwatch_logs,/aws/lambda/payments,2026/09/28/[$LATEST]abc / event at 2025-09-28 06:00:00 UTC,us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,
+00000000000000000000000000000004,us_ssn,high,1,1,high,dynamodb,customers,"pk=CUST#t_#########, sk=PROFILE / profile.ssn",us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,
+00000000000000000000000000000005,dob,medium,120,120,medium,rds,orders-db,app.customers.dob,us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,
+00000000000000000000000000000006,account_number,medium,7,7,low,redshift,analytics,dev.public.events.payload,us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,
+00000000000000000000000000000007,us_ssn_last4,low,2,2,low,s3,example-exports,archive/old.zip > inner/notes.txt,us-west-2,2026-09-28T06:00:00+00:00,2026-09-29T06:00:00+00:00,service_managed,scanner,

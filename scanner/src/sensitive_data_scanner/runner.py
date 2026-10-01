@@ -7,6 +7,8 @@ kinds that discovery lists and the allow and deny lists let through
 
 - `findings/latest.json` and `findings/runs/<runId>.json`: the findings
   document (schema/findings.schema.json);
+- `findings/report.html` and `findings/findings.csv`: the latest run as a
+  self-contained page and a spreadsheet, no values (sensitive_data_core.report, #117);
 - `state/scanner-state.json`: each source's cursor and the findings carried
   between runs, for the next run only (a consumer never needs it);
 - `state/lock.json`: one run at a time.
@@ -46,6 +48,7 @@ from sensitive_data_core.index import (
     relist,
 )
 from sensitive_data_core.modes import BOTH, SCANNER, VENDOR, VendorCoverage, link_duplicates
+from sensitive_data_core.report import report_files
 from sensitive_data_core.safety import ScanError, error_name, is_kms_denial, log_event
 from sensitive_data_core.schedule import run_sources
 
@@ -118,6 +121,8 @@ class Clients:
 class Keys:
     def __init__(self, prefix: str) -> None:
         self.latest = f"{prefix}findings/latest.json"
+        # The standalone report (#117), next to latest.json: report.html and findings.csv.
+        self.report = f"{prefix}findings/"
         self.runs = f"{prefix}findings/runs/"
         self.state = f"{prefix}state/scanner-state.json"
         self.lock = f"{prefix}state/lock.json"
@@ -158,6 +163,16 @@ def _put_json(s3: S3Client, bucket: str, key: str, body: Any) -> None:
         Body=json.dumps(body, separators=(",", ":")).encode(),
         ContentType="application/json",
     )
+
+
+def _put_report(s3: S3Client, bucket: str, prefix: str, doc: dict[str, Any], cta: bool) -> None:
+    """report.html and findings.csv next to the findings document (#117). A failure is
+    logged by name and does not fail the run: the findings document is already written."""
+    try:
+        for name, body, content_type in report_files(doc, cta=cta):
+            s3.put_object(Bucket=bucket, Key=f"{prefix}{name}", Body=body, ContentType=content_type)
+    except Exception as err:
+        log_event("report.failed", error=error_name(err))
 
 
 def _take_lock(s3: S3Client, bucket: str, key: str, run_id: str) -> bool:
@@ -688,6 +703,7 @@ def run_scan(
         _put_json(clients.s3, bucket, keys.state, new_state)
         _put_json(clients.s3, bucket, f"{keys.runs}{run_id}.json", doc)
         _put_json(clients.s3, bucket, keys.latest, doc)
+        _put_report(clients.s3, bucket, keys.report, doc, config.report_cta)
         if config.event_bus_arn and clients.events is not None:
             put_findings_events(clients.events, config.event_bus_arn, doc)
         log_event(
