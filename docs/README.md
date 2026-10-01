@@ -27,7 +27,7 @@ detects, how it stays safe, and how proven each path is.
 | Document | What it covers |
 |---|---|
 | [FINDINGS.md](FINDINGS.md) | The findings contract: the versioned JSON Schema, every resource kind, sources and modes, masking, encryption and PCI DSS notes, the coverage and run summary |
-| [RELEASING.md](RELEASING.md) | What a release contains (images, zip, SBOMs, checksums), how one is cut, and what is still to be decided (signing) |
+| [RELEASING.md](RELEASING.md) | What a release contains (images, zip, SBOMs, checksums, the template in each region), how one is cut, where the signed code is in each AWS region, how to verify a release, and what is still to be decided |
 | [release-notes/](release-notes) | Each release's notes: what is proven by tests, what has run in a real account, and what is not yet proven |
 | [CHANGELOG.md](../CHANGELOG.md) | Every change, by release |
 

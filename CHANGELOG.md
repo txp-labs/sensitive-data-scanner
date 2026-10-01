@@ -6,6 +6,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-01
+
 ### Feature
 - **A standalone report, and a one-click quick start on AWS** ([#117](https://github.com/txp-labs/sensitive-data-scanner/issues/117)):
   - Every AWS run writes `findings/report.html` and `findings/findings.csv`

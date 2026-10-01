@@ -72,7 +72,7 @@ These are two separate numbers:
   changes only when a release is cut (`docs/RELEASING.md`). Between
   releases, a commit on `main` keeps the last release's version even when
   the spec under it has moved on. So the package said 0.2.0 at the spec 0.3
-  commit, and it says 0.5.0 from release 0.5.0 on (0.3.0 was prepared and never published).
+  commit, and it says 0.6.0 from release 0.6.0 on (0.3.0 was prepared and never published).
 - **The spec version** (`SPEC_VERSION`, and `specVersion` in the spec files
   and in `loadSpec().specVersion`) follows the **spec**
   (`spec/README.md`, Stability). It changes whenever the contract does, in

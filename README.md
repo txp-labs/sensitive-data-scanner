@@ -15,9 +15,11 @@ leave it**: where, what kind, how many and how sure. Never a value.
   anywhere, and SaaS (Microsoft 365, Google Workspace, Slack, Jira and
   Confluence).
 
-> **Status: early.** Released: **v0.4.0** (1 Oct 2026), which includes the
-> 0.3.0 that was prepared and never published. v0.5.0, the first signed
-> release, is in preparation. Proven on real accounts so
+> **Status: early.** Released: **v0.6.0** (1 Oct 2026). v0.5.0 was the first
+> signed release: the code is hosted in 7 AWS regions, the spec is on npm with
+> provenance, storage classes are reported with a cost to scan, and every
+> limit has its switch. v0.6.0 adds a standalone report after every run and a
+> one-click Launch Stack quick start. Proven on real accounts so
 > far: whole-account runs in two development AWS accounts (S3, CloudWatch
 > Logs, Lambda configuration, SSM, X-Ray, Step Functions and DynamoDB read
 > for real, with no values in the output), and one SharePoint site in a test
@@ -36,17 +38,17 @@ and location. Never a value.
 and the cleanup.
 
 <!-- launch-stack:start -->
-Version 0.5.0. Each button opens CloudFormation's quick-create page in that region with the release's own template.
+Version 0.6.0. Each button opens CloudFormation's quick-create page in that region with the release's own template.
 
 | Region | | Launch |
 |---|---|---|
-| US East (N. Virginia) | `us-east-1` | [![Launch Stack in us-east-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-east-1.s3.us-east-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
-| US East (Ohio) | `us-east-2` | [![Launch Stack in us-east-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-east-2.s3.us-east-2.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
-| US West (Oregon) | `us-west-2` | [![Launch Stack in us-west-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-west-2.s3.us-west-2.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
-| Canada (Central) | `ca-central-1` | [![Launch Stack in ca-central-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-ca-central-1.s3.ca-central-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
-| Europe (Ireland) | `eu-west-1` | [![Launch Stack in eu-west-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-eu-west-1.s3.eu-west-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
-| Europe (Frankfurt) | `eu-central-1` | [![Launch Stack in eu-central-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-eu-central-1.s3.eu-central-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
-| Asia Pacific (Sydney) | `ap-southeast-2` | [![Launch Stack in ap-southeast-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-ap-southeast-2.s3.ap-southeast-2.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| US East (N. Virginia) | `us-east-1` | [![Launch Stack in us-east-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-east-1.s3.us-east-1.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| US East (Ohio) | `us-east-2` | [![Launch Stack in us-east-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-east-2.s3.us-east-2.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| US West (Oregon) | `us-west-2` | [![Launch Stack in us-west-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-west-2.s3.us-west-2.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Canada (Central) | `ca-central-1` | [![Launch Stack in ca-central-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-ca-central-1.s3.ca-central-1.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Europe (Ireland) | `eu-west-1` | [![Launch Stack in eu-west-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-eu-west-1.s3.eu-west-1.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Europe (Frankfurt) | `eu-central-1` | [![Launch Stack in eu-central-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-eu-central-1.s3.eu-central-1.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Asia Pacific (Sydney) | `ap-southeast-2` | [![Launch Stack in ap-southeast-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-ap-southeast-2.s3.ap-southeast-2.amazonaws.com%2Freleases%2F0.6.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
 <!-- launch-stack:end -->
 
 - It runs entirely in your account, read-only, with explicit denies on
@@ -156,7 +158,9 @@ Jira and Confluence have no detection of their own to import: scanner only.
   signed SBOM attestations), the Lambda zip with AWS Signer in each region,
   so Lambda can enforce code signing, and the npm package with provenance
   ([Verifying a release](docs/RELEASING.md#verifying-a-release)).
-- A threat model is being written; it will be linked here.
+- **Threat model:** [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md): assets,
+  trust boundaries, STRIDE per boundary, and the code and tests that hold
+  each mitigation.
 
 ## Efficiency
 
@@ -225,11 +229,14 @@ All the documentation: [docs/README.md](docs/README.md).
 | AWS: whole-account runs | **Proven on real accounts**: whole-account runs (`DISCOVER=all`) in two development AWS accounts. mermera-dev on 30 Sep 2026: 776 stores discovered, 753 read over three runs, the rest reported with a reason. stugum-dev on 1 Oct 2026: 147 sources. No values in either run's output, and no leaks. In mermera-dev, CloudTrail shows no write by the scanner's role but to its own log stream. Neither run completed a first pass of every large store. The problems they found are fixed in v0.4.0 ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), [#101](https://github.com/txp-labs/sensitive-data-scanner/issues/101)), and the fixes are not yet re-run in a real account |
 | AWS: S3, CloudWatch Logs, Lambda configuration, SSM Parameter Store, X-Ray, Step Functions, DynamoDB | **Proven by real reads** in those runs. DynamoDB also by the v0.2.0 run of 29 Sep 2026 on one named table (37 findings on the positive control, 0 on the negative) |
 | Microsoft 365: SharePoint | **Proven on a real account**, one site only: a run from `main` on 30 Sep 2026, locally, against one SharePoint site in a test tenant, with a certificate app and `Sites.Selected`. 72 files read; both planted findings found (a card in a `.docx` renamed `.png`, an SSN inside a zip); no values in the output. It found a site-naming bug ([#83](https://github.com/txp-labs/sensitive-data-scanner/issues/83)), fixed in v0.4.0 |
+| Microsoft 365: settings from Mermera | **Proven on a real account**: on 1 Oct 2026 the SharePoint run pulled its settings from Mermera through `ingest.dev.mermera.com` (runner config contract 1, findings schema 1.13) |
+| Releases: signing and hosting | **Proven by the v0.5.0 release run** (1 Oct 2026): the Lambda zip signed with AWS Signer in all 7 regions, each published write-once and read back anonymously, and `@txp-labs/sensitive-data-spec@0.5.0` published to npm with provenance |
 | Databases: PostgreSQL 16, MySQL 8.4 | Real engines in containers in CI: read-only users read, users that can write refused, data unchanged |
 | AWS: every other store, the opt-in reads (RDS and Aurora by export included), the StackSet rollout across an organization | Tested against simulated services (moto, botocore's Stubber); the template linted and checked against the code's calls. Not yet read in a real account |
 | Azure, Google Cloud | Tested against simulated services; the Bicep and Terraform linted and tested offline. Not yet run in a real tenant or organization |
 | SaaS other than SharePoint (Microsoft 365 mail, OneDrive and Teams; Google Workspace; Slack; Jira; Confluence) | Tested against simulated vendor APIs. Not yet run against a real tenant |
 | SQL Server, Oracle, MongoDB, Snowflake, Databricks | Tested against simulated drivers only |
+| Storage classes and cost to scan (0.5.0), the standalone report and the Launch Stack quick start (0.6.0) | Tested against simulated services only. Not yet proven in a real account: the Launch Stack links work once the v0.6.0 release run has published `scanner.yaml` in each region, and the quick start has not yet been walked end to end in a real account |
 | Detection | Every vector in `vectors/`, through the spec engine, through Presidio, and through the TypeScript package, which must agree |
 
 Not yet measured: throughput and cold start at scale. Not yet built: the

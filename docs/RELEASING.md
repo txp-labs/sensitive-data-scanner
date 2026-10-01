@@ -100,7 +100,7 @@ ap-southeast-2**.
 | The signed Lambda zip | `s3://txp-labs-sensitive-data-scanner-<region>/releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip` |
 | Its SHA-256 | the same key plus `.sha256` |
 | How it was signed | `releases/<version>/signing.json`: `version`, `region`, `key`, `sha256`, `signingProfileName`, `signingProfileVersionArn` (the one to allow in that region), `platformId`, `signingJobId` |
-| The CloudFormation template (from the release after 0.5.0, #117) | `releases/<version>/scanner.yaml`, at `https://txp-labs-sensitive-data-scanner-<region>.s3.<region>.amazonaws.com/releases/<version>/scanner.yaml`: the tag's `deploy/scanner.yaml`, whose defaults deploy that version's zip from the region's bucket with code signing enforced. The Launch Stack links open it in CloudFormation's quick-create page |
+| The CloudFormation template (from 0.6.0, #117) | `releases/<version>/scanner.yaml`, at `https://txp-labs-sensitive-data-scanner-<region>.s3.<region>.amazonaws.com/releases/<version>/scanner.yaml`: the tag's `deploy/scanner.yaml`, whose defaults deploy that version's zip from the region's bucket with code signing enforced. The Launch Stack links open it in CloudFormation's quick-create page |
 | The Lambda image | `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:<version>`, the same digest as in GHCR |
 
 For example, 0.5.0 in eu-west-1:
