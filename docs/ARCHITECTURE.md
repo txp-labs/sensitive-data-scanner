@@ -2051,13 +2051,16 @@ management or delegated-admin account
    - the image, `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner`,
      which any account's Lambda may pull. Pass it as `ImageUri` (by digest).
      The image is recommended because it reads Parquet and ORC;
-   - the zip, signed with AWS Signer: `CodeS3BucketPrefix`
-     `txp-labs-sensitive-data-scanner` and `CodeS3Key`
+   - the zip, signed with AWS Signer in each region by that region's
+     profile: `CodeS3BucketPrefix` `txp-labs-sensitive-data-scanner` and
+     `CodeS3Key`
      `releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip`.
      To have Lambda refuse any other code, also pass
-     `CodeSigningProfileVersionArn`
-     `arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5`:
-     the template then attaches a code signing config that enforces it.
+     `CodeSigningProfileVersionArn`, the region's profile version ARN
+     ([RELEASING.md](RELEASING.md#where-the-code-is), or the region's
+     `releases/<version>/signing.json`), as a per-region stack-instance
+     override: the template then attaches a code signing config that
+     enforces it.
 
    To host the code yourself instead, push the release image to your own
    ECR repository, replicate it to every region scanned, and give the

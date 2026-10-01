@@ -20,7 +20,6 @@ pinned by digest.
 | `sensitive-data-scanner-gcp-terraform.tar.gz` | The Google Cloud deployment: the `deploy/gcp` Terraform module, with its provider lock file |
 | `sensitive_data_scanner-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_core-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_db-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_azure-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_gcp-X.Y.Z-py3-none-any.whl`, `sensitive_data_scanner_saas-X.Y.Z-py3-none-any.whl` | The Python packages: the AWS scanner, the cloud-neutral core every runner depends on (with the spec, the findings schema and the licenses inside), the databases runner (its drivers are extras), the Azure scanner, the Google Cloud scanner and the SaaS scanner. There is no sdist: the source release is the tag |
 | `scanner.yaml`, `estate-stackset.yaml` | The estate rollout templates: the scanner for one account and region, and the service-managed StackSet that deploys it across an organization (`docs/ARCHITECTURE.md`, Estate rollout) |
-| `sensitive-data-scanner-X.Y.Z-lambda-python3.12-x86_64-signed.zip` | The Lambda zip signed with AWS Signer: the same bytes as in the regional buckets ([Where the code is](#where-the-code-is)). Present when AWS publishing is configured |
 | `*-lambda.spdx.json`, `*-image.spdx.json` | SPDX SBOMs of the zip and the five images (syft); each image's SBOM is also attached to it in GHCR as a signed cosign attestation |
 | `IMAGE_DIGEST`, `DB_IMAGE_DIGEST`, `AZURE_IMAGE_DIGEST`, `GCP_IMAGE_DIGEST`, `SAAS_IMAGE_DIGEST` | Each image's digest |
 | `owner.repo.<id>.dockerbuild` | buildx's record of each image build (its inputs and timings), attached as it comes |
@@ -56,8 +55,9 @@ pinned by digest.
      heading agree.
    - Then `artifacts` (zip, wheels, SBOM), `image`, `db-image`, `azure-image`, `gcp-image` and `saas-image` (each:
      build, push to GHCR, SBOM, cosign signature and SBOM attestation) run in parallel.
-   - `aws-publish` signs the zip with AWS Signer, uploads it to every
-     region's bucket and copies the Lambda image to ECR
+   - `aws-publish` signs the zip with AWS Signer in every region, with that
+     region's profile, publishes it to the region's bucket with its
+     `.sha256` and `signing.json`, and copies the Lambda image to ECR
      ([Where the code is](#where-the-code-is)). Without the repository
      variable `ARTIFACTS_ROLE_ARN` it logs a notice ("AWS publishing
      skipped") and does nothing else. Its role trusts only `release.yml` at a
@@ -84,7 +84,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 ## Where the code is
 
 Lambda takes a zip only from S3, and an image only from ECR, in the
-function's own region. From 0.4.1, every release is published to the
+function's own region. From 0.5.0, every release is published to the
 txp-labs-artifacts account (`895544787721`) in each approved region:
 **us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-central-1,
 ap-southeast-2**.
@@ -93,10 +93,11 @@ ap-southeast-2**.
 |---|---|
 | The signed Lambda zip | `s3://txp-labs-sensitive-data-scanner-<region>/releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip` |
 | Its SHA-256 | the same key plus `.sha256` |
+| How it was signed | `releases/<version>/signing.json`: `version`, `region`, `key`, `sha256`, `signingProfileName`, `signingProfileVersionArn` (the one to allow in that region), `platformId`, `signingJobId` |
 | The Lambda image | `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:<version>`, the same digest as in GHCR |
 
-For example, 0.4.1 in eu-west-1:
-`s3://txp-labs-sensitive-data-scanner-eu-west-1/releases/0.4.1/sensitive-data-scanner-0.4.1-lambda-python3.12-x86_64.zip`.
+For example, 0.5.0 in eu-west-1:
+`s3://txp-labs-sensitive-data-scanner-eu-west-1/releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip`.
 
 - Anyone can read `releases/*` (`s3:GetObject`, nothing else: no listing).
   The objects are write-once: the bucket refuses any put under `releases/`
@@ -109,21 +110,40 @@ For example, 0.4.1 in eu-west-1:
   for the zip, or `ImageUri=895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner@sha256:…`
   for the image.
 
-**Lambda code signing.** The zip is signed by the AWS Signer profile
-`TxpLabsSensitiveDataScanner`, version ARN:
+**Lambda code signing.** Each region's zip is signed in that region by its
+own AWS Signer profile, `TxpLabsSensitiveDataScanner` (platform
+`AWSLambda-SHA384-ECDSA`), so the signatures differ between regions. A
+function's code signing config allows the profile version **of its own
+region**:
 
-```
-arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5
-```
+| Region | Signing profile version ARN |
+|---|---|
+| us-west-2 | `arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5` |
+| us-east-1 | filled in after the first deploy of `deploy/artifacts` |
+| us-east-2 | filled in after the first deploy of `deploy/artifacts` |
+| ca-central-1 | filled in after the first deploy of `deploy/artifacts` |
+| eu-west-1 | filled in after the first deploy of `deploy/artifacts` |
+| eu-central-1 | filled in after the first deploy of `deploy/artifacts` |
+| ap-southeast-2 | filled in after the first deploy of `deploy/artifacts` |
 
-To enforce it, pass that ARN as `scanner.yaml`'s
-`CodeSigningProfileVersionArn`; the template attaches a code signing config
-with `UntrustedArtifactOnDeployment: Enforce`, so Lambda refuses a zip this
-profile did not sign or that changed after signing. Or allow it in your own
-code signing config:
+Each release's `releases/<version>/signing.json` in a region gives the same
+ARN, machine-readably:
 
 ```sh
-aws lambda create-code-signing-config \
+curl -fsS https://txp-labs-sensitive-data-scanner-eu-west-1.s3.eu-west-1.amazonaws.com/releases/0.5.0/signing.json \
+  | jq -r .signingProfileVersionArn
+```
+
+To enforce it, pass your region's ARN as `scanner.yaml`'s
+`CodeSigningProfileVersionArn` (in an estate StackSet, which passes one
+value to every region, set it per region with stack-instance parameter
+overrides). The template attaches a code signing config with
+`UntrustedArtifactOnDeployment: Enforce`, so Lambda refuses a zip this
+profile did not sign or that changed after signing. Or allow it in your own
+code signing config, for example in us-west-2:
+
+```sh
+aws lambda create-code-signing-config --region us-west-2 \
   --allowed-publishers SigningProfileVersionArns=arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5 \
   --code-signing-policies UntrustedArtifactOnDeployment=Enforce
 ```
@@ -139,16 +159,16 @@ The hosting itself (buckets, ECR, the release role) is
 **Images (cosign).** Each image is signed keyless by this repository's
 release workflow at the version's tag (a Sigstore certificate, logged in
 Rekor), and its SPDX SBOM is attached as a signed attestation. With
-cosign 2.4 or later, for 0.4.1 (the same for `-databases`, `-azure`, `-gcp`
+cosign 2.4 or later, for 0.5.0 (the same for `-databases`, `-azure`, `-gcp`
 and `-saas`, with each image's digest from the release notes):
 
 ```sh
 IMAGE=ghcr.io/txp-labs/sensitive-data-scanner@sha256:<digest>
 cosign verify "$IMAGE" \
-  --certificate-identity https://github.com/txp-labs/sensitive-data-scanner/.github/workflows/release.yml@refs/tags/v0.4.1 \
+  --certificate-identity https://github.com/txp-labs/sensitive-data-scanner/.github/workflows/release.yml@refs/tags/v0.5.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify-attestation "$IMAGE" --type spdxjson \
-  --certificate-identity https://github.com/txp-labs/sensitive-data-scanner/.github/workflows/release.yml@refs/tags/v0.4.1 \
+  --certificate-identity https://github.com/txp-labs/sensitive-data-scanner/.github/workflows/release.yml@refs/tags/v0.5.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -160,9 +180,9 @@ The ECR copies have the same digest, so the same check holds for them.
 check the signature (above):
 
 ```sh
-aws s3 cp --no-sign-request s3://txp-labs-sensitive-data-scanner-us-east-1/releases/0.4.1/sensitive-data-scanner-0.4.1-lambda-python3.12-x86_64.zip .
-aws s3 cp --no-sign-request s3://txp-labs-sensitive-data-scanner-us-east-1/releases/0.4.1/sensitive-data-scanner-0.4.1-lambda-python3.12-x86_64.zip.sha256 .
-sha256sum -c sensitive-data-scanner-0.4.1-lambda-python3.12-x86_64.zip.sha256
+aws s3 cp --no-sign-request s3://txp-labs-sensitive-data-scanner-us-east-1/releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip .
+aws s3 cp --no-sign-request s3://txp-labs-sensitive-data-scanner-us-east-1/releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip.sha256 .
+sha256sum -c sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip.sha256
 ```
 
 **The npm package.** `npm audit signatures` in a project that depends on it

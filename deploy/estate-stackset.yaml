@@ -49,7 +49,11 @@ Parameters:
   CodeSigningProfileVersionArn:
     Type: String
     Default: ""
-    Description: For the zip, the signing profile version scanner.yaml enforces (empty for none).
+    Description: >-
+      For the zip, the signing profile version scanner.yaml enforces (empty for
+      none). Each region has its own (docs/RELEASING.md): with more than one
+      region, leave this empty and set it per region with stack-instance
+      parameter overrides.
   Discover:
     Type: String
     Default: all

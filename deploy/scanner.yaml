@@ -64,7 +64,7 @@ Parameters:
   CodeS3Key:
     Type: String
     Default: ""
-    Description: For the zip, e.g. releases/0.4.1/sensitive-data-scanner-0.4.1-lambda-python3.12-x86_64.zip
+    Description: For the zip, e.g. releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip
   CodeSigningProfileVersionArn:
     Type: String
     Default: ""
@@ -72,7 +72,9 @@ Parameters:
     ConstraintDescription: an AWS Signer signing profile version ARN, or empty
     Description: >-
       For the zip: enforce Lambda code signing. The function then accepts only
-      a zip signed by this profile version. txp-labs' releases are signed by
+      a zip signed by this profile version. txp-labs signs each region's zip
+      with that region's profile: use this region's version ARN (docs/RELEASING.md,
+      or releases/<version>/signing.json in the region's bucket), e.g. in us-west-2
       arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5.
       Empty: no code signing config. Not used with ImageUri.
   Discover:

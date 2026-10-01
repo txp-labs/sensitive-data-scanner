@@ -8,6 +8,7 @@ are aimed, and every place that lists the approved regions lists the same seven.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 from typing import Any
@@ -116,7 +117,29 @@ def test_the_role_writes_only_where_a_release_goes() -> None:
         re.sub(r"^arn:\$\{AWS::Partition\}:s3:::\$\{BucketPrefix\}-(.+)/releases/\*$", r"\1", r)
         for r in resources
     } == REGIONS
-    assert by_sid["SigningWorkspace"]["Resource"] == {"Fn::Sub": "${ReleaseBucket.Arn}/signing/*"}
+    workspace = [r["Fn::Sub"] for r in by_sid["SigningWorkspace"]["Resource"]]
+    assert {
+        re.sub(r"^arn:\$\{AWS::Partition\}:s3:::\$\{BucketPrefix\}-(.+)/signing/\*$", r"\1", r)
+        for r in workspace
+    } == REGIONS
+    signs = [r["Fn::Sub"] for r in by_sid["SignWithEachRegionsProfile"]["Resource"]]
+    assert {
+        re.sub(
+            r"^arn:\$\{AWS::Partition\}:signer:(.+):\$\{AWS::AccountId\}:/signing-profiles/\$\{SigningProfileName\}$",
+            r"\1",
+            r,
+        )
+        for r in signs
+    } == REGIONS
+    jobs = [r["Fn::Sub"] for r in by_sid["WatchSigningJobs"]["Resource"]]
+    assert {
+        re.sub(
+            r"^arn:\$\{AWS::Partition\}:signer:(.+):\$\{AWS::AccountId\}:/signing-jobs/\*$",
+            r"\1",
+            r,
+        )
+        for r in jobs
+    } == REGIONS
     assert "s3:DeleteObject" not in [a for s in policy for a in actions(s)]
     # Only GetAuthorizationToken (which takes no resource) is unscoped.
     assert [s["Sid"] for s in policy if s["Resource"] == "*"] == ["EcrLogin"]
@@ -162,3 +185,52 @@ def test_npm_publishes_by_trusted_publishing_with_provenance() -> None:
     assert "npm publish --provenance --access public" in npm["steps"][-1]["run"]
     # No token anywhere: no secret is read, and none is passed to npm.
     assert "secrets.NPM" not in text and "NODE_AUTH_TOKEN" not in text
+
+
+HOME_VERSION_ARN = (
+    "arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5"
+)
+
+
+def test_each_region_but_the_home_one_gets_its_own_signing_profile() -> None:
+    profile = RES["SigningProfile"]
+    assert profile["Condition"] == "CreateProfile"
+    assert ARTIFACTS["Conditions"]["CreateProfile"] == {
+        "Fn::And": [
+            {"Fn::Not": [{"Fn::Condition": "IsHome"}]},
+            {"Fn::Equals": [{"Ref": "CreateSigningProfile"}, "true"]},
+        ]
+    }
+    props = profile["Properties"]
+    assert props["ProfileName"] == {"Ref": "SigningProfileName"}
+    assert ARTIFACTS["Parameters"]["SigningProfileName"]["Default"] == "TxpLabsSensitiveDataScanner"
+    assert props["PlatformId"] == "AWSLambda-SHA384-ECDSA"
+    assert props["SignatureValidityPeriod"] == {"Type": "MONTHS", "Value": 135}
+    assert profile["DeletionPolicy"] == "Retain"
+
+
+def test_each_region_signs_with_its_own_pinned_profile() -> None:
+    release = yaml.safe_load((REPO / ".github" / "workflows" / "release.yml").read_text())
+    job = release["jobs"]["aws-publish"]
+    pinned = json.loads(job["env"]["SIGNING_PROFILE_VERSIONS"])
+    assert set(pinned) == REGIONS
+    assert pinned["us-west-2"] == HOME_VERSION_ARN
+    for region, arn in pinned.items():
+        assert arn == "" or arn.startswith(
+            f"arn:aws:signer:{region}:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/"
+        )
+    sign = next(s for s in job["steps"] if s.get("name", "").startswith("Sign the Lambda zip"))[
+        "run"
+    ]
+    assert 'start-signing-job --region "${region}"' in sign
+    # The job must report the expected profile and version, and signing.json is published.
+    assert '.profileName <<<"${described}")" = "${SIGNING_PROFILE}"' in sign
+    assert '.profileVersion <<<"${described}")" = "${expected##*/}"' in sign
+    assert '"${prefix}/signing.json"' in sign
+
+
+def test_releasing_docs_list_every_regions_profile_version() -> None:
+    doc = (REPO / "docs" / "RELEASING.md").read_text()
+    rows = dict(re.findall(r"^\| ([a-z]+-[a-z]+-\d) \| (.+) \|$", doc, re.M))
+    assert set(rows) == REGIONS
+    assert rows["us-west-2"] == f"`{HOME_VERSION_ARN}`"

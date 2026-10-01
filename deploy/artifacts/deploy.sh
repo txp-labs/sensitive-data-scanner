@@ -5,10 +5,12 @@
 #   AWS_PROFILE=txp-labs-artifacts deploy/artifacts/deploy.sh            # deploy
 #   AWS_PROFILE=txp-labs-artifacts deploy/artifacts/deploy.sh --dry-run  # change sets only
 #
-# One stack per region, named sensitive-data-scanner-artifacts. The home region
-# (us-west-2, the AWS Signer profile's) also creates the OIDC provider, the
-# release role and the ECR replication rule; its ReleaseRoleArn output is the
-# repository variable ARTIFACTS_ROLE_ARN.
+# One stack per region, named sensitive-data-scanner-artifacts. Outside the home
+# region it also creates that region's AWS Signer profile (stack output
+# SigningProfileVersionArn: pin it in release.yml and docs/RELEASING.md). The
+# home region (us-west-2, whose profile was made by hand) also creates the OIDC
+# provider, the release role and the ECR replication rule; its ReleaseRoleArn
+# output is the repository variable ARTIFACTS_ROLE_ARN.
 set -euo pipefail
 
 ACCOUNT=895544787721
@@ -43,6 +45,9 @@ for region in "${REGIONS[@]}"; do
 done
 
 if [ ${#dry_run[@]} -eq 0 ]; then
-  aws cloudformation describe-stacks --region "${HOME_REGION}" --stack-name "${STACK}" \
-    --query "Stacks[0].Outputs[?OutputKey=='ReleaseRoleArn'].OutputValue" --output text
+  for region in "${REGIONS[@]}"; do
+    aws cloudformation describe-stacks --region "${region}" --stack-name "${STACK}" \
+      --query "Stacks[0].Outputs[?OutputKey=='ReleaseRoleArn' || OutputKey=='SigningProfileVersionArn'].[OutputKey,OutputValue]" \
+      --output text | awk -v r="${region}" '{print r "\t" $0}'
+  done
 fi

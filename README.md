@@ -15,8 +15,9 @@ leave it**: where, what kind, how many and how sure. Never a value.
   anywhere, and SaaS (Microsoft 365, Google Workspace, Slack, Jira and
   Confluence).
 
-> **Status: early.** Released: **v0.4.1** (1 Oct 2026), the first signed
-> release (v0.4.0 included the 0.3.0 that was prepared and never published). Proven on real accounts so
+> **Status: early.** Released: **v0.4.0** (1 Oct 2026), which includes the
+> 0.3.0 that was prepared and never published. v0.5.0, the first signed
+> release, is in preparation. Proven on real accounts so
 > far: whole-account runs in two development AWS accounts (S3, CloudWatch
 > Logs, Lambda configuration, SSM, X-Ray, Step Functions and DynamoDB read
 > for real, with no values in the output), and one SharePoint site in a test
@@ -115,9 +116,9 @@ Jira and Confluence have no detection of their own to import: scanner only.
   a SaaS secret is read from a mounted file, never an environment variable.
 - **Reproducible releases.** Dependencies are locked with hashes, base images
   are pinned by digest, and each release carries SBOMs and SHA-256 checksums.
-  **Releases are signed** from 0.4.1: the images with cosign (keyless, with
-  signed SBOM attestations), the Lambda zip with AWS Signer, so Lambda can
-  enforce code signing, and the npm package with provenance
+  **Releases are signed** from 0.5.0: the images with cosign (keyless, with
+  signed SBOM attestations), the Lambda zip with AWS Signer in each region,
+  so Lambda can enforce code signing, and the npm package with provenance
   ([Verifying a release](docs/RELEASING.md#verifying-a-release)).
 - A threat model is being written; it will be linked here.
 

@@ -4,8 +4,10 @@ Description: >-
   once per approved region (deploy/artifacts/deploy.sh). Every region gets a
   release bucket <BucketPrefix>-<region> whose releases/* is publicly readable
   (s3:GetObject only), its access-log bucket and the Lambda image's ECR
-  repository. The home region (the AWS Signer profile's, us-west-2) also holds
-  the GitHub OIDC provider, the release role and the ECR replication rule.
+  repository, and (outside the home region) the AWS Signer profile that signs
+  that region's zip. The home region (us-west-2, whose signing profile was
+  created by hand) also holds the GitHub OIDC provider, the release role and
+  the ECR replication rule.
 
 Parameters:
   BucketPrefix:
@@ -18,10 +20,20 @@ Parameters:
   HomeRegion:
     Type: String
     Default: us-west-2
-    Description: The AWS Signer profile's region; the role, the OIDC provider and ECR replication live here.
+    Description: >-
+      The region of the hand-made signing profile; the role, the OIDC provider
+      and ECR replication live here.
   SigningProfileName:
     Type: String
     Default: TxpLabsSensitiveDataScanner
+    Description: The AWS Signer profile that signs the zip, the same name in every region.
+  CreateSigningProfile:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      true creates the signing profile in this region (never in the home
+      region, where it already exists). false when it was made another way.
   RepositoryName:
     Type: String
     Default: sensitive-data-scanner
@@ -59,6 +71,9 @@ Parameters:
 Conditions:
   IsHome: !Equals [!Ref AWS::Region, !Ref HomeRegion]
   CreateProvider: !And [!Condition IsHome, !Equals [!Ref CreateOidcProvider, "true"]]
+  CreateProfile: !And
+    - !Not [!Condition IsHome]
+    - !Equals [!Ref CreateSigningProfile, "true"]
   PublicPull: !Equals [!Ref PublicImagePull, "true"]
 
 Resources:
@@ -241,6 +256,21 @@ Resources:
                   aws:sourceArn: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:*:function:*
         - !Ref AWS::NoValue
 
+  # Each region signs its own zip with its own profile, so a customer's code
+  # signing config names a profile version in the function's region. The home
+  # region's profile (version KFG2ZbbYX5) was created by hand and is not managed here.
+  SigningProfile:
+    Type: AWS::Signer::SigningProfile
+    Condition: CreateProfile
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ProfileName: !Ref SigningProfileName
+      PlatformId: AWSLambda-SHA384-ECDSA
+      SignatureValidityPeriod:
+        Type: MONTHS
+        Value: 135
+
   # ------------------------------------------------------------------
   # Home region only: ECR replication, OIDC provider, release role
   # ------------------------------------------------------------------
@@ -320,25 +350,47 @@ Resources:
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1/releases/*
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1/releases/*
                   - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2/releases/*
-              # Signer reads the unsigned zip by version and writes the signed
-              # one, both under signing/ in the home bucket (private, expires in 7 days).
+              # In each region, Signer reads the unsigned zip by version and
+              # writes the signed one, both under signing/ in that region's
+              # bucket (private, expires in 7 days).
               - Sid: SigningWorkspace
                 Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:GetObject
                   - s3:GetObjectVersion
-                Resource: !Sub ${ReleaseBucket.Arn}/signing/*
-              - Sid: SignWithTheProfile
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-east-2/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-us-west-2/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ca-central-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-west-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-eu-central-1/signing/*
+                  - !Sub arn:${AWS::Partition}:s3:::${BucketPrefix}-ap-southeast-2/signing/*
+              - Sid: SignWithEachRegionsProfile
                 Effect: Allow
                 Action:
                   - signer:StartSigningJob
                   - signer:GetSigningProfile
-                Resource: !Sub arn:${AWS::Partition}:signer:${AWS::Region}:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                Resource:
+                  - !Sub arn:${AWS::Partition}:signer:us-east-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:us-east-2:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:us-west-2:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:ca-central-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:eu-west-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:eu-central-1:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
+                  - !Sub arn:${AWS::Partition}:signer:ap-southeast-2:${AWS::AccountId}:/signing-profiles/${SigningProfileName}
               - Sid: WatchSigningJobs
                 Effect: Allow
                 Action: signer:DescribeSigningJob
-                Resource: !Sub arn:${AWS::Partition}:signer:${AWS::Region}:${AWS::AccountId}:/signing-jobs/*
+                Resource:
+                  - !Sub arn:${AWS::Partition}:signer:us-east-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:us-east-2:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:us-west-2:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:ca-central-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:eu-west-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:eu-central-1:${AWS::AccountId}:/signing-jobs/*
+                  - !Sub arn:${AWS::Partition}:signer:ap-southeast-2:${AWS::AccountId}:/signing-jobs/*
               - Sid: EcrLogin
                 Effect: Allow
                 Action: ecr:GetAuthorizationToken
@@ -364,6 +416,13 @@ Outputs:
     Value: !Sub s3://${ReleaseBucket}/releases/<X.Y.Z>/sensitive-data-scanner-<X.Y.Z>-lambda-python3.12-x86_64.zip
   ImageRepositoryUri:
     Value: !GetAtt ImageRepository.RepositoryUri
+  SigningProfileVersionArn:
+    Condition: CreateProfile
+    Description: >-
+      This region's signing profile version: customers' code signing configs
+      here allow it. Record it in docs/RELEASING.md and release.yml
+      (SIGNING_PROFILE_VERSIONS) after the first deploy.
+    Value: !GetAtt SigningProfile.ProfileVersionArn
   ReleaseRoleArn:
     Condition: IsHome
     Description: Set as the repository variable ARTIFACTS_ROLE_ARN (gh variable set ARTIFACTS_ROLE_ARN -R txp-labs/sensitive-data-scanner --body <arn>).

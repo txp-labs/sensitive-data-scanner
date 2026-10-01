@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner-saas"
-version = "0.4.1"
+version = "0.5.0"
 description = "The SaaS scanner of the sensitive data scanner: a container the customer runs in its own environment, with read-only grants to its Microsoft 365, Google Workspace, Slack and Atlassian tenants, that samples their content and reports findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"

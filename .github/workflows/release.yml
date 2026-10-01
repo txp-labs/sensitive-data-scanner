@@ -2,8 +2,9 @@
 # image, the databases runner's image, the Azure scanner's image, the Google
 # Cloud scanner's image and the SaaS scanner's image; push the images to GHCR,
 # signed with cosign (keyless) with their SPDX SBOMs attested; sign the Lambda
-# zip with AWS Signer and publish it to the release bucket in every approved
-# region, and the Lambda image to ECR (aws-publish, deploy/artifacts/); attach
+# zip with AWS Signer in every approved region, with that region's profile, and
+# publish it to the region's release bucket, and the Lambda image to ECR
+# (aws-publish, deploy/artifacts/); attach
 # SBOMs and SHA-256 checksums to a GitHub Release; publish the spec package to
 # npm with provenance (docs/RELEASING.md).
 name: Release
@@ -411,8 +412,9 @@ jobs:
           retention-days: 7
 
   aws-publish:
-    # The Lambda zip, signed with AWS Signer once in the profile's region and
-    # copied to every approved region's bucket at releases/<version>/, and the
+    # The Lambda zip, signed with AWS Signer in every approved region by that
+    # region's profile and published to its bucket at releases/<version>/ (with
+    # its .sha256 and signing.json), and the
     # Lambda image copied (same digest) to ECR, which replicates it to the same
     # regions. The account and its role: deploy/artifacts/. Without the
     # repository variable ARTIFACTS_ROLE_ARN every step after the first is
@@ -434,7 +436,14 @@ jobs:
       ARTIFACT_REGIONS: us-west-2 us-east-1 us-east-2 ca-central-1 eu-west-1 eu-central-1 ap-southeast-2
       BUCKET_PREFIX: txp-labs-sensitive-data-scanner
       SIGNING_PROFILE: TxpLabsSensitiveDataScanner
-      SIGNING_PROFILE_VERSION_ARN: arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5
+      # Each region's profile version, as published in docs/RELEASING.md. us-west-2's
+      # was made by hand; the others come from deploy/artifacts (the stack output
+      # SigningProfileVersionArn) and are pinned here after its first deploy. An
+      # empty one signs with the region's active version and warns.
+      SIGNING_PROFILE_VERSIONS: >-
+        {"us-west-2": "arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5",
+        "us-east-1": "", "us-east-2": "", "ca-central-1": "",
+        "eu-west-1": "", "eu-central-1": "", "ap-southeast-2": ""}
       ECR_REPOSITORY: sensitive-data-scanner
     steps:
       - id: gate
@@ -460,57 +469,81 @@ jobs:
           role-to-assume: ${{ vars.ARTIFACTS_ROLE_ARN }}
           role-session-name: sds-release-${{ github.run_id }}
           aws-region: ${{ env.HOME_REGION }}
-      - name: Sign the Lambda zip (AWS Signer) and upload it to every region
+      - name: Sign the Lambda zip in each region (AWS Signer) and publish it there
         if: steps.gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "${ARTIFACTS_ACCOUNT}"
           name="sensitive-data-scanner-${VERSION}-lambda-python3.12-x86_64.zip"
-          key="releases/${VERSION}/${name}"
-          home="${BUCKET_PREFIX}-${HOME_REGION}"
+          prefix="releases/${VERSION}"
+          work="signing/${VERSION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p signed
-          signed="signed/sensitive-data-scanner-${VERSION}-lambda-python3.12-x86_64-signed.zip"
-          # A re-run keeps what is already published: releases/ is write-once,
-          # and every region must hold the same signed bytes.
-          if curl -fsS -o "${signed}" "https://${home}.s3.${HOME_REGION}.amazonaws.com/${key}"; then
-            echo "::notice::${key} is already published in ${HOME_REGION}; reusing it, not signing again"
-          else
-            work="signing/${VERSION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            src_version=$(aws s3api put-object --bucket "${home}" --key "${work}/unsigned.zip" \
-              --body "dist/${name}" --query VersionId --output text)
-            source=$(jq -nc --arg b "${home}" --arg k "${work}/unsigned.zip" --arg v "${src_version}" \
+          # releases/ is write-once (the bucket refuses an unconditional put).
+          put_once() { # region bucket key file
+            local out
+            if out=$(aws s3api put-object --region "$1" --bucket "$2" --key "$3" \
+                --body "$4" --if-none-match '*' 2>&1); then
+              echo "s3://$2/$3"
+            elif grep -q PreconditionFailed <<<"${out}"; then
+              echo "::notice::s3://$2/$3 was already published; kept"
+            else
+              echo "${out}"
+              return 1
+            fi
+          }
+          for region in ${ARTIFACT_REGIONS}; do
+            echo "== ${region}"
+            bucket="${BUCKET_PREFIX}-${region}"
+            url="https://${bucket}.s3.${region}.amazonaws.com"
+            # Each region signs with its own profile, the one customers there allow.
+            profile=$(aws signer get-signing-profile --region "${region}" --profile-name "${SIGNING_PROFILE}" --output json)
+            test "$(jq -r .status <<<"${profile}")" = "Active"
+            test "$(jq -r .platformId <<<"${profile}")" = "AWSLambda-SHA384-ECDSA"
+            active=$(jq -r .profileVersionArn <<<"${profile}")
+            expected=$(jq -r --arg r "${region}" '.[$r] // ""' <<<"${SIGNING_PROFILE_VERSIONS}")
+            if [ -z "${expected}" ]; then
+              echo "::warning::${region}: no profile version pinned in SIGNING_PROFILE_VERSIONS; signing with the active ${active}. Pin it here and in docs/RELEASING.md."
+              expected="${active}"
+            elif [ "${expected}" != "${active}" ]; then
+              echo "::error::${region}: the active profile version is ${active}, not the pinned ${expected}"
+              exit 1
+            fi
+            signed="signed/${region}.zip"
+            if curl -fsS -o "${signed}" "${url}/${prefix}/${name}"; then
+              # A re-run keeps what is published, signature and all.
+              echo "::notice::${prefix}/${name} is already published in ${region}; not signing again"
+              continue
+            fi
+            src_version=$(aws s3api put-object --region "${region}" --bucket "${bucket}" \
+              --key "${work}/unsigned.zip" --body "dist/${name}" --query VersionId --output text)
+            source=$(jq -nc --arg b "${bucket}" --arg k "${work}/unsigned.zip" --arg v "${src_version}" \
               '{s3:{bucketName:$b,key:$k,version:$v}}')
-            destination=$(jq -nc --arg b "${home}" --arg p "${work}/signed-" '{s3:{bucketName:$b,prefix:$p}}')
-            job=$(aws signer start-signing-job --profile-name "${SIGNING_PROFILE}" \
+            destination=$(jq -nc --arg b "${bucket}" --arg p "${work}/signed-" '{s3:{bucketName:$b,prefix:$p}}')
+            job=$(aws signer start-signing-job --region "${region}" --profile-name "${SIGNING_PROFILE}" \
               --source "${source}" --destination "${destination}" --query jobId --output text)
             echo "signing job ${job}"
-            aws signer wait successful-signing-job --job-id "${job}"
-            # The profile version that signed it must be the one customers allow.
-            profile_version=$(aws signer describe-signing-job --job-id "${job}" --query profileVersion --output text)
-            test "${profile_version}" = "${SIGNING_PROFILE_VERSION_ARN##*/}"
-            signed_key=$(aws signer describe-signing-job --job-id "${job}" --query signedObject.s3.key --output text)
-            aws s3api get-object --bucket "${home}" --key "${signed_key}" "${signed}" > /dev/null
-          fi
-          sha256sum "${signed}" | awk -v n="${name}" '{print $1 "  " n}' > signed/checksum
-          cat signed/checksum
-          for region in ${ARTIFACT_REGIONS}; do
-            bucket="${BUCKET_PREFIX}-${region}"
-            for pair in "${key}=${signed}" "${key}.sha256=signed/checksum"; do
-              k="${pair%%=*}"; f="${pair#*=}"
-              # If-None-Match: the bucket policy refuses any other put under releases/.
-              if out=$(aws s3api put-object --region "${region}" --bucket "${bucket}" --key "${k}" \
-                  --body "${f}" --if-none-match '*' 2>&1); then
-                echo "s3://${bucket}/${k}"
-              elif grep -q PreconditionFailed <<<"${out}"; then
-                echo "::notice::s3://${bucket}/${k} was already published; kept"
-              else
-                echo "${out}"
-                exit 1
-              fi
-            done
+            aws signer wait successful-signing-job --region "${region}" --job-id "${job}"
+            described=$(aws signer describe-signing-job --region "${region}" --job-id "${job}" --output json)
+            # The job must report the expected profile, version and platform.
+            test "$(jq -r .status <<<"${described}")" = "Succeeded"
+            test "$(jq -r .profileName <<<"${described}")" = "${SIGNING_PROFILE}"
+            test "$(jq -r .profileVersion <<<"${described}")" = "${expected##*/}"
+            test "$(jq -r .platformId <<<"${described}")" = "AWSLambda-SHA384-ECDSA"
+            aws s3api get-object --region "${region}" --bucket "${bucket}" \
+              --key "$(jq -r .signedObject.s3.key <<<"${described}")" "${signed}" > /dev/null
+            sha=$(sha256sum "${signed}" | awk '{print $1}')
+            printf '%s  %s\n' "${sha}" "${name}" > "signed/${region}.sha256"
+            jq -n --arg version "${VERSION}" --arg region "${region}" --arg key "${prefix}/${name}" \
+              --arg sha "${sha}" --arg profile "${SIGNING_PROFILE}" --arg arn "${expected}" --arg job "${job}" \
+              '{version:$version, region:$region, key:$key, sha256:$sha,
+                signingProfileName:$profile, signingProfileVersionArn:$arn,
+                platformId:"AWSLambda-SHA384-ECDSA", signingJobId:$job}' > "signed/${region}.signing.json"
+            cat "signed/${region}.signing.json"
+            put_once "${region}" "${bucket}" "${prefix}/${name}" "${signed}"
+            put_once "${region}" "${bucket}" "${prefix}/${name}.sha256" "signed/${region}.sha256"
+            put_once "${region}" "${bucket}" "${prefix}/signing.json" "signed/${region}.signing.json"
             # What customers download must be the signed zip, byte for byte.
-            curl -fsS "https://${bucket}.s3.${region}.amazonaws.com/${key}" | sha256sum | awk '{print $1}' > got
-            test "$(cat got)" = "$(awk '{print $1}' signed/checksum)"
+            test "$(curl -fsS "${url}/${prefix}/${name}" | sha256sum | awk '{print $1}')" = "${sha}"
           done
       - name: Copy the Lambda image to ECR (replicated to every region)
         if: steps.gate.outputs.enabled == 'true'
@@ -540,13 +573,6 @@ jobs:
             --image-ids imageTag="${VERSION}" --query 'imageDetails[0].imageDigest' --output text)
           test "${got}" = "${DIGEST}"
           echo "${registry}/${ECR_REPOSITORY}@${DIGEST}"
-      - if: steps.gate.outputs.enabled == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: signed-lambda
-          path: signed/*-signed.zip
-          if-no-files-found: error
-          retention-days: 7
 
   release:
     name: GitHub Release

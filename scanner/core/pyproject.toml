@@ -1,6 +1,6 @@
 [project]
 name = "sensitive-data-scanner-core"
-version = "0.4.1"
+version = "0.5.0"
 description = "The cloud-neutral core of the sensitive data scanner: the spec, detection, findings, budgets and sampling, the coverage summary and the findings push. Findings only, never values."
 readme = "README.md"
 license = "Apache-2.0"

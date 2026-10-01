@@ -33,9 +33,6 @@ REGIONS = (
     "eu-central-1",
     "ap-southeast-2",
 )
-SIGNING_PROFILE_VERSION_ARN = (
-    "arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5"
-)
 
 
 def signed_zip(version: str) -> str:
@@ -44,10 +41,13 @@ def signed_zip(version: str) -> str:
         return "- The Lambda zip was not signed or published to S3 in this release (AWS publishing not configured)\n"
     name = f"sensitive-data-scanner-{version}-lambda-python3.12-x86_64.zip"
     return (
-        f"- The Lambda zip signed with AWS Signer (`{SIGNING_PROFILE_VERSION_ARN}`), "
-        f"attached as `...-signed.zip` and at `s3://txp-labs-sensitive-data-scanner-<region>/releases/{version}/{name}` "
-        f"in {', '.join(REGIONS)}; the Lambda image in ECR at "
-        f"`895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:{version}` in the same regions\n"
+        "- The Lambda zip signed with AWS Signer in each region by that region's profile "
+        "`TxpLabsSensitiveDataScanner`, at "
+        f"`s3://txp-labs-sensitive-data-scanner-<region>/releases/{version}/{name}` "
+        f"in {', '.join(REGIONS)}; each region's `releases/{version}/signing.json` names the "
+        "profile version ARN its code signing config allows (docs/RELEASING.md, Where the code is). "
+        f"The Lambda image in ECR at `895544787721.dkr.ecr.<region>.amazonaws.com/sensitive-data-scanner:{version}` "
+        "in the same regions\n"
     )
 
 
