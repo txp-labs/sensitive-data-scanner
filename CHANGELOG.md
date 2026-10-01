@@ -650,6 +650,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
   ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#discovery)).
 
 ### Fixed
+- **`M365_SITES` can name a site id and the root site**
+  ([#83](https://github.com/txp-labs/sensitive-data-scanner/issues/83), found by the first live SharePoint run).
+  - Entries are separated by spaces, newlines or `;`. Commas still work,
+    except inside a site id (`host,<site guid>,<web guid>`), which is kept
+    whole; before, the list was split on commas, so a site id never parsed.
+  - `root` (Graph's `/sites/root`) and `host:/` (`/sites/{host}:/`) name the
+    root site; before, both were refused (`m365_sites`).
 - **Cold start past Lambda's 10 s init limit**
   ([#94](https://github.com/txp-labs/sensitive-data-scanner/issues/94), found by the first whole-account run in a real
   account: `INIT_REPORT ... Status: timeout`).
