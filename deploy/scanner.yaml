@@ -43,7 +43,9 @@ Metadata:
         Parameters: [ScanMode]
       - Label: { default: Delivery and schedule }
         Parameters:
-          [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
+          [FindingsEventBusArn, ScheduleExpression, MaxBytesPerRun, MemorySize, LogRetentionInDays, RunHistoryDays]
+      - Label: { default: "The standalone report (findings/report.html, #117)" }
+        Parameters: [ReportCta]
       - Label: { default: "Settings from Mermera (docs/mermera-config.md, #109)" }
         Parameters: [FindingsHttpsUrl, FindingsHmacKey]
 
@@ -58,29 +60,32 @@ Parameters:
       does not. Leave empty to use the zip.
   CodeS3BucketPrefix:
     Type: String
-    Default: ""
+    Default: txp-labs-sensitive-data-scanner
     Description: >-
       For the zip: a bucket per region named <prefix>-<region>, holding
-      CodeS3Key. txp-labs publishes every release's signed zip at
-      txp-labs-sensitive-data-scanner-<region>, key
-      releases/<version>/sensitive-data-scanner-<version>-lambda-python3.12-x86_64.zip
-      (docs/RELEASING.md, Where the code is).
+      CodeS3Key. The default is txp-labs' release bucket in this region, which
+      holds every release's signed zip (docs/RELEASING.md, Where the code is).
   CodeS3Key:
     Type: String
-    Default: ""
-    Description: For the zip, e.g. releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip
+    # The release this template was published with (#117): scripts/launch_stack.py keeps it
+    # equal to the package version, and the release-closing PR bumps both.
+    Default: releases/0.5.0/sensitive-data-scanner-0.5.0-lambda-python3.12-x86_64.zip
+    Description: >-
+      For the zip: the key in that bucket. The default is the release this
+      template came with.
   CodeSigningProfileVersionArn:
     Type: String
-    Default: ""
-    AllowedPattern: "^(arn:aws[a-z-]*:signer:[a-z0-9-]+:[0-9]{12}:/signing-profiles/[A-Za-z0-9_]+/[A-Za-z0-9]+)?$"
-    ConstraintDescription: an AWS Signer signing profile version ARN, or empty
+    Default: release
+    AllowedPattern: "^(release|arn:aws[a-z-]*:signer:[a-z0-9-]+:[0-9]{12}:/signing-profiles/[A-Za-z0-9_]+/[A-Za-z0-9]+)?$"
+    ConstraintDescription: release, an AWS Signer signing profile version ARN, or empty
     Description: >-
       For the zip: enforce Lambda code signing. The function then accepts only
-      a zip signed by this profile version. txp-labs signs each region's zip
-      with that region's profile: use this region's version ARN (docs/RELEASING.md,
-      or releases/<version>/signing.json in the region's bucket), e.g. in us-west-2
-      arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5.
-      Empty: no code signing config. Not used with ImageUri.
+      a zip signed by this profile version. release (the default): txp-labs'
+      signing profile version for this region, from the template's own table
+      (docs/RELEASING.md; also releases/<version>/signing.json in the region's
+      bucket); in a region txp-labs does not publish to, no code signing config.
+      An ARN: that profile version. Empty: no code signing config. Not used
+      with ImageUri.
   Discover:
     Type: String
     Default: all
@@ -415,6 +420,24 @@ Parameters:
   ScheduleExpression:
     Type: String
     Default: rate(1 day)
+  MaxBytesPerRun:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[0-9]{4,11}$"
+    ConstraintDescription: a number of bytes (1024 or more), or empty
+    Description: >-
+      MAX_BYTES_PER_RUN - the bytes one run reads at most (empty: the scanner's
+      default, 2 GiB). The quick start sets 268435456 (256 MiB) so a first run
+      ends in a few minutes; what is left is read by the next runs.
+  ReportCta:
+    Type: String
+    AllowedValues: ["", "true", "false"]
+    Default: ""
+    Description: >-
+      REPORT_CTA - whether findings/report.html ends with a one-line
+      invitation to Mermera's early access. Empty (the default): yes, unless
+      the scanner is connected to Mermera (FindingsHttpsUrl set, or a settings
+      pull succeeded). true or false: always, or never.
   MemorySize:
     Type: Number
     Default: 3008
@@ -429,13 +452,48 @@ Parameters:
     Default: 90
     Description: Days to keep findings/runs/<runId>.json documents.
 
+Mappings:
+  # txp-labs' AWS Signer profile version in each region it publishes the signed zip to
+  # (docs/RELEASING.md, Where the code is; the same as release.yml's SIGNING_PROFILE_VERSIONS).
+  ReleaseSigning:
+    us-east-1:
+      ProfileVersionArn: arn:aws:signer:us-east-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/L7DIb2ZBZ4
+    us-east-2:
+      ProfileVersionArn: arn:aws:signer:us-east-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/PZV2WCi3TQ
+    us-west-2:
+      ProfileVersionArn: arn:aws:signer:us-west-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/KFG2ZbbYX5
+    ca-central-1:
+      ProfileVersionArn: arn:aws:signer:ca-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/3YaXTvD8mv
+    eu-west-1:
+      ProfileVersionArn: arn:aws:signer:eu-west-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/EH6K7imV1D
+    eu-central-1:
+      ProfileVersionArn: arn:aws:signer:eu-central-1:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/DQh5YhLR1O
+    ap-southeast-2:
+      ProfileVersionArn: arn:aws:signer:ap-southeast-2:895544787721:/signing-profiles/TxpLabsSensitiveDataScanner/5k6TE113EL
+
 Conditions:
   # #109: the Mermera site's HMAC key is stored as a Secrets Manager secret of the stack's own.
   HasMermeraKey: !Not [!Equals [!Ref FindingsHmacKey, ""]]
   UseImage: !Not [!Equals [!Ref ImageUri, ""]]
+  # A region txp-labs publishes releases to (the ReleaseSigning table).
+  ReleaseRegion: !Or
+    - !Equals [!Ref AWS::Region, us-east-1]
+    - !Equals [!Ref AWS::Region, us-east-2]
+    - !Equals [!Ref AWS::Region, us-west-2]
+    - !Equals [!Ref AWS::Region, ca-central-1]
+    - !Equals [!Ref AWS::Region, eu-west-1]
+    - !Equals [!Ref AWS::Region, eu-central-1]
+    - !Equals [!Ref AWS::Region, ap-southeast-2]
+  # The zip, signed by txp-labs' profile version for this region (CodeSigningProfileVersionArn
+  # release, the default), or by the ARN given. The table is read only in a region it has.
+  SignedZipByRelease: !And
+    - !Not [!Condition UseImage]
+    - !Equals [!Ref CodeSigningProfileVersionArn, release]
+    - !Condition ReleaseRegion
   SignedZip: !And
     - !Not [!Condition UseImage]
     - !Not [!Equals [!Ref CodeSigningProfileVersionArn, ""]]
+    - !Not [!Equals [!Ref CodeSigningProfileVersionArn, release]]
   HasBus: !Not [!Equals [!Ref FindingsEventBusArn, ""]]
   KmsDecrypt: !Equals [!Ref AllowKmsDecrypt, "true"]
   KmsKeyAllowList: !Not [!Equals [!Join [",", !Ref KmsAllowedKeyArns], ""]]
@@ -1662,6 +1720,17 @@ Resources:
 
   # The zip's code signing (CodeSigningProfileVersionArn): Lambda refuses a zip
   # that this profile version did not sign, or that was changed after signing.
+  ReleaseCodeSigningConfig:
+    Type: AWS::Lambda::CodeSigningConfig
+    Condition: SignedZipByRelease
+    Properties:
+      Description: sensitive-data-scanner's zip must be signed by txp-labs' signing profile for this region
+      AllowedPublishers:
+        SigningProfileVersionArns:
+          - !FindInMap [ReleaseSigning, !Ref AWS::Region, ProfileVersionArn]
+      CodeSigningPolicies:
+        UntrustedArtifactOnDeployment: Enforce
+
   CodeSigningConfig:
     Type: AWS::Lambda::CodeSigningConfig
     Condition: SignedZip
@@ -1683,7 +1752,7 @@ Resources:
       - StoreReadPolicy
       - BrokerImageGraphReadPolicy
     Metadata:
-      # The zip's bucket and key default to empty; they are used only without ImageUri.
+      # The zip's bucket and key are used only without ImageUri.
       cfn-lint: { config: { ignore_checks: [W1030, W1031] } }
     Properties:
       FunctionName: sensitive-data-scanner
@@ -1695,7 +1764,10 @@ Resources:
         - ImageUri: !Ref ImageUri
         - S3Bucket: !Sub ${CodeS3BucketPrefix}-${AWS::Region}
           S3Key: !Ref CodeS3Key
-      CodeSigningConfigArn: !If [SignedZip, !GetAtt CodeSigningConfig.CodeSigningConfigArn, !Ref AWS::NoValue]
+      CodeSigningConfigArn: !If
+        - SignedZipByRelease
+        - !GetAtt ReleaseCodeSigningConfig.CodeSigningConfigArn
+        - !If [SignedZip, !GetAtt CodeSigningConfig.CodeSigningConfigArn, !Ref AWS::NoValue]
       Handler: !If [UseImage, !Ref AWS::NoValue, sensitive_data_scanner.handler.handler]
       Runtime: !If [UseImage, !Ref AWS::NoValue, python3.12]
       Architectures: [x86_64]
@@ -1752,6 +1824,8 @@ Resources:
           S3_READ_GLACIER_IR: !Ref S3ReadGlacierIr
           S3_RESTORE_ARCHIVED: !Ref S3RestoreArchived
           FINDINGS_HTTPS_URL: !Ref FindingsHttpsUrl
+          MAX_BYTES_PER_RUN: !Ref MaxBytesPerRun
+          REPORT_CTA: !Ref ReportCta
           # The key's secret ARN only (#109): the key itself is never in the environment.
           FINDINGS_HMAC_KEY_SECRET: !If [HasMermeraKey, !Ref MermeraKeySecret, ""]
           # #109: what this role was granted, so a setting Mermera turns on that needs more
@@ -1806,6 +1880,9 @@ Resources:
 Outputs:
   ResultsBucket:
     Value: !Ref ResultsBucket
+  Report:
+    Description: The latest run's report (open it with aws s3 presign; docs/QUICKSTART.md)
+    Value: !Sub s3://${ResultsBucket}/findings/report.html
   FunctionArn:
     Value: !GetAtt Function.Arn
   ScannerRoleArn:

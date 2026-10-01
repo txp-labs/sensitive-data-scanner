@@ -7,6 +7,7 @@ detects, how it stays safe, and how proven each path is.
 
 | Document | What it covers |
 |---|---|
+| [QUICKSTART.md](QUICKSTART.md) | AWS in about 10 minutes: a Launch Stack link per region, one run, the report (`report.html`, `findings.csv`; [a sample](sample-report/report.html)), and removing it |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The AWS scanner: batch mode, configuration, discovery and the coverage by store, the readers (columnar, Office, PDFs, archives), the object index and smart rescans, S3 Inventory, every AWS store, least-privilege IAM, the estate rollout, and the event-driven design |
 | [AZURE.md](AZURE.md) | The Azure scanner: stores and the roles each needs, findings, settings, deploying the Bicep at a management group |
 | [GCP.md](GCP.md) | The Google Cloud scanner: stores and the permissions each needs, Sensitive Data Protection's profiles, findings, settings, deploying the Terraform |

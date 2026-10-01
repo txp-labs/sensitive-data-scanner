@@ -1,0 +1,487 @@
+{
+  "schema": "sensitive-data-scanner.findings",
+  "schemaVersion": "1.13",
+  "scannerVersion": "0.5.0",
+  "specVersion": "0.7",
+  "runId": "20260929T060000Z-1a2b3c4d",
+  "account": "123456789012",
+  "region": "us-west-2",
+  "startedAt": "2026-09-29T06:00:00+00:00",
+  "finishedAt": "2026-09-29T06:04:10+00:00",
+  "classes": [
+    "us_ssn",
+    "us_itin",
+    "card",
+    "dob",
+    "cvv",
+    "pin",
+    "account_number",
+    "us_ssn_last4"
+  ],
+  "coverage": [
+    {
+      "kind": "s3",
+      "target": "example-exports/",
+      "listed": 1200,
+      "eligible": 1200,
+      "scanned": 1150,
+      "sampledOut": 0,
+      "samplePercent": 100,
+      "partial": 3,
+      "unreadable": 2,
+      "bytesScanned": 734003200,
+      "skipped": {
+        "columnar": 4,
+        "image": 40
+      },
+      "formats": {
+        "csv": 900,
+        "text": 250
+      },
+      "testValues": 1,
+      "suppressed": 5,
+      "redactionMarkers": 0,
+      "passComplete": true,
+      "backlog": false,
+      "error": null,
+      "kmsDenied": 2,
+      "notAllowed": {
+        "archive_class": 6
+      },
+      "archived": {
+        "needs_restore": 10
+      }
+    },
+    {
+      "kind": "cloudwatch_logs",
+      "target": "/aws/lambda/payments",
+      "listed": 50000,
+      "eligible": 50000,
+      "scanned": 20000,
+      "sampledOut": 0,
+      "samplePercent": 100,
+      "partial": 1,
+      "unreadable": 0,
+      "bytesScanned": 52428800,
+      "skipped": {},
+      "formats": {
+        "lambda_log": 20000
+      },
+      "testValues": 0,
+      "suppressed": 0,
+      "redactionMarkers": 2,
+      "passComplete": false,
+      "backlog": true,
+      "error": null
+    },
+    {
+      "kind": "dynamodb",
+      "target": "customers",
+      "listed": 500,
+      "eligible": 500,
+      "scanned": 500,
+      "sampledOut": 0,
+      "samplePercent": 100,
+      "partial": 0,
+      "unreadable": 0,
+      "bytesScanned": 1048576,
+      "skipped": {},
+      "formats": {
+        "dynamodb_item": 500
+      },
+      "testValues": 0,
+      "suppressed": 0,
+      "redactionMarkers": 0,
+      "passComplete": true,
+      "backlog": false,
+      "error": null
+    }
+  ],
+  "findings": [
+    {
+      "id": "00000000000000000000000000000001",
+      "resource": {
+        "type": "s3_object",
+        "bucket": "example-exports",
+        "key": "billing/2026/09/cards.csv",
+        "versionId": "null"
+      },
+      "format": "csv",
+      "class": "card",
+      "severity": "high",
+      "count": 42,
+      "occurrences": 42,
+      "confidence": "high",
+      "confidenceCounts": {
+        "high": 42
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": "https://us-west-2.console.aws.amazon.com/s3/object/example-exports?region=us-west-2&bucketType=general&prefix=billing%2F2026%2F09%2Fcards.csv&versionId=null",
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner",
+      "pciNote": {
+        "requirement": "3.5.1.2",
+        "guidance": "PCI DSS 3.5.1.2: storage-level encryption (disk, volume or the service's at-rest encryption) alone does not render PAN unreadable on non-removable media; PAN is also to be rendered unreadable by one of the methods in 3.5.1. For your QSA to assess; the QSA decides."
+      }
+    },
+    {
+      "id": "00000000000000000000000000000002",
+      "resource": {
+        "type": "s3_object",
+        "bucket": "example-exports",
+        "key": "=cmd|calc/####-##-####.txt",
+        "versionId": "null",
+        "keyMasked": true
+      },
+      "format": "text",
+      "class": "us_ssn",
+      "severity": "high",
+      "count": 3,
+      "occurrences": 3,
+      "confidence": "medium",
+      "confidenceCounts": {
+        "medium": 3
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": null,
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner"
+    },
+    {
+      "id": "00000000000000000000000000000003",
+      "resource": {
+        "type": "log_event",
+        "logGroup": "/aws/lambda/payments",
+        "logStream": "2026/09/28/[$LATEST]abc",
+        "timestamp": 1759039200000
+      },
+      "format": "lambda_log",
+      "class": "card",
+      "severity": "high",
+      "count": 1,
+      "occurrences": 1,
+      "confidence": "high",
+      "confidenceCounts": {
+        "high": 1
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": null,
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner",
+      "pciNote": {
+        "requirement": "3.5.1.2",
+        "guidance": "PCI DSS 3.5.1.2: storage-level encryption (disk, volume or the service's at-rest encryption) alone does not render PAN unreadable on non-removable media; PAN is also to be rendered unreadable by one of the methods in 3.5.1. For your QSA to assess; the QSA decides."
+      }
+    },
+    {
+      "id": "00000000000000000000000000000004",
+      "resource": {
+        "type": "dynamodb_item",
+        "table": "customers",
+        "keyHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "key": {
+          "pk": "CUST#t_#########",
+          "sk": "PROFILE"
+        },
+        "attributePath": "profile.ssn",
+        "keyMasked": true
+      },
+      "format": "dynamodb_item",
+      "class": "us_ssn",
+      "severity": "high",
+      "count": 1,
+      "occurrences": 1,
+      "confidence": "high",
+      "confidenceCounts": {
+        "high": 1
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": null,
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner"
+    },
+    {
+      "id": "00000000000000000000000000000005",
+      "resource": {
+        "type": "rds_column",
+        "engine": "aurora-postgresql",
+        "dbType": "cluster",
+        "cluster": "orders-db",
+        "database": "app",
+        "table": "customers",
+        "column": "dob",
+        "readBy": "snapshot_export"
+      },
+      "format": "parquet",
+      "class": "dob",
+      "severity": "medium",
+      "count": 120,
+      "occurrences": 120,
+      "confidence": "medium",
+      "confidenceCounts": {
+        "medium": 120
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": null,
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner"
+    },
+    {
+      "id": "00000000000000000000000000000006",
+      "resource": {
+        "type": "store_field",
+        "service": "redshift",
+        "store": "analytics",
+        "database": "dev",
+        "table": "public.events",
+        "field": "payload",
+        "readBy": "iam"
+      },
+      "format": "text",
+      "class": "account_number",
+      "severity": "medium",
+      "count": 7,
+      "occurrences": 7,
+      "confidence": "low",
+      "confidenceCounts": {
+        "low": 7
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": null,
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner"
+    },
+    {
+      "id": "00000000000000000000000000000007",
+      "resource": {
+        "type": "s3_object",
+        "bucket": "example-exports",
+        "key": "archive/old.zip",
+        "versionId": "null",
+        "archivePath": "inner/notes.txt"
+      },
+      "format": "text",
+      "class": "us_ssn_last4",
+      "severity": "low",
+      "count": 2,
+      "occurrences": 2,
+      "confidence": "low",
+      "confidenceCounts": {
+        "low": 2
+      },
+      "via": [
+        "context"
+      ],
+      "offsets": [
+        {
+          "start": 0,
+          "end": 16
+        }
+      ],
+      "offsetsTruncated": false,
+      "link": null,
+      "firstSeenAt": "2026-09-28T06:00:00+00:00",
+      "lastSeenAt": "2026-09-29T06:00:00+00:00",
+      "atRestEncryption": "service_managed",
+      "source": "scanner"
+    }
+  ],
+  "findingsTotal": 7,
+  "findingsTruncated": false,
+  "totals": {
+    "account_number": 7,
+    "card": 43,
+    "dob": 120,
+    "us_ssn": 4,
+    "us_ssn_last4": 2
+  },
+  "discovery": {
+    "stores": [
+      {
+        "kind": "redshift",
+        "name": "warehouse",
+        "origin": "discovery",
+        "status": "skipped",
+        "reason": "read_not_configured",
+        "toggle": "REDSHIFT_READ"
+      },
+      {
+        "kind": "dynamodb",
+        "name": "events",
+        "origin": "discovery",
+        "status": "skipped",
+        "reason": "too_large",
+        "sizeBytes": 53687091200,
+        "toggle": "DYNAMODB_EXPORT"
+      },
+      {
+        "kind": "s3",
+        "name": "example-archive",
+        "origin": "discovery",
+        "status": "error",
+        "reason": "kms_access",
+        "error": "AccessDenied",
+        "gaps": {
+          "kmsDenied": 12,
+          "unreadable": 12
+        }
+      },
+      {
+        "kind": "cloudwatch_logs",
+        "name": "/aws/lambda/busy",
+        "origin": "discovery",
+        "status": "deferred",
+        "reason": "budget"
+      },
+      {
+        "kind": "s3",
+        "name": "example-exports",
+        "origin": "config",
+        "status": "scanned",
+        "gaps": {
+          "needsRestore": 10,
+          "notAllowed": 6
+        },
+        "toggle": "S3_READ_GLACIER_IR",
+        "storageClasses": {
+          "STANDARD": {
+            "objects": 1150,
+            "bytes": 734003200,
+            "read": true
+          },
+          "GLACIER_IR": {
+            "objects": 6,
+            "bytes": 6442450944,
+            "read": false,
+            "reason": "archive_class",
+            "toggle": "S3_READ_GLACIER_IR"
+          },
+          "DEEP_ARCHIVE": {
+            "objects": 10,
+            "bytes": 10737418240,
+            "read": false,
+            "reason": "needs_restore",
+            "toggle": "S3_RESTORE_ARCHIVED"
+          }
+        },
+        "costEstimate": {
+          "currency": "USD",
+          "retrievalPerGb": {
+            "GLACIER_IR": 0.03
+          },
+          "requestsPer1k": {
+            "GLACIER_IR": 0.01
+          },
+          "estimatedToScanUsd": 0.0,
+          "byClass": {
+            "GLACIER_IR": 0.18
+          },
+          "priceDate": "2026-09-30",
+          "region": "us-west-2"
+        }
+      },
+      {
+        "kind": "cloudwatch_logs",
+        "name": "/aws/lambda/payments",
+        "origin": "discovery",
+        "status": "scanned",
+        "backlog": true
+      },
+      {
+        "kind": "dynamodb",
+        "name": "customers",
+        "origin": "discovery",
+        "status": "scanned"
+      }
+    ],
+    "storesTotal": 7,
+    "storesTruncated": false,
+    "byStatus": {
+      "deferred": 1,
+      "error": 1,
+      "scanned": 3,
+      "skipped": 2
+    },
+    "byReason": {
+      "budget": 1,
+      "kms_access": 1,
+      "read_not_configured": 1,
+      "too_large": 1
+    },
+    "listErrors": {
+      "glue_table": "AccessDeniedException"
+    },
+    "backlogByKind": {
+      "cloudwatch_logs": 2
+    }
+  },
+  "scanMode": {
+    "aws": "scanner"
+  }
+}

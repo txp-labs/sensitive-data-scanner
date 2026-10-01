@@ -26,6 +26,42 @@ leave it**: where, what kind, how many and how sure. Never a value.
 > included, is tested against simulated services only.
 > [Status and maturity](#status-and-maturity) says exactly what is proven.
 
+## Try it: a report in about 10 minutes (AWS)
+
+Deploy it into one AWS account and region with one click, run it once, and
+open `report.html`: what was scanned and what was not (and why), and where
+card numbers, Social Security numbers and other sensitive data are, by store
+and location. Never a value.
+[docs/QUICKSTART.md](docs/QUICKSTART.md) has every step, including the run
+and the cleanup.
+
+<!-- launch-stack:start -->
+Version 0.5.0. Each button opens CloudFormation's quick-create page in that region with the release's own template.
+
+| Region | | Launch |
+|---|---|---|
+| US East (N. Virginia) | `us-east-1` | [![Launch Stack in us-east-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-east-1.s3.us-east-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| US East (Ohio) | `us-east-2` | [![Launch Stack in us-east-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-east-2.s3.us-east-2.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| US West (Oregon) | `us-west-2` | [![Launch Stack in us-west-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-us-west-2.s3.us-west-2.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Canada (Central) | `ca-central-1` | [![Launch Stack in ca-central-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-ca-central-1.s3.ca-central-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Europe (Ireland) | `eu-west-1` | [![Launch Stack in eu-west-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-eu-west-1.s3.eu-west-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Europe (Frankfurt) | `eu-central-1` | [![Launch Stack in eu-central-1](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-eu-central-1.s3.eu-central-1.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+| Asia Pacific (Sydney) | `ap-southeast-2` | [![Launch Stack in ap-southeast-2](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=https%3A%2F%2Ftxp-labs-sensitive-data-scanner-ap-southeast-2.s3.ap-southeast-2.amazonaws.com%2Freleases%2F0.5.0%2Fscanner.yaml&stackName=sensitive-data-scanner&param_Discover=all&param_MaxBytesPerRun=268435456) |
+<!-- launch-stack:end -->
+
+- It runs entirely in your account, read-only, with explicit denies on
+  writes to your data; nothing leaves your account.
+- Every cost lands on your own AWS bill: a run is capped at about $0.044 of
+  Lambda compute, and the quick start's first run reads at most 256 MiB
+  ([COST.md](docs/COST.md)).
+- Beta, AWS-only as a one-click deploy for now, Apache-2.0, without warranty.
+  Feedback: [GitHub issues](https://github.com/txp-labs/sensitive-data-scanner/issues).
+
+[![A sample report, made from the made-up benchmark corpus](docs/sample-report/report.png)](docs/sample-report/report.html)
+
+*A sample report, made from the made-up [benchmark corpus](docs/BENCHMARK.md):
+[report.html](docs/sample-report/report.html), [findings.csv](docs/sample-report/findings.csv).*
+
 ## What it reads
 
 **Read** is read by default once the runner is deployed. **Opt-in** is
@@ -145,7 +181,7 @@ Jira and Confluence have no detection of their own to import: scanner only.
 
 | Where | How | Guide |
 |---|---|---|
-| AWS, one account and region | `deploy/scanner.yaml` (CloudFormation): a Lambda on a schedule | [Batch mode](docs/ARCHITECTURE.md#batch-mode-built), [Permissions](docs/ARCHITECTURE.md#permissions-least-privilege) |
+| AWS, one account and region | `deploy/scanner.yaml` (CloudFormation): a Lambda on a schedule; one click from each region's [Launch Stack](#try-it-a-report-in-about-10-minutes-aws) | [Quick start](docs/QUICKSTART.md), [Batch mode](docs/ARCHITECTURE.md#batch-mode-built), [Permissions](docs/ARCHITECTURE.md#permissions-least-privilege) |
 | AWS, a whole organization | `deploy/estate-stackset.yaml`: a service-managed StackSet, findings to one central event bus | [Estate rollout](docs/ARCHITECTURE.md#estate-rollout) |
 | Azure | `deploy/azure/` (Bicep at a management group): a Container Apps job with a managed identity | [docs/AZURE.md](docs/AZURE.md#deploying) |
 | Google Cloud | `deploy/gcp/` (Terraform at an organization or folders): a Cloud Run job with its own service account | [docs/GCP.md](docs/GCP.md#deploying) |

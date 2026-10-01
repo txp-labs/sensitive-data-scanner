@@ -249,6 +249,7 @@ scanned account:
 |---|---|
 | `findings/latest.json` | The findings document for the latest run |
 | `findings/runs/<runId>.json` | One document per run |
+| `findings/report.html`, `findings/findings.csv` | The latest run as a self-contained page and a spreadsheet, made from the document alone, with no values (#117; [sample](sample-report/report.html)). Not part of the schema |
 | `state/…` | The scanner's own cursors and lock. A consumer never needs these; grant it `findings/*` only |
 
 Findings carry over between runs. An S3 object's findings are replaced when a
