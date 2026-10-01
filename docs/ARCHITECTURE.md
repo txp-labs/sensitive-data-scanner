@@ -200,7 +200,7 @@ Now:
 | `S3_INVENTORY_MIN_OBJECTS` | What makes a bucket large: the objects its last complete pass saw (0: never) | 1,000,000 |
 | `S3_READ_GLACIER_IR` | (#109) Read Glacier Instant Retrieval objects, which have a retrieval fee ([below](#storage-classes)) | off |
 | `S3_RESTORE_ARCHIVED` | (#109) A hook: Glacier Flexible Retrieval, Deep Archive and the Intelligent-Tiering archive tiers need a restore; on, the class says `not_implemented` | off |
-| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` | (#109) This account's Mermera site: the function pulls its settings from it before each run ([mermera-config.md](mermera-config.md)); findings still go to the bus | none |
+| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY_PARAM` | (#109) This account's Mermera site: the function pulls its settings from it before each run ([mermera-config.md](mermera-config.md)); findings still go to the bus. The template stores the site's key (`FindingsHmacKey`) as an SSM SecureString of the stack's own and gives the function only its name; the function reads it once per cold start and holds it in memory. (`FINDINGS_HMAC_KEY`, the key itself, is accepted for a run outside the template) | none |
 | `IAM_GRANTS` | (#109) Set by the template: the grants its role holds, so a setting Mermera turns on without its grant is reported `gate: iam` | the template's |
 | `FINDINGS_EVENT_BUS_ARN` | Also push findings to this EventBridge bus | off |
 | `SCAN_DYNAMODB` | DynamoDB tables to read, as a JSON list (below) | none |
@@ -2120,6 +2120,21 @@ management or delegated-admin account
 5. **The management account** is never a target of a service-managed
    StackSet. If it holds data, deploy `scanner.yaml` there as an ordinary
    stack.
+6. **Settings from Mermera (optional, #109).** Each account's site has its
+   own push URL and HMAC key, so set `FindingsHttpsUrl` and `FindingsHmacKey`
+   per account with stack-instance parameter overrides
+   (`update-stack-instances --parameter-overrides`), never as StackSet-wide
+   values. With a key, each stack creates
+   `/sensitive-data-scanner/<stack name>/findings-hmac-key`, an SSM
+   SecureString under the account's `aws/ssm` key, through a small custom
+   resource whose own role may put and delete that one parameter only
+   (CloudFormation cannot create a SecureString itself). The scanner's role
+   gets `ssm:GetParameter` on that parameter's ARN and `kms:Decrypt` only
+   through SSM and only for that parameter (`kms:EncryptionContext:PARAMETER_ARN`);
+   its Denies are unchanged. The function's environment holds only the
+   parameter's name (`FINDINGS_HMAC_KEY_PARAM`). Rotating the key is a
+   parameter override with the new value; deleting the stack deletes the
+   parameter.
 
 **The template goes through S3.** `scanner.yaml` is larger than the 51,200
 bytes CloudFormation accepts inline (`--template-body`), so every deploy

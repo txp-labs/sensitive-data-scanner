@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .push import SIGNATURE_HEADER, sign
+from .push import SIGNATURE_HEADER, Revealable, sign
 from .safety import error_name, log_event
 
 CONTRACT = "1"
@@ -400,19 +400,34 @@ def apply_mermera(
     schema_version: str,
     opener: Callable[..., Any] | None = None,
     clock: Callable[[], float] = time.time,
+    key: Revealable | None = None,
+    key_error: str | None = None,
 ) -> tuple[dict[str, str], Report]:
     """Pull Mermera's settings for this runner (when it pushes to Mermera) and apply them.
     The push URL and key are read as the runner reads them (`FINDINGS_HTTPS_URL`, and
-    `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE`); the runner still checks them itself."""
+    `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE`); the runner still checks them itself.
+    A runner that holds its key elsewhere (AWS: an SSM SecureString, read once per cold
+    start) passes it as `key`, or the name of the error that kept it from it (`key_error`:
+    the pull is then `failed`, never silently skipped)."""
     url = (env.get("FINDINGS_HTTPS_URL") or "").strip() or None
-    key = (env.get("FINDINGS_HMAC_KEY") or "").strip() or None
+    if key_error is not None and url is not None:
+        merged, report = resolve(platform, env, None, grants_from(env))
+        report.pull = Pull("failed", error=f"key:{key_error}"[:80])
+        log_event("config.pull_failed", status="failed", error=report.pull.error)
+        return merged, report
+    if key is not None:
+        held = key.reveal()
+        key_text: str | None = held.strip() or None
+    else:
+        key_text = (env.get("FINDINGS_HMAC_KEY") or "").strip() or None
+    key = None  # the revealed text lives only in this call
     key_file = (env.get("FINDINGS_HMAC_KEY_FILE") or "").strip()
-    if key is None and key_file:
+    if key_text is None and key_file:
         try:
-            key = Path(key_file).read_text(encoding="utf-8").strip() or None
+            key_text = Path(key_file).read_text(encoding="utf-8").strip() or None
         except OSError:
-            key = None
-    got = pull(url, key, schema_version=schema_version, opener=opener, clock=clock)
+            key_text = None
+    got = pull(url, key_text, schema_version=schema_version, opener=opener, clock=clock)
     merged, report = resolve(
         platform, env, got.settings if got.status == "ok" else None, grants_from(env)
     )

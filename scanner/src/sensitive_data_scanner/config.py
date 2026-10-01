@@ -40,6 +40,7 @@ from sensitive_data_core.rules import parse_rule as _parse_rule
 from sensitive_data_core.rules import sampling_rules as _sampling_rules
 from sensitive_data_core.rules import store_rules as _store_rules
 from sensitive_data_core.runner_config import apply_mermera
+from sensitive_data_core.safety import Secret, error_name
 from sensitive_data_core.scan.paths import parse_path
 
 from .events import bus_region
@@ -616,16 +617,40 @@ class Config:
         return key_filter_for(self.sampling, kind, name, tags)
 
 
-def _mermera_url(url: str | None, key: str | None) -> bool:
-    """`FINDINGS_HTTPS_URL` (https) with `FINDINGS_HMAC_KEY` (32 characters or more): the
-    site whose settings the function pulls (#109). Neither is kept."""
+def _mermera_url(url: str | None, key: str | None, param: str | None = None) -> bool:
+    """`FINDINGS_HTTPS_URL` (https) with the site's key: `FINDINGS_HMAC_KEY_PARAM` (the SSM
+    SecureString the template stores it in, #109) or `FINDINGS_HMAC_KEY` (32 characters or
+    more, for a run outside the template). The site whose settings the function pulls.
+    Neither the URL nor the key is kept."""
     if not (url or "").strip():
         return False
     if not (url or "").strip().startswith("https://"):
         raise ValueError("FINDINGS_HTTPS_URL must be https")
+    named = (param or "").strip()
+    if named:
+        if not _KEY_PARAM.match(named):
+            raise ValueError("FINDINGS_HMAC_KEY_PARAM must be an SSM parameter name")
+        return True
     if len((key or "").strip()) < 32:
         raise ValueError("FINDINGS_HTTPS_URL needs FINDINGS_HMAC_KEY (32 characters or more)")
     return True
+
+
+# The SSM parameter the template stores the Mermera key in (#109), by name.
+_KEY_PARAM = re.compile(r"^/sensitive-data-scanner/[A-Za-z0-9_.-]{1,128}/findings-hmac-key$")
+# The key, once read from SSM in this execution environment (a cold start): in memory only,
+# never in the environment, a log or a repr (`Secret`).
+_KEYS: dict[str, Secret] = {}
+
+
+def mermera_key(name: str, client: Callable[[str], Any]) -> Secret:
+    """The site's HMAC key from its SSM SecureString parameter (`ssm:GetParameter` on that
+    one parameter, decrypted through SSM), read once per execution environment."""
+    held = _KEYS.get(name)
+    if held is None:
+        got = client("ssm").get_parameter(Name=name, WithDecryption=True)
+        held = _KEYS[name] = Secret(str(got["Parameter"]["Value"]).strip())
+    return held
 
 
 def read_config(env: Mapping[str, str] | None = None) -> Config:
@@ -742,7 +767,11 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         ),
         s3_read_glacier_ir=_bool(e.get("S3_READ_GLACIER_IR")),
         s3_restore_archived=_bool(e.get("S3_RESTORE_ARCHIVED")),
-        mermera_pull=_mermera_url(e.get("FINDINGS_HTTPS_URL"), e.get("FINDINGS_HMAC_KEY")),
+        mermera_pull=_mermera_url(
+            e.get("FINDINGS_HTTPS_URL"),
+            e.get("FINDINGS_HMAC_KEY"),
+            e.get("FINDINGS_HMAC_KEY_PARAM"),
+        ),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn
@@ -761,8 +790,14 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
 _JSON_SETTINGS = frozenset({"SCAN_DYNAMODB", "DISCOVER_SAMPLING", "RDS_DATA_API", "MQ_BROKERS"})
 # Read by read_config but set by Lambda, never by a document.
 # IAM_GRANTS is the template's statement of what its role holds (#109): never a document's.
+# FINDINGS_HMAC_KEY_PARAM names the parameter the template made and granted (#109).
 _NOT_FROM_DOCUMENTS = frozenset(
-    {"AWS_LAMBDA_LOG_GROUP_NAME", "AWS_LAMBDA_FUNCTION_NAME", "IAM_GRANTS"}
+    {
+        "AWS_LAMBDA_LOG_GROUP_NAME",
+        "AWS_LAMBDA_FUNCTION_NAME",
+        "IAM_GRANTS",
+        "FINDINGS_HMAC_KEY_PARAM",
+    }
 )
 MAX_CONFIG_BYTES = 1024 * 1024
 _S3_LOCATION = re.compile(r"^s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/(.{1,1024})$")
@@ -866,7 +901,21 @@ def load_config(
     for d in documents:
         e.update(d)
     # #109: Mermera's settings, under what the environment and the documents set explicitly.
-    merged, report = apply_mermera("aws", e, schema_version=FINDINGS_SCHEMA_VERSION)
+    # The template's key is an SSM SecureString, read once per cold start and held in memory.
+    key: Secret | None = None
+    key_error: str | None = None
+    param = (e.get("FINDINGS_HMAC_KEY_PARAM") or "").strip()
+    if param and (e.get("FINDINGS_HTTPS_URL") or "").strip():
+        if client is None or not _KEY_PARAM.match(param):
+            key_error = "key_parameter"
+        else:
+            try:
+                key = mermera_key(param, client)
+            except Exception as err:  # by name only; the run goes on with its own settings
+                key_error = error_name(err)
+    merged, report = apply_mermera(
+        "aws", e, schema_version=FINDINGS_SCHEMA_VERSION, key=key, key_error=key_error
+    )
     asked = _Asked(merged)
     config = read_config(asked)
     unknown = {name for d in documents for name in d} - asked.asked

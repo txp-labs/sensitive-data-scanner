@@ -431,3 +431,93 @@ def test_the_azure_job_pulls_before_it_reads_its_settings(
     assert m.requests[0].full_url.startswith(
         f"https://ingest.dev.example/v1/tenants/{TENANT}/sites/{SITE}/config?"
     )
+
+
+# ------------------------------------------------------------------ the AWS key in SSM (#109)
+
+PARAM = "/sensitive-data-scanner/sds-stack/findings-hmac-key"
+
+
+class Ssm:
+    """`ssm:GetParameter` on the one parameter the template grants; anything else is denied."""
+
+    def __init__(self, value: str = KEY, fail: str | None = None) -> None:
+        self.value = value
+        self.fail = fail
+        self.calls: list[dict[str, Any]] = []
+
+    def get_parameter(self, **kw: Any) -> dict[str, Any]:
+        self.calls.append(kw)
+        if self.fail or kw["Name"] != PARAM:
+            from botocore.exceptions import ClientError
+
+            code = self.fail or "AccessDeniedException"
+            raise ClientError({"Error": {"Code": code, "Message": "made up"}}, "GetParameter")
+        return {"Parameter": {"Name": PARAM, "Type": "SecureString", "Value": self.value}}
+
+
+@pytest.fixture
+def fresh_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sensitive_data_scanner.config as aws_config
+
+    monkeypatch.setattr(aws_config, "_KEYS", {})
+
+
+def test_the_function_reads_its_key_from_ssm_once_and_signs_with_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fresh_keys: None
+) -> None:
+    m = Mermera({"CONFIG_CONTRACT": "1", "S3_READ_GLACIER_IR": "on"})
+    monkeypatch.setattr("urllib.request.urlopen", m)
+    ssm = Ssm()
+    env = {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL, "FINDINGS_HMAC_KEY_PARAM": PARAM}
+    for _ in range(2):  # two invokes of one execution environment
+        c = load_config(None, lambda service: ssm, env)
+        assert c.mermera_pull and c.s3_read_glacier_ir
+        assert c.settings_report["configPull"]["status"] == "ok"
+    assert ssm.calls == [{"Name": PARAM, "WithDecryption": True}]  # once per cold start
+    header = m.requests[-1].get_header("X-sds-signature")
+    t = int(header.split(",")[0].removeprefix("t="))
+    assert verify(KEY.encode(), header, f"config:{SITE}".encode(), now=t)
+    # Never in the environment, the configuration, a repr or a log line.
+    assert "FINDINGS_HMAC_KEY" not in env and KEY not in json.dumps(env)
+    assert KEY not in repr(c) and KEY not in json.dumps(c.settings_report)
+    import sensitive_data_scanner.config as aws_config
+
+    assert KEY not in repr(aws_config._KEYS)
+    assert KEY not in capsys.readouterr().out
+
+
+def test_a_key_the_function_cannot_read_fails_the_pull_by_name_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fresh_keys: None
+) -> None:
+    m = Mermera({"S3_READ_GLACIER_IR": "on"})
+    monkeypatch.setattr("urllib.request.urlopen", m)
+    env = {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL, "FINDINGS_HMAC_KEY_PARAM": PARAM}
+    c = load_config(None, lambda service: Ssm(fail="AccessDeniedException"), env)
+    assert not c.s3_read_glacier_ir and m.requests == []
+    assert c.settings_report["configPull"] == {
+        "status": "failed",
+        "contract": "1",
+        "error": "key:AccessDeniedException",
+    }
+    out = capsys.readouterr().out
+    assert '"event":"config.pull_failed"' in out and "made up" not in out
+
+
+def test_the_key_parameter_is_the_templates_own_name_only(fresh_keys: None) -> None:
+    env = {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL}
+    with pytest.raises(ValueError, match="FINDINGS_HMAC_KEY_PARAM"):
+        read_config({**env, "FINDINGS_HMAC_KEY_PARAM": "/other/team/secret"})
+    with pytest.raises(ValueError, match="may not set"):
+        load_config({"config": {"FINDINGS_HMAC_KEY_PARAM": PARAM}}, None, env)
+
+
+def test_a_plain_key_still_works_outside_the_template(
+    monkeypatch: pytest.MonkeyPatch, fresh_keys: None
+) -> None:
+    m = Mermera({"S3_READ_GLACIER_IR": "on"})
+    monkeypatch.setattr("urllib.request.urlopen", m)
+    c = load_config(
+        None, None, {"RESULTS_BUCKET": "r", "FINDINGS_HTTPS_URL": URL, "FINDINGS_HMAC_KEY": KEY}
+    )
+    assert c.s3_read_glacier_ir

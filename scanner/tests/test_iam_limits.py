@@ -69,6 +69,8 @@ ALL_ON: dict[str, Any] = {
     "EventBridgeReplay": "true",
     "ScanMode": "both",
     "FindingsEventBusArn": f"arn:{P}:events:{R}:{A}:event-bus/{'e' * 256}",
+    # #109: the Mermera key, stored as the stack's own SecureString and read by the role.
+    "FindingsHmacKey": "k" * 64,
 }
 ALL_OFF: dict[str, Any] = {
     "AllowKmsDecrypt": "false",
@@ -147,7 +149,7 @@ def test_the_worst_case_is_the_all_on_case() -> None:
     on = role_sizes(t, "ScannerRole", SCENARIOS["scanner.yaml"]["all opt-ins, Redshift db-user"])
     off = role_sizes(t, "ScannerRole", ALL_OFF)
     assert sum(on["managed"].values()) > sum(off["managed"].values())
-    assert on["count"] == 9 and off["count"] == 4
+    assert on["count"] == 10 and off["count"] == 4
 
 
 def test_the_scanner_role_keeps_exactly_its_permissions() -> None:
@@ -192,7 +194,10 @@ def test_the_denies_are_managed_and_the_function_waits_for_them() -> None:
         if r["Type"] == "AWS::IAM::ManagedPolicy":
             assert "Roles" not in r["Properties"], f"{name}: attach it through ManagedPolicyArns"
         if r["Type"] == "AWS::Lambda::Function":
-            assert r["Properties"]["Role"] == {"Fn::GetAtt": ["ScannerRole", "Arn"]}
+            # The scanner, and (#109) the custom resource that stores the Mermera key, under a
+            # role of its own that may write that one parameter only (test_template.py).
+            want = "MermeraKeyWriterRole" if name == "MermeraKeyWriter" else "ScannerRole"
+            assert r["Properties"]["Role"] == {"Fn::GetAtt": [want, "Arn"]}, name
 
 
 # ------------------------------------------------------------------ the template's own size

@@ -16,7 +16,7 @@ scanner's side is `scanner/core/src/sensitive_data_core/runner_config.py`;
 
 | Runner | Pulls when | Platform key |
 |---|---|---|
-| AWS (Lambda) | `FINDINGS_HTTPS_URL` and `FINDINGS_HMAC_KEY` are set (template parameters `FindingsHttpsUrl`, `FindingsHmacKey`). The findings still go to the event bus: the URL is used for the pull only | `aws` |
+| AWS (Lambda) | `FINDINGS_HTTPS_URL` and the site's key are set (template parameters `FindingsHttpsUrl`, `FindingsHmacKey`). The template stores the key as an SSM SecureString of the stack's own (`/sensitive-data-scanner/<stack>/findings-hmac-key`, the `aws/ssm` key) and passes the function only its name, `FINDINGS_HMAC_KEY_PARAM`; the function reads it once per cold start (`ssm:GetParameter` on that one parameter, decrypted through SSM) and holds it in memory only, never in its environment or a log. A key it cannot read makes the pull `failed` (`error: key:<error name>`). `FINDINGS_HMAC_KEY` (the key itself) still works for a run outside the template. The findings still go to the event bus: the URL is used for the pull only | `aws` |
 | Azure (Container Apps job) | `FINDINGS_HTTPS_URL` with `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | `azure` |
 | Google Cloud (Cloud Run job) | the same | `gcp` |
 | SaaS (container) | the same | `saas` |
