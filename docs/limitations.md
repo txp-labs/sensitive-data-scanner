@@ -102,6 +102,23 @@ these without a manual restore* (or rehydration). The restore is the
 customer's action, at the customer's cost; the next scan reads the restored
 copy.
 
+## How long the scanner's own output is kept (#119)
+
+Not a limitation on what is read: how long the scanner's results store keeps
+each run's own files. It is infrastructure (a lifecycle rule on the bucket or
+container), so it is **template-only, not settable from Mermera**: the
+scanner never reads it, and a Mermera response that names it is ignored.
+
+| # | What expires | Setting (template parameter only) | Default | What it never touches |
+|---|---|---|---|---|
+| R1 | AWS: the results bucket's per-run files under `findings/runs/` (each run's findings document) and their noncurrent versions | none at run time: `FindingsRetentionDays` (`scanner.yaml`, `estate-stackset.yaml`; replaces `RunHistoryDays`) | 90 days; `0` keeps them forever (no rule is made) | `findings/latest.json`, `findings/report.html` and `findings/findings.csv` (every run overwrites them), `state/` (cursors, the lock, the object index) and `exports/` |
+| R2 | Azure: the state container's `findings/runs/` blobs and their versions (a storage account lifecycle management policy) | none at run time: `findingsRetentionDays` (Bicep) | 90 days; `0`: no policy | the same current files and the state |
+| R3 | Google Cloud: the state bucket's `findings/runs/` objects, noncurrent included | none at run time: `findings_retention_days` (Terraform; replaces `runs_retention_days`) | 90 days; `0`: no lifecycle rule | the same current files and the state |
+
+The current files sit beside `findings/runs/`, never under it, so a prefix
+rule cannot reach them; `scanner/tests/test_retention.py` checks every key
+each runner writes against each template's rule.
+
 ## Changing a default
 
 Each setting is an environment variable the scanner reads, set by its deploy

@@ -60,6 +60,46 @@ run "defaults_read_only" {
   }
 }
 
+run "findings_retention_default" {
+  command = plan
+
+  assert {
+    condition     = length(google_storage_bucket.state.lifecycle_rule) == 1
+    error_message = "Per-run files expire by default (#119)."
+  }
+  assert {
+    condition     = one(google_storage_bucket.state.lifecycle_rule[0].condition).age == 90
+    error_message = "findings_retention_days defaults to 90."
+  }
+  assert {
+    condition     = tolist(one(google_storage_bucket.state.lifecycle_rule[0].condition).matches_prefix) == tolist(["findings/runs/"])
+    error_message = "Only findings/runs/ expires: never findings/latest.json, report.html, findings.csv or state."
+  }
+}
+
+run "findings_retention_zero_keeps_everything" {
+  command = plan
+
+  variables {
+    findings_retention_days = 0
+  }
+
+  assert {
+    condition     = length(google_storage_bucket.state.lifecycle_rule) == 0
+    error_message = "findings_retention_days = 0 makes no lifecycle rule."
+  }
+}
+
+run "findings_retention_is_a_whole_count" {
+  command = plan
+
+  variables {
+    findings_retention_days = -1
+  }
+
+  expect_failures = [var.findings_retention_days]
+}
+
 run "inventory_threshold_set" {
   command = plan
 

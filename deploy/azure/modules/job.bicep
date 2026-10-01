@@ -47,6 +47,10 @@ param findingsEventGridEndpoint string = ''
 @description('A subnet (/27 or larger, delegated to Microsoft.App/environments) to reach private endpoints; empty for none.')
 param infrastructureSubnetId string = ''
 param stateAccountName string = 'sds${uniqueString(resourceGroup().id)}'
+@description('Days the state container keeps per-run files (findings/runs/) and their versions; 0 keeps them forever (#119). Template-only.')
+@minValue(0)
+@maxValue(36500)
+param findingsRetentionDays int = 90
 param tags object = {}
 
 // Storage Blob Data Contributor: the job's own container only.
@@ -80,6 +84,47 @@ resource stateContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   name: stateContainerName
   properties: {
     publicAccess: 'None'
+  }
+}
+
+// #119: per-run files expire; findings/latest.json, report.html, findings.csv (overwritten by
+// every run) sit beside findings/runs/, and the scanner's state outside it, so the rule never
+// reaches them.
+resource retention 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = if (findingsRetentionDays > 0) {
+  parent: state
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          enabled: true
+          name: 'findings-retention'
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                '${stateContainerName}/findings/runs/'
+              ]
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterModificationGreaterThan: findingsRetentionDays
+                }
+              }
+              version: {
+                delete: {
+                  daysAfterCreationGreaterThan: findingsRetentionDays
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
   }
 }
 

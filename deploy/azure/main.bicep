@@ -64,6 +64,10 @@ param findingsEventGridEndpoint string = ''
 @minValue(0)
 @maxValue(10000000000)
 param blobInventoryMinObjects int = 1000000
+@description('Days the job\'s state container keeps per-run files (findings/runs/) and their versions; 0 keeps them forever (#119). Template-only: not settable from Mermera.')
+@minValue(0)
+@maxValue(36500)
+param findingsRetentionDays int = 90
 @description('A subnet delegated to Microsoft.App/environments, to reach private endpoints (central mode).')
 param infrastructureSubnetId string = ''
 param tags object = {}
@@ -120,6 +124,7 @@ module centralJob 'modules/job.bicep' = if (central) {
     readColdTier: readColdTier
     rehydrateArchive: rehydrateArchive
     blobInventoryMinObjects: blobInventoryMinObjects
+    findingsRetentionDays: findingsRetentionDays
     findingsHttpsUrl: findingsHttpsUrl
     findingsHmacKey: findingsHmacKey
     findingsEventGridEndpoint: findingsEventGridEndpoint
@@ -179,6 +184,7 @@ module jobs 'modules/job.bicep' = [
     readColdTier: readColdTier
     rehydrateArchive: rehydrateArchive
       blobInventoryMinObjects: blobInventoryMinObjects
+      findingsRetentionDays: findingsRetentionDays
       findingsHttpsUrl: findingsHttpsUrl
       findingsHmacKey: findingsHmacKey
       findingsEventGridEndpoint: findingsEventGridEndpoint

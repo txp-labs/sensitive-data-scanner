@@ -127,6 +127,15 @@ One run:
 5. **Findings.**
    - The run writes the document to `findings/runs/<runId>.json` and
      `findings/latest.json`, then state for the next run.
+   - **Retention (#119).** A lifecycle rule expires the per-run files under
+     `findings/runs/`, and their noncurrent versions, after
+     `FindingsRetentionDays` (default 90; `0` keeps them forever, with no
+     rule). The files every run overwrites (`findings/latest.json`,
+     `report.html`, `findings.csv`) sit beside that prefix and `state/`
+     outside it, so the rule never reaches them. The Azure and Google Cloud
+     templates do the same (`findingsRetentionDays`,
+     `findings_retention_days`). It is the template's, not a setting Mermera
+     can change ([limitations.md](limitations.md#how-long-the-scanners-own-output-is-kept-119)).
    - Next to it, the **standalone report** (#117): `findings/report.html`,
      one self-contained page (inline CSS, no script, no request of any kind,
      light and dark, printable), and `findings/findings.csv`, one row per

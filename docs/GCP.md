@@ -506,7 +506,7 @@ terraform -chdir=deploy/gcp apply \
 | `findings_https_url`, `findings_hmac_key` | | The signed push; both go into Secret Manager secrets of the job's own |
 | `findings_pubsub_topic` | | The Pub/Sub push; the topic's owner grants the service account Pub/Sub Publisher on it |
 | `network`, `subnetwork` | | Direct VPC egress, so the job reaches private IPs (Cloud SQL, AlloyDB) |
-| `state_bucket_name`, `runs_retention_days` | `<project_id>-sds-state`, 90 | The job's own bucket, and how long run documents are kept |
+| `state_bucket_name`, `findings_retention_days` | `<project_id>-sds-state`, 90 | The job's own bucket, and how many days it keeps per-run files (`findings/runs/`); 0 keeps them forever. Never the current `findings/latest.json` or the state (#119; replaces `runs_retention_days`) |
 | `enable_apis` | true | Enable, in `project_id`, the APIs the job calls: a service account's calls count against its own project |
 
 **What it creates:**
@@ -516,7 +516,7 @@ terraform -chdir=deploy/gcp apply \
 - a Cloud Run job (one task, no retries) that runs as the scanner's account,
   and a Cloud Scheduler job that starts it;
 - the job's own state bucket, with uniform access and public access
-  prevention, and run documents deleted after `runs_retention_days`;
+  prevention, and per-run files deleted after `findings_retention_days`;
 - with a push URL, two Secret Manager secrets for it and its key.
 
 **The roles.** Predefined viewer roles are not used: several carry writes
