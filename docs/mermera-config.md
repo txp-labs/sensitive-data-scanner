@@ -170,7 +170,10 @@ on, the stores it covers say `not_implemented`
 secret (KMS key ARNs, VPC subnets and security groups, brokers, database
 users, buckets), anything the template must build something for (the
 EventBridge replay queue, the export roles, the Azure database kinds that need
-a user), and the budgets and export limits (numbers the deployment sizes).
+a user), the budgets and export limits (numbers the deployment sizes), and how long
+the results store keeps per-run files (`FindingsRetentionDays`,
+`findingsRetentionDays`, `findings_retention_days`, #119: a lifecycle rule on
+the bucket, which is infrastructure; [limitations.md](limitations.md#how-long-the-scanners-own-output-is-kept-119)).
 They stay the deployment's, and a response that names one has it ignored.
 
 ## What the run reports (findings schema 1.13)

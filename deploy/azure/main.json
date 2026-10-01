@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "9991619521703409373"
+      "templateHash": "3082032689301773951"
     }
   },
   "parameters": {
@@ -159,6 +159,15 @@
       "maxValue": 10000000000,
       "metadata": {
         "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: a container whose last complete pass listed at least this many blobs is named in the run summary (recommendation: blob_inventory); 0 never names one."
+      }
+    },
+    "findingsRetentionDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 0,
+      "maxValue": 36500,
+      "metadata": {
+        "description": "Days the job's state container keeps per-run files (findings/runs/) and their versions; 0 keeps them forever (#119). Template-only: not settable from Mermera."
       }
     },
     "infrastructureSubnetId": {
@@ -326,6 +335,9 @@
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
+          "findingsRetentionDays": {
+            "value": "[parameters('findingsRetentionDays')]"
+          },
           "findingsHttpsUrl": {
             "value": "[parameters('findingsHttpsUrl')]"
           },
@@ -350,7 +362,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "14535242296347337249"
+              "templateHash": "10350486322093056314"
             }
           },
           "parameters": {
@@ -480,6 +492,15 @@
               "type": "string",
               "defaultValue": "[format('sds{0}', uniqueString(resourceGroup().id))]"
             },
+            "findingsRetentionDays": {
+              "type": "int",
+              "defaultValue": 90,
+              "minValue": 0,
+              "maxValue": 36500,
+              "metadata": {
+                "description": "Days the state container keeps per-run files (findings/runs/) and their versions; 0 keeps them forever (#119). Template-only."
+              }
+            },
             "tags": {
               "type": "object",
               "defaultValue": {}
@@ -527,6 +548,48 @@
               },
               "dependsOn": [
                 "blobs"
+              ]
+            },
+            "retention": {
+              "condition": "[greater(parameters('findingsRetentionDays'), 0)]",
+              "type": "Microsoft.Storage/storageAccounts/managementPolicies",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('stateAccountName'), 'default')]",
+              "properties": {
+                "policy": {
+                  "rules": [
+                    {
+                      "enabled": true,
+                      "name": "findings-retention",
+                      "type": "Lifecycle",
+                      "definition": {
+                        "filters": {
+                          "blobTypes": [
+                            "blockBlob"
+                          ],
+                          "prefixMatch": [
+                            "[format('{0}/findings/runs/', variables('stateContainerName'))]"
+                          ]
+                        },
+                        "actions": {
+                          "baseBlob": {
+                            "delete": {
+                              "daysAfterModificationGreaterThan": "[parameters('findingsRetentionDays')]"
+                            }
+                          },
+                          "version": {
+                            "delete": {
+                              "daysAfterCreationGreaterThan": "[parameters('findingsRetentionDays')]"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "state"
               ]
             },
             "environment": {
@@ -754,6 +817,9 @@
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
+          "findingsRetentionDays": {
+            "value": "[parameters('findingsRetentionDays')]"
+          },
           "findingsHttpsUrl": {
             "value": "[parameters('findingsHttpsUrl')]"
           },
@@ -775,7 +841,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "14535242296347337249"
+              "templateHash": "10350486322093056314"
             }
           },
           "parameters": {
@@ -905,6 +971,15 @@
               "type": "string",
               "defaultValue": "[format('sds{0}', uniqueString(resourceGroup().id))]"
             },
+            "findingsRetentionDays": {
+              "type": "int",
+              "defaultValue": 90,
+              "minValue": 0,
+              "maxValue": 36500,
+              "metadata": {
+                "description": "Days the state container keeps per-run files (findings/runs/) and their versions; 0 keeps them forever (#119). Template-only."
+              }
+            },
             "tags": {
               "type": "object",
               "defaultValue": {}
@@ -952,6 +1027,48 @@
               },
               "dependsOn": [
                 "blobs"
+              ]
+            },
+            "retention": {
+              "condition": "[greater(parameters('findingsRetentionDays'), 0)]",
+              "type": "Microsoft.Storage/storageAccounts/managementPolicies",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('stateAccountName'), 'default')]",
+              "properties": {
+                "policy": {
+                  "rules": [
+                    {
+                      "enabled": true,
+                      "name": "findings-retention",
+                      "type": "Lifecycle",
+                      "definition": {
+                        "filters": {
+                          "blobTypes": [
+                            "blockBlob"
+                          ],
+                          "prefixMatch": [
+                            "[format('{0}/findings/runs/', variables('stateContainerName'))]"
+                          ]
+                        },
+                        "actions": {
+                          "baseBlob": {
+                            "delete": {
+                              "daysAfterModificationGreaterThan": "[parameters('findingsRetentionDays')]"
+                            }
+                          },
+                          "version": {
+                            "delete": {
+                              "daysAfterCreationGreaterThan": "[parameters('findingsRetentionDays')]"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "state"
               ]
             },
             "environment": {

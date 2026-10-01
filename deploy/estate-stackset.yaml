@@ -60,6 +60,13 @@ Parameters:
   Discover:
     Type: String
     Default: all
+  FindingsRetentionDays:
+    Type: String
+    Default: "90"
+    AllowedPattern: "^[0-9]{1,5}$"
+    Description: >-
+      Days each account's results bucket keeps per-run files (findings/runs/),
+      as scanner.yaml takes it; 0 keeps them forever (#119).
   DiscoverDeny:
     Type: String
     Default: ""
@@ -117,6 +124,8 @@ Resources:
           ParameterValue: !Ref DiscoverDeny
         - ParameterKey: RdsExportKmsKeyArn
           ParameterValue: !Ref RdsExportKmsKeyArn
+        - ParameterKey: FindingsRetentionDays
+          ParameterValue: !Ref FindingsRetentionDays
       StackInstancesGroup:
         - DeploymentTargets:
             OrganizationalUnitIds: !Ref OrganizationalUnitIds

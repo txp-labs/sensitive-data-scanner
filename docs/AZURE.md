@@ -461,6 +461,7 @@ az deployment mg create --management-group-id <mg> --location <region> \
 | `schedule`, `replicaTimeoutSeconds` | daily 06:00 UTC, 3600 | When it runs, and for how long at most |
 | `site` | the management group, lower case | `SCANNER_SITE` |
 | `discover`, `readDatabases`, `readKeyVaultSecrets`, `readFileShares` | every kind; off; off; off | `DISCOVER`, `AZURE_DB_READ` (with `AZURE_DB_PRINCIPAL` set to the job's name), `KEYVAULT_SECRETS_READ`, `AZURE_FILES_READ` |
+| `findingsRetentionDays` | 90 | Days the state container keeps per-run files (`findings/runs/`) and their versions, by a lifecycle management policy; 0: kept forever, no policy. Never `findings/latest.json`, `report.html`, `findings.csv` or the state (#119). Template-only |
 | `blobInventoryMinObjects` | 1,000,000 | `AZURE_BLOB_INVENTORY_MIN_OBJECTS`: a container whose last complete pass listed at least this many blobs is named in the run summary (`recommendation: blob_inventory`); 0: never |
 | `cosmosAccountIds` | | Cosmos DB for NoSQL accounts (resource IDs) to give the identity Cosmos DB Built-in Data Reader on (central mode) |
 | `findingsHttpsUrl`, `findingsHmacKey` | | The signed push; both are Container Apps secrets |
