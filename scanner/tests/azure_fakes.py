@@ -52,9 +52,11 @@ def account_row(
     public: str = "Enabled",
     default_action: str = "Allow",
     tags: dict[str, str] | None = None,
+    location: str = "eastus",
 ) -> dict[str, Any]:
     return {
         "id": account_id(sub, group, name),
+        "location": location,
         "name": name,
         "subscriptionId": sub,
         "resourceGroup": group,
@@ -133,7 +135,8 @@ class Blob:
     modified: dt.datetime = NOW - dt.timedelta(days=1)
     version_id: str | None = None
     encryption_scope: str | None = None
-    blob_tier: str = "Hot"
+    blob_tier: str | None = "Hot"
+    archive_status: str | None = None  # `rehydrate-pending-to-hot` while rehydrating (#109)
     cpk: bool = False
     fail: Exception | None = None
     md5: bool = False  # the listing gives Content-MD5 (#67 part 5)
@@ -201,6 +204,7 @@ class Container:
                 version_id=b.version_id,
                 encryption_scope=b.encryption_scope,
                 blob_tier=b.blob_tier,
+                archive_status=b.archive_status,
                 encryption_key_sha256="made-up-sha" if b.cpk else None,
                 content_settings=SimpleNamespace(
                     content_md5=hashlib.md5(b.data, usedforsecurity=False).digest()

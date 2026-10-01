@@ -78,7 +78,10 @@ that changes each and its default, and how a store left unread shows up:
   retrieval fee, so each is counted (`notAllowed`: `archive_class`) and the
   bucket names `toggle: GCS_READ_ARCHIVE`; turn that on (Terraform
   `read_archive_objects`) to read them, their fee within the run's bytes
-  budget ([limitations.md](limitations.md), C3).
+  budget ([limitations.md](limitations.md), C3). The bucket's
+  `storageClasses` and `costEstimate` (#109) say how much is in each class
+  and what reading Nearline, Coldline and Archive costs
+  ([COST.md](COST.md#reading-cold-storage-classes)).
 - **Incremental.** A pass reads only the objects updated since the previous
   complete pass started (less `skew`), and a pass cut short by the budget
   resumes at the listing page it stopped in. With the object index
@@ -460,7 +463,7 @@ masked.
 | `RESCAN_PERCENT` | 25 | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change what they give changed, such as a reader or the spec ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); 0 turns rescans off |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on objects per run |
 | `STATE_BUCKET` | | The job's own bucket, `gs://<bucket>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |
-| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters |
+| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters. With the push set, the job also pulls its settings from that site before each run, under what its environment sets ([mermera-config.md](mermera-config.md)) |
 | `FINDINGS_PUBSUB_TOPIC` | | Also publish each part as a message to this topic (`projects/<project>/topics/<topic>`), as the job's service account: `data` is the part as JSON, the attributes are `source` `sensitive-data-scanner`, `type` `Findings v1`, `runId` and `part`. The topic's owner grants the service account Pub/Sub Publisher on that topic only |
 | `FINDINGS_FILE` | | Also write the document to a file |
 | `SCAN_MODE` | `scanner` | Who finds the data (#55): `scanner`, `vendor` (Sensitive Data Protection's data profiles are imported; nothing is read) or `both` (linked) ([FINDINGS.md](FINDINGS.md#sources-and-modes-18)) |

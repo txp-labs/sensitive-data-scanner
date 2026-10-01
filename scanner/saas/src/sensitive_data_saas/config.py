@@ -136,6 +136,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sensitive_data_core.modes import SCANNER, ModeError, read_mode
 from sensitive_data_core.rules import (
@@ -321,6 +322,9 @@ class Settings:
     modes: tuple[tuple[str, str], ...] = ()
     # #105: a vendor's alert with no kind of data is linked to findings at the same item.
     link_by_location: bool = True
+
+    # #109: the run's settings report (`settingsSource`, `configPull`), for the document.
+    settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def sampling_for(
         self, kind: str, name: str, tags: dict[str, str] | None

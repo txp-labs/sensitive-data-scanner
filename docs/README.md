@@ -12,13 +12,14 @@ detects, how it stays safe, and how proven each path is.
 | [GCP.md](GCP.md) | The Google Cloud scanner: stores and the permissions each needs, Sensitive Data Protection's profiles, findings, settings, deploying the Terraform |
 | [DATABASES.md](DATABASES.md) | The databases runner: engines and how each is kept read-only, settings, tables unchanged since the last read, deploying with docker, Kubernetes, ECS or Azure Container Instances |
 | [limitations.md](limitations.md) | Every deliberate limitation, on every platform: what is not read and why, the setting that changes it, its default, and how a store left unread shows up |
+| [mermera-config.md](mermera-config.md) | The runner config contract: how a runner pulls its settings from Mermera (`GET .../config`), the response it expects, precedence, IAM-gated settings, and what the run reports (`settingsSource`, `configPull`) |
 | [SAAS.md](SAAS.md) | The SaaS scanner: Microsoft 365, Google Workspace, Slack, Jira and Confluence, consent and read-only grants, vendor detection (Purview, Workspace DLP, Slack DLP), settings, deploying |
 
 ## Cost
 
 | Document | What it covers |
 |---|---|
-| [COST.md](COST.md) | What a run and a first full pass cost per platform, for 10, 100 and 1,000 accounts: compute, request, export and query charges, with dated public prices, and how budgets, sampling, rescans and S3 Inventory bring them down |
+| [COST.md](COST.md) | What a run and a first full pass cost per platform, for 10, 100 and 1,000 accounts: compute, request, export and query charges, with dated public prices, how budgets, sampling, rescans and S3 Inventory bring them down, and what reading cold storage classes costs (the run's `costEstimate`) |
 
 ## Findings and releases
 

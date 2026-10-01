@@ -70,6 +70,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sensitive_data_core.modes import SCANNER, ModeError, read_mode
 from sensitive_data_core.rules import (
@@ -203,6 +204,8 @@ class Settings:
     gcs_read_archive: bool = False
     sqlserver_read: bool = False
     pubsub_dlq_read: bool = False
+    # #109: the run's settings report (`settingsSource`, `configPull`), for the document.
+    settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
     # Cloud SQL and AlloyDB (opt-in): which kinds are read, as whom, and how much.
     db_read: tuple[str, ...] = ()
     db_principal: str | None = None

@@ -26,7 +26,13 @@ Nothing is written, copied, rewritten or composed.
   `requester_pays`.
 - An Archive-class object is counted (`notAllowed`: `archive_class`), not read:
   reading it has a retrieval fee. `GCS_READ_ARCHIVE` on reads it like any other
-  (#105; the store names that setting, docs/limitations.md).
+  (#105; the store names that setting, docs/limitations.md). Standard, Nearline
+  and Coldline are read (Nearline and Coldline within the byte budget).
+- **Storage classes (1.13, #109)**: the objects and bytes per class over a
+  listing pass (from `objects.list`'s `storageClass`, never an extra call) are
+  kept in the cursor; the run summary's store shows them (`storageClasses`)
+  with the cost to read the classes that have a retrieval fee
+  (`costEstimate`, `sensitive_data_core.storage_classes`).
 
 **Encryption (1.5).** Every object is encrypted at rest. A finding says under
 which key: the object's own `kmsKeyName` (a CMEK, `customer_managed_key`, named
@@ -49,6 +55,7 @@ from sensitive_data_core.index import UNINDEXED, Indexes, ObjectPass, Stale, md5
 from sensitive_data_core.safety import error_name, log_event, redact_digits
 from sensitive_data_core.scan.columnar import pyarrow_available
 from sensitive_data_core.scan.objects import planned_bytes, sample_point
+from sensitive_data_core.storage_classes import ClassInventory, Rule, gcs_class, gcs_rule
 
 from ..clients import STORAGE_API, Rest
 from ..resources import Located, console_link, gcs_object_resource
@@ -72,6 +79,8 @@ class BucketTarget:
     where: Located
     bucket: str
     default: dict[str, Any] = field(default_factory=dict)
+    # The bucket's location (`us-central1`, `us`): the cost estimate's (#109).
+    location: str = ""
 
     def __repr__(self) -> str:
         return f"BucketTarget({redact_digits(self.bucket)!r})"
@@ -98,7 +107,9 @@ class GcsAdapter:
                 [str(row["kmsKey"])] if row.get("kmsKey") else []
             )
             store.facts = kms_facts(keys[0] if keys else None)
-            store.table = BucketTarget(where, bucket, dict(store.facts))
+            store.table = BucketTarget(
+                where, bucket, dict(store.facts), str(row.get("location") or "").lower()
+            )
             out.stores.append(store)
             if own is not None and bucket == own:
                 store.skip("self")
@@ -150,6 +161,7 @@ class GcsSource:
         "prefixDir",
         "prefixCount",
         "passListed",
+        "classes",
     )
     # (#67) Named in the run summary when its last complete pass listed at least
     # `inventory_min_objects`: an inventory report would spare it a listing each pass. Not
@@ -176,6 +188,7 @@ class GcsSource:
     ) -> None:
         self.inventory_min_objects = inventory_min_objects
         self.read_archive = read_archive
+        self._classes = ClassInventory("gcp", target.location or None)
         self.rest = rest
         self.t = target
         self.prefix = prefix
@@ -240,6 +253,10 @@ class GcsSource:
             budget=budget,
             scope=f"gcp:{self.t.where.project}" if self.t.where.project else None,
         )
+        # The pass's objects per class so far (#109): carried by the cursor.
+        self._classes = self._inventory(
+            cursor.get("classes") if cursor.get("passStartedAt") else None
+        )
         try:
             while budget.time_left():
                 items, next_token = self._page(token)
@@ -296,7 +313,10 @@ class GcsSource:
                 "watermark": pass_started,
                 "passStartedAt": None,
                 "objects": listed,
+                "classesPass": self._classes.cursor(),
             }
+            self._classes.complete = True
+            cov.storage_classes = self._classes
             cur_dir, cur_n = None, 0
         else:
             if cov.error is None:
@@ -307,9 +327,14 @@ class GcsSource:
                 "token": token,
                 "skip": skip,
                 "passListed": listed,
+                "classes": self._classes.cursor(),
             }
             if cursor.get("objects"):
                 new_cursor["objects"] = cursor["objects"]
+            last = self._last_pass(cursor)
+            if last is not None:
+                new_cursor["classesPass"] = cursor["classesPass"]
+            cov.storage_classes = last or self._classes
         if self.max_per_prefix:
             new_cursor["prefixDir"] = cur_dir
             new_cursor["prefixCount"] = cur_n
@@ -342,10 +367,14 @@ class GcsSource:
         self._op.seen(name)
         if name.endswith("/") or size == 0:
             return cur_dir, cur_n, None  # a folder placeholder or an empty object
-        if not self.read_archive and str(obj.get("storageClass") or "").upper() == "ARCHIVE":
+        cls = gcs_class(obj)
+        rule = self._rule(cls)
+        self._classes.add(cls, size, planned_bytes(name, size, self.max_object_bytes), rule)
+        if not rule.read:
             # #105: an Archive-class object's read has a retrieval fee: counted, not read,
             # unless GCS_READ_ARCHIVE is on (the store names that setting).
-            cov.not_allowed["archive_class"] = cov.not_allowed.get("archive_class", 0) + 1
+            reason = str(rule.reason)
+            cov.not_allowed[reason] = cov.not_allowed.get(reason, 0) + 1
             return cur_dir, cur_n, None
         updated = _time(obj.get("updated"))
         changed = since is None or updated is None or updated > since
@@ -369,10 +398,27 @@ class GcsSource:
             return cur_dir, cur_n + int(counted), None
         want = planned_bytes(name, size, self.max_object_bytes)
         if not budget.has(want):
+            self._classes.remove(cls, size, want)  # listed again by the next run (#109)
             return None
         budget.take(want)
         cur_n += 1
         return cur_dir, cur_n, self._guarded(obj, cov, detector, store, seen_at)
+
+    def _rule(self, cls: str) -> Rule:
+        return gcs_rule(cls, read_archive=self.read_archive)
+
+    def _inventory(self, saved: Any) -> ClassInventory:
+        inv = ClassInventory.resume("gcp", self.t.location or None, saved)
+        inv.rules = {cls: self._rule(cls) for cls in inv.counts}
+        return inv
+
+    def _last_pass(self, cursor: dict[str, Any]) -> ClassInventory | None:
+        """The last complete pass's objects per class, with today's rules; None before one."""
+        if not isinstance(cursor.get("classesPass"), dict):
+            return None
+        inv = self._inventory(cursor["classesPass"])
+        inv.complete = True
+        return inv
 
     def _planned(self, obj: dict[str, Any]) -> int:
         size = int(obj.get("size") or 0)

@@ -1,0 +1,1453 @@
+{
+ "currency": "USD",
+ "note": "Retrieval per GB and GET (read operation) per 1,000 requests, by platform, region and storage class. Regenerate with scripts/storage_prices.py --write.",
+ "platforms": {
+  "aws": {
+   "fallbackRegion": "us-east-1",
+   "priceDate": "2026-09-28",
+   "regions": {
+    "af-south-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-east-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-east-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.000333,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.000333,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-northeast-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00037,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00037,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-northeast-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00035,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00035,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-northeast-3": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00037,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00037,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-south-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-south-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-3": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-4": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-5": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00036,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00036,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-6": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.000462,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.000462,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ap-southeast-7": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00036,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00036,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ca-central-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "ca-west-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-central-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-central-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-north-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-south-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-south-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-west-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-west-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00042,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00042,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "eu-west-3": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00042,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00042,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "il-central-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "me-central-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "me-south-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "mx-central-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00042,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00042,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "sa-east-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00056,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00056,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "us-east-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "us-east-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "us-west-1": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    },
+    "us-west-2": {
+     "GLACIER_IR": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "INTELLIGENT_TIERING": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "ONEZONE_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     },
+     "STANDARD_IA": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     }
+    }
+   },
+   "sources": [
+    "https://aws.amazon.com/s3/pricing/",
+    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/region_index.json"
+   ]
+  },
+  "azure": {
+   "basis": "General Block Blob v2, LRS (other redundancies may differ); hierarchical-namespace (ADLS Gen2) read operations are priced as flat",
+   "fallbackRegion": "eastus",
+   "priceDate": "2026-10-01",
+   "regions": {
+    "australiacentral": {
+     "Archive": {
+      "getPer1k": 0.815,
+      "retrievalPerGb": 0.0326
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "australiaeast": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "australiasoutheast": {
+     "Archive": {
+      "getPer1k": 0.725,
+      "retrievalPerGb": 0.029
+     },
+     "Cold": {
+      "getPer1k": 0.014,
+      "retrievalPerGb": 0.042
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "brazilsouth": {
+     "Archive": {
+      "getPer1k": 0.7,
+      "retrievalPerGb": 0.028
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00056,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "canadacentral": {
+     "Archive": {
+      "getPer1k": 0.55,
+      "retrievalPerGb": 0.022
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "canadaeast": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "centralindia": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "centralus": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.0123,
+      "retrievalPerGb": 0.0369
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "eastasia": {
+     "Archive": {
+      "getPer1k": 0.875,
+      "retrievalPerGb": 0.035
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "eastus": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "eastus2": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "francecentral": {
+     "Archive": {
+      "getPer1k": 0.53,
+      "retrievalPerGb": 0.021
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.0011,
+      "retrievalPerGb": 0.011
+     },
+     "Hot": {
+      "getPer1k": 0.00047,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "germanywestcentral": {
+     "Archive": {
+      "getPer1k": 0.5375,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "italynorth": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "japaneast": {
+     "Archive": {
+      "getPer1k": 0.55,
+      "retrievalPerGb": 0.022
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "japanwest": {
+     "Archive": {
+      "getPer1k": 0.775,
+      "retrievalPerGb": 0.031
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "koreacentral": {
+     "Archive": {
+      "getPer1k": 0.55,
+      "retrievalPerGb": 0.022
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "koreasouth": {
+     "Archive": {
+      "getPer1k": 0.675,
+      "retrievalPerGb": 0.027
+     },
+     "Cold": {
+      "getPer1k": 0.0125,
+      "retrievalPerGb": 0.0375
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "northcentralus": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "northeurope": {
+     "Archive": {
+      "getPer1k": 0.55,
+      "retrievalPerGb": 0.022
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "norwayeast": {
+     "Archive": {
+      "getPer1k": 0.715,
+      "retrievalPerGb": 0.0286
+     },
+     "Cold": {
+      "getPer1k": 0.0143,
+      "retrievalPerGb": 0.0429
+     },
+     "Cool": {
+      "getPer1k": 0.0011,
+      "retrievalPerGb": 0.011
+     },
+     "Hot": {
+      "getPer1k": 0.000473,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "southafricanorth": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "southcentralus": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.012,
+      "retrievalPerGb": 0.036
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "southeastasia": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "southindia": {
+     "Archive": {
+      "getPer1k": 0.75,
+      "retrievalPerGb": 0.03
+     },
+     "Cold": {
+      "getPer1k": 0.0151,
+      "retrievalPerGb": 0.0453
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "spaincentral": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "swedencentral": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "switzerlandnorth": {
+     "Archive": {
+      "getPer1k": 0.66,
+      "retrievalPerGb": 0.0264
+     },
+     "Cold": {
+      "getPer1k": 0.0143,
+      "retrievalPerGb": 0.0429
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "uaenorth": {
+     "Archive": {
+      "getPer1k": 0.55,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.0012,
+      "retrievalPerGb": 0.012
+     },
+     "Hot": {
+      "getPer1k": 0.00048,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "uksouth": {
+     "Archive": {
+      "getPer1k": 0.53,
+      "retrievalPerGb": 0.0208
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.0011,
+      "retrievalPerGb": 0.011
+     },
+     "Hot": {
+      "getPer1k": 0.00047,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "ukwest": {
+     "Archive": {
+      "getPer1k": 0.625,
+      "retrievalPerGb": 0.025
+     },
+     "Cold": {
+      "getPer1k": 0.0131,
+      "retrievalPerGb": 0.0393
+     },
+     "Cool": {
+      "getPer1k": 0.0011,
+      "retrievalPerGb": 0.011
+     },
+     "Hot": {
+      "getPer1k": 0.00047,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "westcentralus": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.012,
+      "retrievalPerGb": 0.036
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "westeurope": {
+     "Archive": {
+      "getPer1k": 0.6,
+      "retrievalPerGb": 0.024
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00043,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "westus": {
+     "Archive": {
+      "getPer1k": 0.55,
+      "retrievalPerGb": 0.022
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.00044,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "westus2": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    },
+    "westus3": {
+     "Archive": {
+      "getPer1k": 0.5,
+      "retrievalPerGb": 0.02
+     },
+     "Cold": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.03
+     },
+     "Cool": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "Hot": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    }
+   },
+   "sources": [
+    "https://azure.microsoft.com/pricing/details/storage/blobs/",
+    "https://prices.azure.com/api/retail/prices"
+   ]
+  },
+  "gcp": {
+   "basis": "Retrieval fees and Class B operations (flat namespace) are the same in every location; buckets with Autoclass have no retrieval fee",
+   "fallbackRegion": "*",
+   "priceDate": "2026-10-01",
+   "regions": {
+    "*": {
+     "ARCHIVE": {
+      "getPer1k": 0.05,
+      "retrievalPerGb": 0.05
+     },
+     "COLDLINE": {
+      "getPer1k": 0.01,
+      "retrievalPerGb": 0.02
+     },
+     "NEARLINE": {
+      "getPer1k": 0.001,
+      "retrievalPerGb": 0.01
+     },
+     "STANDARD": {
+      "getPer1k": 0.0004,
+      "retrievalPerGb": 0.0
+     }
+    }
+   },
+   "sources": [
+    "https://cloud.google.com/storage/pricing"
+   ]
+  }
+ },
+ "schema": "sensitive-data-scanner.storage-prices",
+ "version": 1
+}

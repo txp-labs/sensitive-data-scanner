@@ -49,6 +49,20 @@ a read-only S3 Express session. A directory bucket lists in no key order and
 takes no `StartAfter`, so a pass resumes at its page's continuation token and
 the objects of that page already read.
 
+**Storage classes (1.13, #109).** The class comes from the listing
+(`StorageClass`, and `RestoreStatus`, asked for with `OptionalObjectAttributes`;
+an inventory report's `StorageClass` and `IntelligentTieringAccessTier`), so an
+object left out is never fetched (`sensitive_data_core.storage_classes`):
+Standard-IA and One Zone-IA are read within the byte budget; Glacier Instant
+Retrieval only with `S3_READ_GLACIER_IR` (else `notAllowed: archive_class`);
+Glacier Flexible Retrieval and Deep Archive are the gap `needs_restore` unless a
+restored copy is available, which is read. An Intelligent-Tiering object in an
+archive tier lists as `INTELLIGENT_TIERING`: its GET is refused
+(`InvalidObjectState`), and one HeadObject (`ArchiveStatus`) files it under its
+tier, as `needs_restore`, never `unreadable`. The objects and bytes per class
+over a listing pass are kept in the cursor, and the run summary's store shows
+the last complete pass's (`storageClasses`, `costEstimate`).
+
 **Encryption (1.5).** With a key classifier (`keys`), each object's findings
 carry the encryption it is stored under, from the `x-amz-server-side-encryption`
 header of the GetObject that read it (`encryption.s3_object_facts`): the
@@ -59,7 +73,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from sensitive_data_core.adapter import Budget, FindingStore, SourceRun
@@ -74,6 +88,14 @@ from sensitive_data_core.scan.columnar import (
 from sensitive_data_core.scan.objects import (
     planned_bytes,
     sample_point,
+)
+from sensitive_data_core.storage_classes import (
+    NEEDS_RESTORE,
+    S3_IT_ARCHIVED,
+    ClassInventory,
+    Rule,
+    s3_class,
+    s3_rule,
 )
 
 from ..resources import s3_link, s3_resource
@@ -102,6 +124,7 @@ class _Walk:
     first_error: str | None = None
     file: int = 0
     row: int = 0
+    classes: ClassInventory = field(default_factory=lambda: ClassInventory("aws", None))
 
 
 class S3Source:
@@ -124,8 +147,15 @@ class S3Source:
         "report",
         "prefixDir",
         "prefixCount",
+        "classes",
     )
     indexes: Indexes | None = None
+    # #109 (docs/limitations.md): the runner sets these from S3_READ_GLACIER_IR and the hook
+    # S3_RESTORE_ARCHIVED.
+    read_glacier_ir: bool = False
+    restore_archived: bool = False
+    # A listing that refused `OptionalObjectAttributes` is asked without it from then on.
+    _restore_status: bool = True
 
     def __init__(
         self,
@@ -233,10 +263,13 @@ class S3Source:
             budget=budget,
         )
         w = _Walk(cov, op, budget, detector, store, seen_at, since, cur_dir, cur_n)
+        # The pass's objects per storage class so far (#109): carried by the cursor.
+        w.classes = self._classes(cursor.get("classes") if cursor.get("passStartedAt") else None)
         report = self._report(cursor, now)
         if self._idle:
             # The latest report was read in full: nothing is listed until the next one.
             cov.pass_complete = True
+            cov.storage_classes = self._last_pass(cursor)
             op.settle(cov)
             idle = dict(cursor)
             extra_idle: dict[str, Any] = {"listedBy": "inventory"}
@@ -259,7 +292,7 @@ class S3Source:
                         args["ContinuationToken"] = token
                 elif start_after:
                     args["StartAfter"] = start_after
-                page = self.client.list_objects_v2(**args)
+                page = self._list(args)
                 stop = False
                 contents = list(page.get("Contents", []))
                 done_before, skip = (skip, 0) if self.express else (0, 0)
@@ -291,7 +324,7 @@ class S3Source:
             ):
                 if self._duplicate(obj, cov, store, seen_at, op, why):
                     continue
-                error = self._read_one(obj, cov, detector, store, seen_at, op, why)
+                error = self._read_classified(obj, w, why)
                 first_read_error = first_read_error or error
         listed = int(cursor.get("passListed") or 0) + cov.listed
         extra: dict[str, Any] = {}
@@ -305,7 +338,10 @@ class S3Source:
                 "passStartedAt": None,
                 "startAfter": None,
                 "objects": listed,
+                "classesPass": w.classes.cursor(),
             }
+            w.classes.complete = True
+            cov.storage_classes = w.classes
             cur_dir, cur_n = None, 0
         else:
             if cov.error is None:
@@ -318,6 +354,10 @@ class S3Source:
             }
             if cursor.get("objects"):
                 new_cursor["objects"] = cursor["objects"]
+            new_cursor["classes"] = w.classes.cursor()
+            if isinstance(cursor.get("classesPass"), dict):
+                new_cursor["classesPass"] = cursor["classesPass"]
+            cov.storage_classes = self._last_pass(cursor) or w.classes
             if self.express:
                 new_cursor.update(token=token, skip=skip)
             if report is not None:
@@ -399,6 +439,16 @@ class S3Source:
         if self.key_filter and not self.key_filter.allows(key):
             cov.not_allowed["key_filter"] = cov.not_allowed.get("key_filter", 0) + 1
             return True  # the bucket's rules do not allow this key: counted, never read
+        cls = s3_class(obj)
+        rule = self._rule(cls)
+        w.classes.add(cls, int(obj.get("Size", 0) or 0), self._planned(obj), rule)
+        if not rule.read:
+            # #109: decided from the listing, never fetched: a setting that is off
+            # (`notAllowed`), or a class with no read-only way in (`needs_restore`).
+            gaps = cov.archived if rule.archived else cov.not_allowed
+            reason = str(rule.reason)
+            gaps[reason] = gaps.get(reason, 0) + 1
+            return True
         modified = obj.get("LastModified")
         changed = w.since is None or modified is None or modified > w.since
         decision = op.decide(key, changed=changed, marker=object_marker(obj))
@@ -427,12 +477,78 @@ class S3Source:
             return True  # the same bytes as an object read with what it would be read with now
         size = planned_bytes(key, obj.get("Size", 0), self.max_object_bytes)
         if not w.budget.has(size):
+            # Listed again by the next run, and counted then (#109).
+            w.classes.remove(cls, int(obj.get("Size", 0) or 0), self._planned(obj))
             return False
         w.budget.take(size)
         w.cur_n += 1
-        error = self._read_one(obj, cov, w.detector, w.store, w.seen_at, op)
+        error = self._read_classified(obj, w)
         w.first_error = w.first_error or error
         return True
+
+    # ------------------------------------------------------------------ storage classes (#109)
+
+    def _rule(self, cls: str) -> Rule:
+        return s3_rule(
+            cls, read_glacier_ir=self.read_glacier_ir, restore_archived=self.restore_archived
+        )
+
+    def _classes(self, saved: Any) -> ClassInventory:
+        inv = ClassInventory.resume("aws", self.region, saved)
+        inv.rules = {cls: self._rule(cls) for cls in inv.counts}
+        return inv
+
+    def _last_pass(self, cursor: Mapping[str, Any]) -> ClassInventory | None:
+        """The last complete pass's objects per class, with today's rules; None before one."""
+        if not isinstance(cursor.get("classesPass"), dict):
+            return None
+        inv = self._classes(cursor["classesPass"])
+        inv.complete = True
+        return inv
+
+    def _planned(self, obj: Mapping[str, Any]) -> int:
+        return planned_bytes(obj["Key"], int(obj.get("Size", 0) or 0), self.max_object_bytes)
+
+    def _list(self, args: dict[str, Any]) -> Mapping[str, Any]:
+        """One listing page, asking for each object's `RestoreStatus` (a Glacier object with a
+        restored copy is read). A listing that refuses the attribute is asked without it."""
+        if self.express or not self._restore_status:
+            return self.client.list_objects_v2(**args)
+        try:
+            return self.client.list_objects_v2(**args, OptionalObjectAttributes=["RestoreStatus"])
+        except Exception as err:
+            if error_name(err) not in ("AccessDenied", "InvalidArgument", "NotImplemented"):
+                raise
+            self._restore_status = False
+            return self.client.list_objects_v2(**args)
+
+    def _read_classified(
+        self, obj: Mapping[str, Any], w: _Walk, why: Stale | None = None
+    ) -> str | None:
+        """One object read; an object whose GET is refused for its storage class
+        (`InvalidObjectState`: an Intelligent-Tiering archive tier, or a Glacier class the
+        listing did not name) is counted as `needs_restore` under its class, never as
+        `unreadable` (#109)."""
+        error = self._read_one(obj, w.cov, w.detector, w.store, w.seen_at, w.op, why)
+        if error != "InvalidObjectState":
+            return error
+        w.cov.unreadable = max(0, w.cov.unreadable - 1)
+        w.cov.archived[NEEDS_RESTORE] = w.cov.archived.get(NEEDS_RESTORE, 0) + 1
+        src = s3_class(obj)
+        dst = src if src != "INTELLIGENT_TIERING" else self._archive_tier(obj["Key"])
+        if dst != src:
+            size = int(obj.get("Size", 0) or 0)
+            w.classes.move(size, self._planned(obj), src, dst, self._rule(dst))
+        return None
+
+    def _archive_tier(self, key: str) -> str:
+        """An Intelligent-Tiering object's archive tier, from one HeadObject (`ArchiveStatus`)."""
+        try:
+            head = self.client.head_object(Bucket=self.bucket, Key=key)
+        except Exception:  # the tier is unknown: the deeper one is the safer name
+            return S3_IT_ARCHIVED["DEEP_ARCHIVE_ACCESS"]
+        status = str(head.get("ArchiveStatus") or "DEEP_ARCHIVE_ACCESS").upper()
+        return S3_IT_ARCHIVED.get(status, S3_IT_ARCHIVED["DEEP_ARCHIVE_ACCESS"])
 
     def _duplicate(  # noqa: PLR0917 - one object of the pass
         self,

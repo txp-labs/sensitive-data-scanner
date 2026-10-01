@@ -198,6 +198,10 @@ Now:
 | `S3_CLOCK_SKEW_SECONDS` | How far before the last pass an object is still re-read | 300 |
 | `S3_INVENTORY` | Read a large bucket's objects from its own S3 Inventory report instead of listing it ([below](#large-buckets-s3-inventory)) | on |
 | `S3_INVENTORY_MIN_OBJECTS` | What makes a bucket large: the objects its last complete pass saw (0: never) | 1,000,000 |
+| `S3_READ_GLACIER_IR` | (#109) Read Glacier Instant Retrieval objects, which have a retrieval fee ([below](#storage-classes)) | off |
+| `S3_RESTORE_ARCHIVED` | (#109) A hook: Glacier Flexible Retrieval, Deep Archive and the Intelligent-Tiering archive tiers need a restore; on, the class says `not_implemented` | off |
+| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` | (#109) This account's Mermera site: the function pulls its settings from it before each run ([mermera-config.md](mermera-config.md)); findings still go to the bus | none |
+| `IAM_GRANTS` | (#109) Set by the template: the grants its role holds, so a setting Mermera turns on without its grant is reported `gate: iam` | the template's |
 | `FINDINGS_EVENT_BUS_ARN` | Also push findings to this EventBridge bus | off |
 | `SCAN_DYNAMODB` | DynamoDB tables to read, as a JSON list (below) | none |
 | `DYNAMODB_PAGE_SIZE` | Items per Query or Scan page (`Limit`) | 100 |
@@ -1035,6 +1039,31 @@ complete pass listed at least `AZURE_BLOB_INVENTORY_MIN_OBJECTS` (1,000,000)
 says `recommendation: blob_inventory`. A bucket past `GCS_INVENTORY_MIN_OBJECTS`
 (1,000,000) says `recommendation: storage_insights`. So a customer can see
 which stores would benefit before asking for the reader.
+
+### Storage classes
+
+(#109.) Each object's storage class comes from the listing
+(`ListObjectsV2`'s `StorageClass`, and `RestoreStatus` asked for with
+`OptionalObjectAttributes`; an inventory report's `StorageClass` and
+`IntelligentTieringAccessTier`), so the scanner decides before it fetches
+anything, and an object it leaves out costs nothing:
+
+| Class | Read? | Shows up as |
+|---|---|---|
+| Standard, Reduced Redundancy, Express One Zone, Intelligent-Tiering (frequent, infrequent, archive instant) | yes | |
+| Standard-IA, One Zone-IA | yes, within the byte budget (a retrieval fee per GB) | priced in `costEstimate` |
+| Glacier Instant Retrieval | only with `S3_READ_GLACIER_IR` | off: `notAllowed: archive_class`, the store's `toggle` |
+| Glacier Flexible Retrieval, Deep Archive | no: a restore is a write (`s3:RestoreObject` is denied); a restored copy (`RestoreStatus`) is read, as `GLACIER_RESTORED` / `DEEP_ARCHIVE_RESTORED` | `archived: needs_restore`, the store's `gaps.needsRestore` |
+| Intelligent-Tiering Archive and Deep Archive Access | no: the listing says only `INTELLIGENT_TIERING`, so its GET is refused (`InvalidObjectState`), and one HeadObject (`ArchiveStatus`) files it under its tier | `archived: needs_restore`, never `unreadable` |
+
+A listing that refuses `OptionalObjectAttributes` is asked without it from
+then on (a Glacier object is then always `needs_restore`). The objects and
+bytes per class over a pass are kept in the source's cursor, so a pass over
+several runs counts each object once; the run summary's store shows the last
+complete pass's `storageClasses` and its `costEstimate`
+([COST.md](COST.md#reading-cold-storage-classes)). The class rules live in the
+core (`sensitive_data_core.storage_classes`), shared with Azure's tiers and
+Cloud Storage's classes.
 
 ### Glue Data Catalog and Lake Formation
 

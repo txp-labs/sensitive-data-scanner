@@ -30,6 +30,7 @@ from sensitive_data_azure.runner import name_toggles as azure_name_toggles
 from sensitive_data_core.coverage import Store, summary
 from sensitive_data_core.findings import Coverage
 from sensitive_data_core.modes import link_duplicates
+from sensitive_data_core.runner_config import REGISTRY
 from sensitive_data_gcp.config import read_settings as gcp_settings
 from sensitive_data_gcp.runner import name_toggles as gcp_name_toggles
 from sensitive_data_saas.config import read_settings as saas_settings
@@ -64,11 +65,15 @@ TOGGLES = (
     Toggle("A5", "aws", "FILESYSTEM_TASK_ENABLED", False, "FilesystemTaskEnabled", hook=True),
     Toggle("A6", "aws", "VPC_SUBNET_IDS", (), "VpcSubnetIds"),
     Toggle("A6", "aws", "VPC_SECURITY_GROUP_IDS", (), "VpcSecurityGroupIds"),
+    Toggle("A8", "aws", "S3_READ_GLACIER_IR", False, "S3ReadGlacierIr"),
+    Toggle("A9", "aws", "S3_RESTORE_ARCHIVED", False, "S3RestoreArchived", hook=True),
     Toggle("B1", "azure", "AZURE_LOG_ANALYTICS", True, "readLogAnalytics"),
     Toggle("B2", "azure", "AZURE_DB_READ", (), "readDatabases"),
     Toggle("B3", "azure", "AZURE_COSMOS_READER_POLICY", False, "assignCosmosReaderPolicy", True),
     Toggle("B4", "azure", "AZURE_READ_SNAPSHOTS", False, "readDiskSnapshots", hook=True),
     Toggle("C6", "azure", "AZURE_FILES_READ", False, "readFileShares"),
+    Toggle("B6", "azure", "AZURE_READ_COLD_TIER", False, "readColdTier"),
+    Toggle("B7", "azure", "AZURE_REHYDRATE_ARCHIVE", False, "rehydrateArchive", hook=True),
     Toggle("C2", "gcp", "GCP_SPANNER", True, "read_spanner"),
     Toggle("C2", "gcp", "GCP_ALLOYDB", True, "read_alloydb"),
     Toggle("C3", "gcp", "GCS_READ_ARCHIVE", False, "read_archive_objects"),
@@ -95,6 +100,11 @@ CONFIG = {
     "saas": REPO / "scanner/saas/src/sensitive_data_saas/config.py",
 }
 SAAS_EXAMPLES = sorted((REPO / "deploy/saas").glob("*.yaml"))
+
+
+def mermera_settable(platform: str, env: str) -> bool:
+    """A setting Mermera may set (#109): its template leaves it unset by default."""
+    return any(s.name == env for s in REGISTRY[platform])
 
 
 def aws() -> Any:
@@ -190,6 +200,8 @@ def test_aws_defaults() -> None:
         "FILESYSTEM_TASK_ENABLED": c.filesystem_task,
         "VPC_SUBNET_IDS": c.vpc_subnet_ids,
         "VPC_SECURITY_GROUP_IDS": c.vpc_security_group_ids,
+        "S3_READ_GLACIER_IR": c.s3_read_glacier_ir,
+        "S3_RESTORE_ARCHIVED": c.s3_restore_archived,
     }
     assert got == {t.env: t.default for t in TOGGLES if t.platform == "aws"}
 
@@ -202,6 +214,8 @@ def test_azure_defaults() -> None:
         "AZURE_COSMOS_READER_POLICY": s.cosmos_reader_policy,
         "AZURE_READ_SNAPSHOTS": s.read_snapshots,
         "AZURE_FILES_READ": s.files_read,
+        "AZURE_READ_COLD_TIER": s.read_cold_tier,
+        "AZURE_REHYDRATE_ARCHIVE": s.rehydrate_archive,
     }
     assert got == {t.env: t.default for t in TOGGLES if t.platform == "azure"}
 
@@ -273,7 +287,9 @@ def test_scanner_yaml_sets_each_aws_toggle_with_its_default() -> None:
         assert toggle.template in json.dumps(env[toggle.env]), toggle.env
         p = t["Parameters"][toggle.template]
         want = toggle.default
-        if isinstance(want, bool):
+        if mermera_settable("aws", toggle.env):
+            want = ""  # #109: unset, the function takes Mermera's setting, else its default
+        elif isinstance(want, bool):
             want = "true" if want else "false"
         elif isinstance(want, tuple):
             want = ""
@@ -288,8 +304,12 @@ def test_bicep_sets_each_azure_toggle_with_its_default() -> None:
     job = (REPO / "deploy/azure/modules/job.bicep").read_text()
     for toggle in (x for x in TOGGLES if x.platform == "azure"):
         p = main["parameters"][toggle.template]
-        want = "" if toggle.default == () else toggle.default
-        assert p["defaultValue"] == want, toggle.template
+        if mermera_settable("azure", toggle.env):
+            # #109: nullable and unset: the job takes Mermera's setting, else its default.
+            assert p.get("nullable") is True and "defaultValue" not in p, toggle.template
+        else:
+            want = "" if toggle.default == () else toggle.default
+            assert p["defaultValue"] == want, toggle.template
         assert f"name: '{toggle.env}'" in job, toggle.env
 
 
@@ -297,10 +317,12 @@ def test_terraform_sets_each_gcp_toggle_with_its_default() -> None:
     main = (REPO / "deploy/gcp/main.tf").read_text()
     variables = (REPO / "deploy/gcp/variables.tf").read_text()
     for toggle in (x for x in TOGGLES if x.platform == "gcp"):
-        assert re.search(rf"{toggle.env}\s+= var\.{toggle.template} \?", main), toggle.env
+        assert re.search(rf"{toggle.env}\s+= var\.{toggle.template}\b", main), toggle.env
         block = variables[variables.index(f'variable "{toggle.template}"') :]
         default = re.search(r"default\s+=\s+(\w+)", block)
-        assert default is not None and default[1] == str(toggle.default).lower(), toggle.template
+        # #109: null, set only when given: the job takes Mermera's setting, else its default.
+        want = "null" if mermera_settable("gcp", toggle.env) else str(toggle.default).lower()
+        assert default is not None and default[1] == want, toggle.template
 
 
 def test_the_saas_examples_set_the_saas_toggles() -> None:

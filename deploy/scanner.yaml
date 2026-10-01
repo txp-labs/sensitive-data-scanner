@@ -21,6 +21,8 @@ Metadata:
       - Label: { default: "Limitations and their toggles (docs/limitations.md, #105)" }
         Parameters:
           [GlueLakeFormation, TimestreamRead, KeyspacesRead, FilesystemTaskEnabled, VpcSubnetIds, VpcSecurityGroupIds]
+      - Label: { default: "S3 storage classes (docs/limitations.md, #109)" }
+        Parameters: [S3ReadGlacierIr, S3RestoreArchived]
       - Label: { default: Opt-in read-only SQL (Data API) }
         Parameters: [DataApiTargets, DataApiClusterArns, DataApiSecretArns]
       - Label: { default: "Redshift and Redshift Serverless (opt-in reads)" }
@@ -42,6 +44,8 @@ Metadata:
       - Label: { default: Delivery and schedule }
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MemorySize, LogRetentionInDays, RunHistoryDays]
+      - Label: { default: "Settings from Mermera (docs/mermera-config.md, #109)" }
+        Parameters: [FindingsHttpsUrl, FindingsHmacKey]
 
 Parameters:
   ImageUri:
@@ -147,37 +151,59 @@ Parameters:
       store; in between, the last export's findings stand.
   GlueLakeFormation:
     Type: String
-    AllowedValues: [read, skip]
-    Default: read
+    AllowedValues: ["", read, skip]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       GLUE_LAKE_FORMATION - read (Lake Formation tables are read with the
       scanner's own IAM; a table Lake Formation denies is reported
       lake_formation) or skip (every Lake Formation table is reported
       lake_formation, naming this setting).
   TimestreamRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "true"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       TIMESTREAM_READ - one sampled read-only query per Timestream for
       LiveAnalytics table (timestream:Select). Off: tables are reported
       read_not_configured.
   KeyspacesRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "true"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       KEYSPACES_READ - one sampled SELECT per Amazon Keyspaces table
       (cassandra:Select). Off: tables are reported read_not_configured.
   FilesystemTaskEnabled:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       FILESYSTEM_TASK_ENABLED - the read-only file-system task for EFS, FSx and
       file-level EBS (attaching a volume is a write, so it would be a task of
       its own with its own role). A hook: the task is not built yet, so on,
       file systems are reported not_implemented; off, needs_task.
+  S3ReadGlacierIr:
+    Type: String
+    AllowedValues: ["", "true", "false"]
+    Default: ""
+    Description: >-
+      S3_READ_GLACIER_IR - read S3 Glacier Instant Retrieval objects, which
+      have a retrieval fee per GB (the run's costEstimate says how much). Off
+      (the default): they are counted notAllowed archive_class, never fetched.
+      Empty: Mermera's setting, else off.
+  S3RestoreArchived:
+    Type: String
+    AllowedValues: ["", "true", "false"]
+    Default: ""
+    Description: >-
+      S3_RESTORE_ARCHIVED - a hook. Glacier Flexible Retrieval, Deep Archive
+      and Intelligent-Tiering archive-tier objects need a restore (a write,
+      at the customer's cost), so they are the gap needs_restore; on, the
+      class says not_implemented. s3:RestoreObject stays denied either way.
   VpcSubnetIds:
     Type: CommaDelimitedList
     Default: ""
@@ -221,49 +247,55 @@ Parameters:
     Description: REDSHIFT_DB_USER - the existing read-only database user, for RedshiftRead db-user.
   OpenSearchServerlessRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       OPENSEARCH_SERVERLESS_READ - read Serverless collections. IAM's
       aoss:APIAccessAll cannot be narrowed to reads: give the scanner's role
       aoss:ReadDocument (and nothing more) in each collection's data access
       policy. Managed domains are read with es:ESHttpGet only, always.
   EbsDirectRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       EBS_DIRECT_READ - sample each volume's latest snapshot with the EBS
       direct APIs (ListSnapshotBlocks, GetSnapshotBlock): no volume is created
       or attached. Off: volumes and snapshots are discovered and reported.
   SqsDlqRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       SQS_DLQ_READ - receive from dead-letter queues with VisibilityTimeout=0,
       never deleting. A receive raises each message's receive count, so a DLQ
       with its own redrive policy is never read. Live queues are never read.
   SsmDecrypt:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       SSM_DECRYPT - read SecureString parameters, decrypted through SSM
       (kms:Decrypt with kms:ViaService ssm.<region>). Off (the default since
       #105): they are counted, not read, and the store names SSM_DECRYPT.
   SecretsRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       SECRETS_READ - read each secret's value for sensitive data (reported as
       counts, never the value). Off: secrets are listed and reported.
   MskRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       MSK_READ - sample MSK topics with IAM authentication: partitions assigned
       by hand and read from the earliest offset under a throwaway group id,
       never committed (AlterGroup is denied). Needs network reach to the
@@ -288,17 +320,19 @@ Parameters:
     Description: The Secrets Manager secret ARNs named in MqBrokers (read-only broker users).
   EcrRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       ECR_READ - sample files from each repository's latest image's top
       layers (BatchGetImage, GetDownloadUrlForLayer; a layer is downloaded,
       so this is opt-in for its size). Off: repositories are reported.
   SageMakerRead:
     Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
+    AllowedValues: ["", "true", "false"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       SAGEMAKER_READ - read each feature group's offline store in S3 (with the
       S3 statements). Online-only groups and notebook instances are reported
       no_read_path.
@@ -320,14 +354,33 @@ Parameters:
       rule sees them). Creates that queue. Off: archives are reported.
   ScanMode:
     Type: String
-    AllowedValues: [scanner, vendor, both]
-    Default: scanner
+    AllowedValues: ["", scanner, vendor, both]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else the scanner's default - docs/mermera-config.md.)
       SCAN_MODE - scanner (this scanner reads the stores), vendor (Amazon
       Macie's own findings are imported, S3 only, and this scanner reads
       nothing), or both (read and import; findings at the same place and class
       are linked). vendor and both allow the three Macie reads; the
       occurrence samples Macie can reveal are denied either way.
+  FindingsHttpsUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._~/%-]*/findings/?$"
+    ConstraintDescription: Mermera's push URL for this account's site, or empty
+    Description: >-
+      FINDINGS_HTTPS_URL - the push URL of this account's Mermera site
+      (.../sites/<siteId>/findings). Set, the function pulls the site's
+      settings from .../config before each run (docs/mermera-config.md); the
+      findings still go to the event bus. Empty: no pull.
+  FindingsHmacKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >-
+      FINDINGS_HMAC_KEY - the site's HMAC key (32 characters or more), which
+      signs the settings pull. It is a function environment variable: anyone
+      who can read the function's configuration can read it.
   FindingsEventBusArn:
     Type: String
     Default: ""
@@ -360,8 +413,9 @@ Conditions:
   HasBus: !Not [!Equals [!Ref FindingsEventBusArn, ""]]
   KmsDecrypt: !Equals [!Ref AllowKmsDecrypt, "true"]
   KmsKeyAllowList: !Not [!Equals [!Join [",", !Ref KmsAllowedKeyArns], ""]]
-  TimestreamReads: !Equals [!Ref TimestreamRead, "true"]
-  KeyspacesReads: !Equals [!Ref KeyspacesRead, "true"]
+  # On unless "false" (#109: empty leaves the setting to Mermera, and these are on by default).
+  TimestreamReads: !Not [!Equals [!Ref TimestreamRead, "false"]]
+  KeyspacesReads: !Not [!Equals [!Ref KeyspacesRead, "false"]]
   VpcAttached: !Not [!Equals [!Join [",", !Ref VpcSubnetIds], ""]]
   RdsExport: !Not [!Equals [!Ref RdsExportKmsKeyArn, ""]]
   DynamoDBExport: !Equals [!Ref EnableDynamoDBExport, "true"]
@@ -378,7 +432,7 @@ Conditions:
   SqsDlq: !Equals [!Ref SqsDlqRead, "true"]
   SsmSecureStrings: !Equals [!Ref SsmDecrypt, "true"]
   SecretsValues: !Equals [!Ref SecretsRead, "true"]
-  MacieImport: !Not [!Equals [!Ref ScanMode, scanner]]
+  MacieImport: !Or [!Equals [!Ref ScanMode, vendor], !Equals [!Ref ScanMode, both]]
   MskReads: !Equals [!Ref MskRead, "true"]
   EcrReads: !Equals [!Ref EcrRead, "true"]
   NeptuneGraphExport: !Not [!Equals [!Ref NeptuneAnalyticsExportKmsKeyArn, ""]]
@@ -1622,6 +1676,24 @@ Resources:
           EVENTBRIDGE_REPLAY: !Ref EventBridgeReplay
           EVENTBRIDGE_REPLAY_QUEUE_URL: !If [EventBridgeReplays, !Ref ReplayQueue, ""]
           EVENTBRIDGE_REPLAY_QUEUE_ARN: !If [EventBridgeReplays, !GetAtt ReplayQueue.Arn, ""]
+          S3_READ_GLACIER_IR: !Ref S3ReadGlacierIr
+          S3_RESTORE_ARCHIVED: !Ref S3RestoreArchived
+          FINDINGS_HTTPS_URL: !Ref FindingsHttpsUrl
+          FINDINGS_HMAC_KEY: !Ref FindingsHmacKey
+          # #109: what this role was granted, so a setting Mermera turns on that needs more
+          # is reported gate: iam with its parameter, never tried (docs/mermera-config.md).
+          IAM_GRANTS: !Join
+            - ","
+            - - !If [MacieImport, MACIE_IMPORT, ""]
+              - !If [SsmSecureStrings, SSM_DECRYPT, ""]
+              - !If [SecretsValues, SECRETS_READ, ""]
+              - !If [TimestreamReads, TIMESTREAM_READ, ""]
+              - !If [KeyspacesReads, KEYSPACES_READ, ""]
+              - !If [EbsRead, EBS_DIRECT_READ, ""]
+              - !If [SqsDlq, SQS_DLQ_READ, ""]
+              - !If [MskReads, MSK_READ, ""]
+              - !If [EcrReads, ECR_READ, ""]
+              - !If [OpenSearchServerless, OPENSEARCH_SERVERLESS_READ, ""]
 
   ScheduleRole:
     Type: AWS::IAM::Role

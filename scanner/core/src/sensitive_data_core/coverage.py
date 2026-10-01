@@ -13,6 +13,12 @@ keys. Nothing here names a cloud.
 (`toggle`), so the customer sees what turns the read on (docs/limitations.md).
 A setting that is only a hook, whose read is not built yet, gives the reason
 `not_implemented` when it is turned on, never a silent no-op.
+
+(1.13, #109) An object store's objects per storage class or tier
+(`storageClasses`) and the cost to read the classes that charge per byte
+(`costEstimate`), from its sources' listings (storage_classes.py). Objects whose
+class has no read-only way in are the store's `needsRestore` or
+`needsRehydration` gap, never `unreadable`.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from typing import Any
 
 from .rules import KeyFilter, StoreRule
 from .safety import redact_digits
+from .storage_classes import GAP_KEYS, ClassInventory, estimate
 
 ACCESS_DENIED = frozenset(
     {
@@ -250,6 +257,12 @@ def settle(
     for k, v in (extra or {}).items():
         if v is not None:
             store.extra[k] = v
+    storage_inventory(store, [c.storage_classes for c in coverages if c.storage_classes])
+    for c in coverages:
+        for gap, n in c.archived.items():
+            key = GAP_KEYS.get(gap)
+            if key and n:
+                store.gaps[key] = store.gaps.get(key, 0) + n
     note = next((n for n in notes or [] if n), None)
     if note in NOTES:
         store.status, store.reason = NOTES[note]
@@ -284,6 +297,29 @@ def settle(
     store.status = "scanned"
     if sum(c.scanned for c in coverages) == 0 and unsupported and not unreadable:
         store.reason = "unsupported_format"
+
+
+def storage_inventory(store: Store, inventories: list[ClassInventory]) -> None:
+    """(1.13, #109) A store's objects per storage class, summed over its sources, and the cost
+    to read the classes that charge per byte. A store whose sources have not finished a
+    listing pass yet says so (`storageClassesPartial`). The store names the setting that
+    would read most of what its classes left unread, unless it names one already."""
+    if not inventories:
+        return
+    merged = ClassInventory(inventories[0].platform, inventories[0].region, complete=True)
+    for inv in inventories:
+        merged.merge(inv)
+    if not merged.counts:
+        return
+    store.extra["storageClasses"] = merged.as_json()
+    if not merged.complete:
+        store.extra["storageClassesPartial"] = True
+    cost = estimate(merged)
+    if cost is not None:
+        store.extra["costEstimate"] = cost
+    toggle = merged.unread_toggle()
+    if toggle and not store.toggle:
+        store.name_toggle(toggle)
 
 
 def summary(stores: list[Store], list_errors: dict[str, str]) -> dict[str, Any]:

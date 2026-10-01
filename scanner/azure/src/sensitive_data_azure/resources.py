@@ -89,6 +89,8 @@ class BlobTarget:
     scopes: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The container's default: its default scope's key, else the account's.
     default: dict[str, Any] = field(default_factory=dict)
+    # The account's Azure region (`eastus`): the cost estimate's prices (#109).
+    location: str = ""
 
     def __repr__(self) -> str:
         return f"BlobTarget({redact_digits(self.account)!r}, {redact_digits(self.container)!r})"

@@ -517,7 +517,11 @@ def test_config_stores_are_read_never_written_and_secrets_are_opt_in() -> None:
     secrets = next(s for s in statements() if s.get("Sid") == "ReadSecretValues")
     assert in_account(secrets["Resource"], "secretsmanager", "secret:")
     assert gates()["ReadSecretValues"] == ["SecretsValues"]
-    assert SCANNER["Parameters"]["SecretsRead"]["Default"] == "false"
+    # #109: empty (Mermera's setting, else off); the grant needs "true" from the template.
+    assert SCANNER["Parameters"]["SecretsRead"]["Default"] == ""
+    assert SCANNER["Conditions"]["SecretsValues"] == {
+        "Fn::Equals": [{"Ref": "SecretsRead"}, "true"]
+    }
 
 
 def test_time_series_and_keyspaces_are_select_only() -> None:
@@ -533,7 +537,9 @@ def test_time_series_and_keyspaces_are_select_only() -> None:
 
 def test_every_environment_variable_is_one_the_code_reads() -> None:
     source = (PACKAGE / "config.py").read_text()
-    known = set(re.findall(r'e\.get\("([A-Z0-9_]+)"', source))
+    # IAM_GRANTS (#109) is read by the core's settings pull (runner_config.grants_from).
+    source += (REPO / "scanner/core/src/sensitive_data_core/runner_config.py").read_text()
+    known = set(re.findall(r'e(?:nv)?\.get\("([A-Z0-9_]+)"', source))
     env = RES["Function"]["Properties"]["Environment"]["Variables"]
     assert set(env) <= known, set(env) - known
     assert {"RESULTS_BUCKET", "DISCOVER", "FINDINGS_EVENT_BUS_ARN"} <= set(env)
@@ -614,7 +620,7 @@ def test_brokers_are_read_with_no_commit_and_no_consume() -> None:
         "mq:Update*",
         "mq:Reboot*",
     } <= denied
-    assert SCANNER["Parameters"]["MskRead"]["Default"] == "false"
+    assert SCANNER["Parameters"]["MskRead"]["Default"] == ""  # #109: Mermera's, else off
     assert SCANNER["Parameters"]["MqRead"]["Default"] == "false"
     source = (PACKAGE / "sources" / "brokers.py").read_text()
     assert "enable_auto_commit=False" in source and "commit(" not in source
@@ -669,7 +675,14 @@ def test_macie_is_imported_only_in_vendor_or_both_and_never_revealed() -> None:
     reads = next(s for s in statements() if s.get("Sid") == "ReadMacieFindings")
     assert actions(reads) == ["macie2:GetMacieSession", "macie2:ListFindings", "macie2:GetFindings"]
     assert gates()["ReadMacieFindings"] == ["MacieImport"]
-    assert SCANNER["Parameters"]["ScanMode"]["Default"] == "scanner"
+    # #109: empty (Mermera's setting, else scanner); the Macie reads only with vendor or both.
+    assert SCANNER["Parameters"]["ScanMode"]["Default"] == ""
+    assert SCANNER["Conditions"]["MacieImport"] == {
+        "Fn::Or": [
+            {"Fn::Equals": [{"Ref": "ScanMode"}, "vendor"]},
+            {"Fn::Equals": [{"Ref": "ScanMode"}, "both"]},
+        ]
+    }
     denied = {a for s in statements() if s["Effect"] == "Deny" for a in actions(s)}
     assert {
         "macie2:GetSensitiveDataOccurrences*",

@@ -80,14 +80,37 @@ locals {
     "dlp.fileStoreProfiles.list",
   ]
 
+  # The settings Mermera may set (docs/mermera-config.md, #109) are null unless given: the
+  # job then takes Mermera's setting, else the scanner's default. A role follows the
+  # variable only: a setting Mermera turns on without its role is reported gate: iam.
+  spanner     = coalesce(var.read_spanner, true)
+  alloydb     = coalesce(var.read_alloydb, true)
+  vendor_mode = contains(["vendor", "both"], coalesce(var.scan_mode, "scanner"))
+  explicit = {
+    GCP_SPANNER          = var.read_spanner
+    GCP_ALLOYDB          = var.read_alloydb
+    GCS_READ_ARCHIVE     = var.read_archive_objects
+    GCP_SQLSERVER        = var.read_sqlserver
+    GCP_READ_PUBSUB_DLQ  = var.read_pubsub_dead_letters
+    LOGGING_PRIVATE_READ = var.read_private_logs
+    SECRET_MANAGER_READ  = var.read_secrets
+  }
+  grants = compact([
+    local.spanner ? "GCP_SPANNER" : "",
+    var.read_databases && local.alloydb ? "GCP_ALLOYDB" : "",
+    var.read_private_logs == true ? "LOGGING_PRIVATE_READ" : "",
+    var.read_secrets == true ? "SECRET_MANAGER_READ" : "",
+    local.vendor_mode ? "SDP_PROFILES" : "",
+  ])
+
   roles = merge(
     { reader = { id = "sdsScannerReader", title = "Sensitive data scanner: read", permissions = local.read_permissions } },
-    var.read_spanner ? { spanner = { id = "sdsScannerSpanner", title = "Sensitive data scanner: Spanner", permissions = local.spanner_permissions } } : {},
-    var.read_private_logs ? { private_logs = { id = "sdsScannerPrivateLogs", title = "Sensitive data scanner: private logs", permissions = local.private_log_permissions } } : {},
-    var.read_secrets ? { secrets = { id = "sdsScannerSecrets", title = "Sensitive data scanner: secrets", permissions = local.secret_permissions } } : {},
+    local.spanner ? { spanner = { id = "sdsScannerSpanner", title = "Sensitive data scanner: Spanner", permissions = local.spanner_permissions } } : {},
+    var.read_private_logs == true ? { private_logs = { id = "sdsScannerPrivateLogs", title = "Sensitive data scanner: private logs", permissions = local.private_log_permissions } } : {},
+    var.read_secrets == true ? { secrets = { id = "sdsScannerSecrets", title = "Sensitive data scanner: secrets", permissions = local.secret_permissions } } : {},
     var.read_databases ? { databases = { id = "sdsScannerDatabases", title = "Sensitive data scanner: database login", permissions = local.database_permissions } } : {},
-    var.read_databases && var.read_alloydb ? { alloydb = { id = "sdsScannerAlloyDb", title = "Sensitive data scanner: AlloyDB login", permissions = local.alloydb_permissions } } : {},
-    var.scan_mode != "scanner" ? { sdp = { id = "sdsScannerSdpProfiles", title = "Sensitive data scanner: SDP profiles", permissions = local.sdp_permissions } } : {},
+    var.read_databases && local.alloydb ? { alloydb = { id = "sdsScannerAlloyDb", title = "Sensitive data scanner: AlloyDB login", permissions = local.alloydb_permissions } } : {},
+    local.vendor_mode ? { sdp = { id = "sdsScannerSdpProfiles", title = "Sensitive data scanner: SDP profiles", permissions = local.sdp_permissions } } : {},
   )
 
   scope_env = (
@@ -101,21 +124,19 @@ locals {
     DISCOVER                  = var.discover
     GCP_DB_READ               = var.read_databases ? "all" : ""
     GCP_DB_PRINCIPAL          = var.read_databases ? google_service_account.scanner.email : ""
-    LOGGING_PRIVATE_READ      = var.read_private_logs ? "on" : ""
-    SECRET_MANAGER_READ       = var.read_secrets ? "on" : ""
     FINDINGS_PUBSUB_TOPIC     = var.findings_pubsub_topic
-    SCAN_MODE                 = var.scan_mode != "scanner" ? var.scan_mode : ""
-    SDP_LOCATIONS             = var.scan_mode != "scanner" ? join(",", var.sdp_locations) : ""
+    SCAN_MODE                 = var.scan_mode == null ? "" : var.scan_mode
+    SDP_LOCATIONS             = local.vendor_mode ? join(",", var.sdp_locations) : ""
     GCS_INVENTORY_MIN_OBJECTS = tostring(var.gcs_inventory_min_objects)
-    # The limitations' toggles (docs/limitations.md, #105), always explicit.
-    GCP_SPANNER         = var.read_spanner ? "on" : "off"
-    GCP_ALLOYDB         = var.read_alloydb ? "on" : "off"
-    GCS_READ_ARCHIVE    = var.read_archive_objects ? "on" : "off"
-    GCP_SQLSERVER       = var.read_sqlserver ? "on" : "off"
-    GCP_READ_PUBSUB_DLQ = var.read_pubsub_dead_letters ? "on" : "off"
-  }) : k => v if v != "" }
+    # The grants this deployment made (#109), so a setting Mermera turns on that needs a
+    # role the service account lacks is reported gate: iam, never tried.
+    IAM_GRANTS = join(",", concat(["none"], local.grants))
+    },
+    # The limitations' toggles (docs/limitations.md, #105): set only when given (#109).
+    { for k, v in local.explicit : k => (v ? "on" : "off") if v != null },
+  ) : k => v if v != "" }
 
-  apis = concat(var.scan_mode != "scanner" ? ["dlp.googleapis.com"] : [], [
+  apis = concat(local.vendor_mode ? ["dlp.googleapis.com"] : [], [
     "alloydb.googleapis.com",
     "bigquery.googleapis.com",
     "bigtableadmin.googleapis.com",

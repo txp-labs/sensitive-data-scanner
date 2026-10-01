@@ -86,53 +86,53 @@ variable "read_databases" {
 }
 
 variable "read_spanner" {
-  description = "GCP_SPANNER: read Spanner databases (on by default). Off leaves out the Spanner role, with its session permissions, and reports each database read_not_configured (docs/limitations.md, C2)."
+  description = "GCP_SPANNER: read Spanner databases (on by default). Off leaves out the Spanner role, with its session permissions, and reports each database read_not_configured (docs/limitations.md, C2). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = true
+  default     = null
 }
 
 variable "read_alloydb" {
-  description = "GCP_ALLOYDB: with read_databases, read AlloyDB too (on by default). Off leaves out the AlloyDB login role, with generateClientCertificate, and reports each cluster read_not_configured (C2)."
+  description = "GCP_ALLOYDB: with read_databases, read AlloyDB too (on by default). Off leaves out the AlloyDB login role, with generateClientCertificate, and reports each cluster read_not_configured (C2). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = true
+  default     = null
 }
 
 variable "read_archive_objects" {
-  description = "GCS_READ_ARCHIVE: read Archive-class objects, which have a retrieval fee (off by default: counted as notAllowed archive_class, C3)."
+  description = "GCS_READ_ARCHIVE: read Archive-class objects, which have a retrieval fee (off by default: counted as notAllowed archive_class, C3). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = false
+  default     = null
 }
 
 variable "read_sqlserver" {
-  description = "GCP_SQLSERVER: a hook, off by default. Cloud SQL for SQL Server has no IAM database authentication and no reader is built: on, each database is reported not_implemented (C4)."
+  description = "GCP_SQLSERVER: a hook, off by default. Cloud SQL for SQL Server has no IAM database authentication and no reader is built: on, each database is reported not_implemented (C4). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = false
+  default     = null
 }
 
 variable "read_pubsub_dead_letters" {
-  description = "GCP_READ_PUBSUB_DLQ: a hook, off by default. The dead-letter reader (a subscription of the scanner's own) is not built: on, each dead-letter topic is reported not_implemented (C5)."
+  description = "GCP_READ_PUBSUB_DLQ: a hook, off by default. The dead-letter reader (a subscription of the scanner's own) is not built: on, each dead-letter topic is reported not_implemented (C5). Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = false
+  default     = null
 }
 
 variable "read_private_logs" {
-  description = "LOGGING_PRIVATE_READ=on: read Data Access audit logs. Adds logging.privateLogEntries.list."
+  description = "LOGGING_PRIVATE_READ=on: read Data Access audit logs. Adds logging.privateLogEntries.list. Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = false
+  default     = null
 }
 
 variable "read_secrets" {
-  description = "SECRET_MANAGER_READ=on: read Secret Manager secrets' latest versions, reported as counts only. Adds secretmanager.versions.access."
+  description = "SECRET_MANAGER_READ=on: read Secret Manager secrets' latest versions, reported as counts only. Adds secretmanager.versions.access. Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = bool
-  default     = false
+  default     = null
 }
 
 variable "scan_mode" {
-  description = "SCAN_MODE (#55): scanner (this scanner reads), vendor (Sensitive Data Protection's data profiles are imported; nothing is read) or both. vendor and both add a role that lists the profiles only."
+  description = "SCAN_MODE (#55): scanner (this scanner reads), vendor (Sensitive Data Protection's data profiles are imported; nothing is read) or both. vendor and both add a role that lists the profiles only. Unset (null, the default): Mermera's setting, else the scanner's default (docs/mermera-config.md)."
   type        = string
-  default     = "scanner"
+  default     = null
   validation {
-    condition     = contains(["scanner", "vendor", "both"], var.scan_mode)
+    condition     = var.scan_mode == null || contains(["scanner", "vendor", "both"], coalesce(var.scan_mode, "scanner"))
     error_message = "scan_mode is scanner, vendor or both."
   }
 }

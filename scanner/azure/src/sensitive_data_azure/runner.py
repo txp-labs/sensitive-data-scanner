@@ -323,6 +323,7 @@ def _scan(
         findings=findings.public(),
         discovery=summary(stores, found.list_errors),
         scanner_version=__version__,
+        settings=settings.settings_report,
     )
     if state is not None:
         new_state: dict[str, Any] = {

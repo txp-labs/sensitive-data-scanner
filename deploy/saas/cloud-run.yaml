@@ -41,9 +41,9 @@ spec:
                 - { name: GWS_CREDENTIAL, value: gcp }
                 - { name: GWS_GROUPS, value: "" }
                 - { name: GWS_SHARED_DRIVES, value: "" }
-                # The limitations' toggles, at their defaults (docs/limitations.md, D1, D2).
-                - { name: GWS_ALERT_CENTER, value: "on" }
-                - { name: LINK_VENDOR_ALERTS_BY_LOCATION, value: "on" }
+                # The limitations' toggles (docs/limitations.md): empty leaves each to Mermera's setting, else its default, on (#109, docs/mermera-config.md).
+                - { name: GWS_ALERT_CENTER, value: "" }
+                - { name: LINK_VENDOR_ALERTS_BY_LOCATION, value: "" }
                 - { name: STATE_LOCATION, value: /state/sds-saas-state.json }
                 - { name: FINDINGS_HTTPS_URL, value: https://collector.example/findings }
                 - { name: FINDINGS_HMAC_KEY_FILE, value: /run/secrets/sds/push-key }

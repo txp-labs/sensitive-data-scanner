@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.12,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.13,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -23,9 +23,10 @@ from typing import Any
 from . import __version__
 from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
+from .storage_classes import ClassInventory
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.12"
+FINDINGS_SCHEMA_VERSION = "1.13"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -308,6 +309,14 @@ class Coverage:
     # (1.11, #67) Of `duplicates`, the copies of an object in another store of the same
     # account, subscription or project.
     duplicates_across: int = 0
+    # (1.13, #109) Objects listed and not read because their class or tier has no read-only
+    # way in (`needs_restore`: S3 Glacier Flexible Retrieval, Deep Archive and the
+    # Intelligent-Tiering archive tiers; `needs_rehydration`: Azure's Archive tier). Never
+    # `unreadable`: nothing was fetched.
+    archived: dict[str, int] = field(default_factory=dict)
+    # (1.13, #109) The store's objects per storage class over this listing pass; the run
+    # summary's store shows it (`storageClasses`, `costEstimate`), never the coverage entry.
+    storage_classes: ClassInventory | None = None
 
     def as_json(self) -> dict[str, Any]:
         d = asdict(self)
@@ -337,6 +346,8 @@ class Coverage:
             out["disguised"] = self.disguised
         if self.not_allowed:
             out["notAllowed"] = dict(sorted(self.not_allowed.items()))
+        if self.archived:
+            out["archived"] = dict(sorted(self.archived.items()))
         if self.indexed is not None:
             out["indexed"] = self.indexed
             out["rescanned"] = dict(sorted(self.rescanned.items()))
@@ -365,13 +376,18 @@ def findings_document(
     scanner_version: str | None = None,
     scan_mode: Mapping[str, str] | None = None,
     vendor_coverage: list[dict[str, Any]] | None = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The findings document. An AWS run names its account and region; a run of another
     platform (1.4: `platform`, such as `database`) names the `site` it runs in instead.
 
     (1.8, #55) Every finding says its `source` (`scanner` unless an importer made it);
     `scan_mode` is the mode each platform ran in, and `vendor_coverage` each importer's run
-    (`modes.VendorCoverage`)."""
+    (`modes.VendorCoverage`).
+
+    (1.13, #109) `settings` is the run's settings report (`runner_config.Report.as_json`):
+    `settingsSource`, each Mermera-settable setting's effective value and where it came
+    from, and `configPull`, how the pull of Mermera's settings went."""
     for f in findings:
         f.setdefault("source", "scanner")
     ranked = sorted(findings, key=lambda f: (-_CONF_RANK[f["severity"]], -f["count"], f["id"]))
@@ -410,4 +426,6 @@ def findings_document(
         doc["scanMode"] = dict(sorted(scan_mode.items()))
     if vendor_coverage is not None:
         doc["vendorCoverage"] = vendor_coverage
+    if settings:
+        doc.update(settings)
     return doc

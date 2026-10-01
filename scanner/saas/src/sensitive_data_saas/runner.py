@@ -395,6 +395,7 @@ def _scan(
         scanner_version=__version__,
         scan_mode=modes,
         vendor_coverage=[v.as_json() for v in vendor_coverage] if running else None,
+        settings=settings.settings_report,
     )
     if state is not None:
         new_state: dict[str, Any] = {

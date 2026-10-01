@@ -547,7 +547,7 @@ by its id.
 | `RESCAN_PERCENT` | 25 | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change what they give changed, such as a reader or the spec ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); 0 turns rescans off |
 | `MAX_THROTTLE_WAIT_SECONDS` | 120 | The longest `Retry-After` waited for; a longer one stops that store until the next run (`throttled`) |
 | `STATE_LOCATION` | | Where cursors and carried findings are kept: an absolute path on a mounted volume, `s3://bucket/key`, or `https://…` (signed PUTs with the push key). Without it every run starts afresh |
-| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push to Mermera's collector ([DATABASES.md](DATABASES.md#verifying-a-push)) |
+| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push to Mermera's collector ([DATABASES.md](DATABASES.md#verifying-a-push)). With the push set, the job also pulls its settings from that site before each run, under what its environment sets ([mermera-config.md](mermera-config.md)): the modes, `M365_MAIL`, `GWS_ALERT_CENTER` and `LINK_VENDOR_ALERTS_BY_LOCATION` |
 | `FINDINGS_FILE` | | Also write the document to a file |
 | `M365_TENANT_ID`, `M365_CLIENT_ID` | | The tenant and the app (GUIDs); set to scan Microsoft 365 |
 | `M365_CERTIFICATE_FILE`, `M365_FEDERATED_TOKEN`, `M365_CLIENT_SECRET_FILE` | | The credential: exactly one ([Signing in](#signing-in)) |

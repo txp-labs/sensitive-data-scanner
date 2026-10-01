@@ -82,9 +82,18 @@ that changes each and its default, and how a store left unread shows up:
   is still listed each pass: reading an account's blob inventory report in
   place of a listing is designed, not built
   ([ARCHITECTURE.md](ARCHITECTURE.md#large-buckets-s3-inventory)).
+- **Tiers (#109).** Decided from the listing, so a blob left out is never
+  fetched: Hot and Cool are read (Cool has a read fee per GB, within the
+  byte budget); **Cold is not** unless `AZURE_READ_COLD_TIER` is on (Bicep
+  `readColdTier`): counted `notAllowed: cold_tier`. The container's
+  `storageClasses` and `costEstimate` in the run summary say how much is in
+  each tier and what reading it would cost
+  ([COST.md](COST.md#reading-cold-storage-classes)).
 - **Never a write.** Nothing is leased, copied, rehydrated or tiered: an
-  Archive-tier blob would need a rehydration, so it is counted as skipped
-  `archive_tier`. A blob under a customer-provided key (CPK) cannot be read
+  Archive-tier blob (or one being rehydrated) would need a rehydration, so it
+  is the gap `needs_rehydration` (before 1.13, skipped `archive_tier`). A
+  rehydration is the customer's action, at its cost: Set Blob Tier, or Copy
+  Blob to Hot or Cool, then the next run reads it. A blob under a customer-provided key (CPK) cannot be read
   without that key and is counted in `kmsDenied`.
 - **Encryption** (`atRestEncryption`). Azure Storage encrypts every blob at
   rest. A finding says under which key: the blob's own encryption scope, else
@@ -406,7 +415,9 @@ to be masked.
 | `RESCAN_PERCENT` | 25 | The share of each source's budget that rescans may use: unchanged objects read again because a component that could change what they give changed, such as a reader or the spec ([ARCHITECTURE.md](ARCHITECTURE.md#how-rescans-are-chosen)); 0 turns rescans off |
 | `MAX_OBJECTS_PER_RUN` | 0 (off) | A cap on blobs per run |
 | `STATE_CONTAINER_URL` | | The job's own container, `https://<account>.blob.core.windows.net/<container>`: `findings/latest.json`, `findings/runs/<runId>.json`, the cursors and the lock |
-| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters |
+| `FINDINGS_HTTPS_URL`, `FINDINGS_HMAC_KEY` or `FINDINGS_HMAC_KEY_FILE` | | The core's signed HTTPS push ([DATABASES.md](DATABASES.md#verifying-a-push)); the key is at least 32 characters. With the push set, the job also pulls its settings from that site before each run, under what its environment sets ([mermera-config.md](mermera-config.md)) |
+| `AZURE_READ_COLD_TIER` | off | (#109) Read Cold-tier blobs (a read fee per GB); off, they are `notAllowed: cold_tier` |
+| `AZURE_REHYDRATE_ARCHIVE` | off | (#109) A hook: Archive-tier blobs need a rehydration (a write) and are `needs_rehydration`; on, the tier says `not_implemented` |
 | `FINDINGS_EVENT_GRID_ENDPOINT` | | Also push each part as a CloudEvent (`source` `sensitive-data-scanner`, `type` `Findings v1`) to an Event Grid topic, as the job's identity; the topic's owner grants it `EventGrid Data Sender` on that topic |
 | `FINDINGS_FILE` | | Also write the document to a file |
 | `AZURE_DB_READ` | off | The database kinds read: `all`, or `azure_sql`, `azure_sql_mi`, `azure_postgresql`, `azure_mysql`, `synapse_sql`, `cosmosdb_mongo` (or `sql`, `sqlmi`, `postgresql`, `mysql`, `synapse`, `mongo`) |

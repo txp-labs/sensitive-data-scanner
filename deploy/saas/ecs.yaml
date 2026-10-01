@@ -50,16 +50,18 @@ Parameters:
     Default: ""
   M365Mail:
     Type: String
-    AllowedValues: ["on", "off"]
-    Default: "on"
+    AllowedValues: ["", "on", "off"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else on - docs/mermera-config.md.)
       M365_MAIL - read mailboxes once the mail grant is proved scoped (on), or
       list them and read none (off) (docs/limitations.md, D3).
   LinkVendorAlertsByLocation:
     Type: String
-    AllowedValues: ["on", "off"]
-    Default: "on"
+    AllowedValues: ["", "on", "off"]
+    Default: ""
     Description: >-
+      (Empty, the default: Mermera's setting, else on - docs/mermera-config.md.)
       LINK_VENDOR_ALERTS_BY_LOCATION - in both mode, link a vendor alert that
       names no kind of data to the scanner's findings at the same item
       (linkedBy location). Purview's alerts name no item, so they stay

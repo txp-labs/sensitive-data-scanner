@@ -201,12 +201,17 @@ def _entry(row: dict[str, Any], *, encoded: bool) -> dict[str, Any] | None:
         return None
     key = urllib.parse.unquote_plus(str(key)) if encoded else str(key)
     etag = row.get("ETag")
-    return {
+    out = {
         "Key": key,
         "Size": int(row.get("Size") or 0),
         "LastModified": _when(row.get("LastModifiedDate")),
         "ETag": f'"{etag}"' if etag and not str(etag).startswith('"') else etag,
     }
+    # #109: the object's storage class and Intelligent-Tiering tier, when the report has them.
+    for field_name in ("StorageClass", "IntelligentTieringAccessTier"):
+        if row.get(field_name):
+            out[field_name] = str(row[field_name])
+    return out
 
 
 def rows(
@@ -248,6 +253,9 @@ def _columnar(
         "Size": names.get("size"),
         "LastModifiedDate": names.get("last_modified_date") or names.get("lastmodifieddate"),
         "ETag": names.get("e_tag") or names.get("etag"),
+        "StorageClass": names.get("storage_class") or names.get("storageclass"),
+        "IntelligentTieringAccessTier": names.get("intelligent_tiering_access_tier")
+        or names.get("intelligenttieringaccesstier"),
     }
     columns = {k: table.column(v).to_pylist() for k, v in wanted.items() if v is not None}
     for n in range(skip, table.num_rows):
