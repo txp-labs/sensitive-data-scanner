@@ -108,7 +108,8 @@ class SharePointAdapter:
                 sites.extend((str(x["id"]), str(x.get("displayName") or "")) for x in page)
         for ref in m.sites:
             try:
-                # `host:/sites/x` (a path) or `host,<site guid>,<web guid>` (an id).
+                # `host:/sites/x` (a path), `host,<site guid>,<web guid>` (an id),
+                # `root` or `host:/` (the root site, #83).
                 got = graph.get(f"/sites/{ref}", {"$select": "id,displayName"})
                 sites.append((str(got["id"]), str(got.get("displayName") or ref)))
             except Exception as err:  # still a store, with its gap

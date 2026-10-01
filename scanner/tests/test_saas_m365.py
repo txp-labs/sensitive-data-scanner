@@ -153,6 +153,56 @@ def test_settings_need_one_credential_and_never_a_secret_in_the_environment(
     assert "m365_teams_chat" in teams.discover
 
 
+SITE_ID = f"{HOST},11111111-2222-3333-4444-555555555555,66666666-7777-8888-9999-000000000000"
+
+
+@pytest.mark.parametrize(
+    ("raw", "sites"),
+    [
+        # #83: every form on its own.
+        (f"{HOST}:/sites/finance", (f"{HOST}:/sites/finance",)),
+        (SITE_ID, (SITE_ID,)),
+        ("root", ("root",)),
+        (f"{HOST}:/", (f"{HOST}:/",)),
+        # Separators: whitespace, newlines, `;`, and commas outside an id.
+        (f"{HOST}:/sites/a {HOST}:/sites/b", (f"{HOST}:/sites/a", f"{HOST}:/sites/b")),
+        (f"{HOST}:/sites/a\n{HOST}:/sites/b\n", (f"{HOST}:/sites/a", f"{HOST}:/sites/b")),
+        (f"{HOST}:/sites/a; {HOST}:/sites/b", (f"{HOST}:/sites/a", f"{HOST}:/sites/b")),
+        (f"{HOST}:/sites/a,{HOST}:/sites/b", (f"{HOST}:/sites/a", f"{HOST}:/sites/b")),
+        # Mixed lists, the id kept whole even among commas.
+        (
+            f"root;{SITE_ID}\n{HOST}:/ {HOST}:/sites/a",
+            ("root", SITE_ID, f"{HOST}:/", f"{HOST}:/sites/a"),
+        ),
+        (
+            f"{HOST}:/sites/a,{SITE_ID},root,{HOST}:/",
+            (f"{HOST}:/sites/a", SITE_ID, "root", f"{HOST}:/"),
+        ),
+    ],
+)
+def test_m365_sites_every_form_and_separator(
+    tmp_path: Path, raw: str, sites: tuple[str, ...]
+) -> None:
+    s = settings(tmp_path, M365_SITES=raw)
+    assert s.m365 is not None and s.m365.sites == sites and not s.m365.all_sites
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        f"{HOST},11111111-2222-3333-4444-555555555555",  # an id missing its web guid
+        f"{HOST}:/sites/a root extra",
+        "Root",
+        f"{HOST}:/ all",
+        "contoso.example.com:/",
+    ],
+)
+def test_m365_sites_refuses_what_is_not_a_site(tmp_path: Path, raw: str) -> None:
+    with pytest.raises(ConfigError) as err:
+        settings(tmp_path, M365_SITES=raw)
+    assert err.value.code == "m365_sites"
+
+
 # ------------------------------------------------------------------ sign-in
 
 
@@ -472,6 +522,24 @@ def test_onedrive_and_sharepoint_files(tmp_path: Path) -> None:
     # Content was fetched in ranges, through Graph, never without the token.
     ranged = [c for c in m.calls if c[1].endswith("/content")]
     assert ranged and all("Range" in c[3] for c in ranged)
+
+
+def test_root_site_forms_are_read_from_graph(tmp_path: Path) -> None:
+    # #83: `root` is Graph's /sites/root and `host:/` is /sites/{host}:/.
+    m = files_tenant()
+    m.site("root", f"{HOST},r1,w1", "Root", {"d-lib": "Documents"})
+    m.site(f"{HOST}:/", f"{HOST},r1,w1", "Root", {"d-lib": "Documents"})
+    for ref in ("root", f"{HOST}:/"):
+        doc = scan(
+            m,
+            settings(
+                tmp_path,
+                M365_SITES=ref,
+                DISCOVER="sharepoint",
+            ),
+        )
+        assert stores(doc)[("m365_sharepoint", "Root")]["status"] == "scanned"
+        assert any(c[1].endswith(f"/v1.0/sites/{ref}") for c in m.calls)
 
 
 def test_files_resume_and_drop_deleted_files(tmp_path: Path) -> None:

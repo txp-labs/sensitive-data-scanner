@@ -46,8 +46,11 @@ wrong setting is reported by a fixed code, never by its value.
 - `M365_MAIL_SCOPE_CHECK`: a mailbox *outside* the scope the app's mail grant is
   limited to (docs/SAAS.md). Before any mail is read, the scanner checks it is
   refused; without it, mailboxes are `scope_unverified` and not read.
-- `M365_SITES`: SharePoint sites (`contoso.sharepoint.com:/sites/finance`, or a
-  site id), or `all` (needs `Sites.Read.All`).
+- `M365_SITES`: SharePoint sites, separated by spaces, newlines or `;`:
+  `contoso.sharepoint.com:/sites/finance`, a site id
+  (`contoso.sharepoint.com,<site guid>,<web guid>`), `root` or
+  `contoso.sharepoint.com:/` (the root site); or `all` (needs `Sites.Read.All`).
+  Commas also separate entries, except inside a site id.
 - `M365_TEAMS`: team ids whose channels are read (`m365_teams_channel`, opt-in).
 - `M365_CUSTOMER_KEY_ID`: the Microsoft Purview Customer Key data encryption
   policy's id, when the tenant uses one: findings then say
@@ -170,9 +173,12 @@ _SITE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 DLP_ACTIONS: tuple[str, ...] = ("native_dlp_rule_matched",)
 _GUID = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 _UPN = re.compile(r"^[^@\s,]{1,113}@[A-Za-z0-9.-]{1,255}$")
+# `root` (Graph's /sites/root), `host:/` (a host's root site), `host:/sites/x` (a path),
+# or `host,<site guid>,<web guid>` (an id).
 _SP_SITE = re.compile(
-    r"^[a-z0-9-]+\.sharepoint\.com(?::/[^,\s]{1,400}|,[0-9a-fA-F-]{36},[0-9a-fA-F-]{36})$"
+    r"^(?:root|[a-z0-9-]+\.sharepoint\.com(?::/[^,;\s]{0,400}|,[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}))$"
 )
+_SP_HOST = re.compile(r"^[a-z0-9-]+\.sharepoint\.com$")
 _TEAM = _GUID
 MAX_SECRET_BYTES = 64 * 1024
 
@@ -316,6 +322,32 @@ def _list(v: str | None) -> tuple[str, ...]:
     return tuple(s.strip() for s in (v or "").split(",") if s.strip())
 
 
+def _site_list(v: str | None) -> tuple[str, ...]:
+    """`M365_SITES` (#83): entries separated by whitespace, newlines or `;`.
+
+    Commas still separate entries, except inside a site id (`host,<guid>,<guid>`),
+    whose three parts are kept together.
+    """
+    out: list[str] = []
+    for token in re.split(r"[\s;]+", v or ""):
+        parts = [p.strip() for p in token.split(",") if p.strip()]
+        i = 0
+        while i < len(parts):
+            p = parts[i]
+            if (
+                _SP_HOST.match(p)
+                and i + 2 < len(parts)
+                and _GUID.match(parts[i + 1])
+                and _GUID.match(parts[i + 2])
+            ):
+                out.append(",".join(parts[i : i + 3]))
+                i += 3
+            else:
+                out.append(p)
+                i += 1
+    return tuple(out)
+
+
 def read_secret(path: Path) -> str:
     try:
         data = path.read_bytes()[: MAX_SECRET_BYTES + 1]
@@ -396,7 +428,7 @@ def _m365(e: Mapping[str, str]) -> M365Settings | None:
     check = (e.get("M365_MAIL_SCOPE_CHECK") or "").strip() or None
     if check is not None and not (_GUID.match(check) or _UPN.match(check)):
         raise ConfigError("m365_mail_scope_check")
-    sites_raw = _list(e.get("M365_SITES"))
+    sites_raw = _site_list(e.get("M365_SITES"))
     all_sites = sites_raw == ("all",)
     sites = () if all_sites else sites_raw
     if any(not _SP_SITE.match(s) for s in sites):

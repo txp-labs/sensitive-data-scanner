@@ -166,8 +166,17 @@ POST https://graph.microsoft.com/v1.0/sites/{site-id}/permissions
 
 or with PnP PowerShell:
 `Grant-PnPAzureADAppSitePermission -AppId <client-id> -DisplayName "Sensitive data scanner" -Site <site url> -Permissions Read`.
-Name the sites in `M365_SITES` (`contoso.sharepoint.com:/sites/finance`, or a
-site id).
+Name the sites in `M365_SITES`, separated by spaces, newlines or `;`. Each is
+one of:
+
+- a path: `contoso.sharepoint.com:/sites/finance`;
+- a site id: `contoso.sharepoint.com,<site guid>,<web guid>`;
+- the root site: `root` (Graph's `/sites/root`) or `contoso.sharepoint.com:/`
+  (`/sites/contoso.sharepoint.com:/`).
+
+For example `M365_SITES="root; contoso.sharepoint.com:/sites/finance"`. Commas
+also separate entries, as before, except inside a site id, whose three parts
+are kept together.
 
 **`Files.Read.All`** reads every OneDrive and every site; it is what reads the
 OneDrives of the people in scope. **`Sites.Read.All`** lets `M365_SITES=all`
@@ -538,7 +547,7 @@ by its id.
 | `M365_FEDERATED_AUDIENCE`, `M365_FEDERATED_CLIENT_ID` | `api://AzureADTokenExchange` | The federated token's audience; a user-assigned managed identity's client id |
 | `M365_USERS`, `M365_GROUPS` | | Whose mailboxes, OneDrives and chats are read |
 | `M365_MAIL_SCOPE_CHECK` | | A mailbox outside the mail scope ([Mail](#mail-scoped-by-exchange-and-proved-scoped)) |
-| `M365_SITES` | | SharePoint sites, or `all` |
+| `M365_SITES` | | SharePoint sites (paths, site ids, `root`), separated by spaces or `;`; or `all` |
 | `M365_TEAMS` | | Team ids whose channels are read |
 | `M365_CUSTOMER_KEY_ID` | | Your Customer Key data encryption policy's id |
 | `GWS_CUSTOMER_ID` | | The Workspace customer id (`C0…`); set to scan Google Workspace |
