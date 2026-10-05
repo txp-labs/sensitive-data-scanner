@@ -6,6 +6,7 @@ Every Slack call goes to a stubbed session (slack_fakes.py); every value is made
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from sensitive_data_core.state import FileState
 from sensitive_data_saas.config import ConfigError, read_settings
 from sensitive_data_saas.resources import tenant_hash
 from sensitive_data_saas.runner import run_scan
+from sensitive_data_saas.sources.slack import message_link, shared_link
 from slack_fakes import NOW, ORG, Chan, SlackOrg, settings, ts
 from synthetic import CARDS, SSN_A, dashed, printed
 
@@ -66,6 +68,7 @@ def org() -> SlackOrg:
                     "name": "roster.xlsx",
                     "size": 2000,
                     "url_private_download": "https://files.slack.com/files-pri/T0-F0ROSTER1/roster.xlsx",
+                    "permalink": "https://acme.slack.com/files/U0ALICE01/F0ROSTER1/roster.xlsx",
                 },
                 {
                     "id": "F0GDOC",
@@ -132,8 +135,28 @@ def test_channels_threads_files_and_gaps(tmp_path: Path) -> None:
     cov = next(c for c in doc["coverage"] if c["kind"] == "slack_channel")
     assert cov["skipped"] == {"linked_item": 1}
     assert all(not f["resource"]["itemId"].endswith(ts(24 * 400)) for f in doc["findings"])
-    f = next(f for f in doc["findings"] if f["resource"]["part"] == "message")
-    assert f["link"] == "https://app.slack.com/client/T0ACMEHQ1/C0SUPPORT1"
+    f = next(
+        f for f in doc["findings"] if f["resource"]["part"] == "message" and f["class"] == "card"
+    )
+    # The exact message: its thread pane, by its own ts, with the dot.
+    assert f["link"] == (
+        f"https://app.slack.com/client/T0ACMEHQ1/C0SUPPORT1/thread/C0SUPPORT1-{ts(5)}"
+    )
+    reply = next(f for f in doc["findings"] if f["resource"]["part"] == "reply")
+    assert reply["link"] == (
+        f"https://app.slack.com/client/T0ACMEHQ1/C0SUPPORT1/thread/C0SUPPORT1-{ts(5)}"
+    )
+    unfurl = next(
+        f for f in doc["findings"] if f["resource"]["part"] == "message" and f["class"] == "us_ssn"
+    )
+    assert unfurl["link"].endswith(f"/thread/C0SUPPORT1-{ts(2)}")
+    roster = next(f for f in doc["findings"] if f["resource"]["part"] == "attachment")
+    # A file takes the message that shared it.
+    assert roster["link"] == (
+        f"https://app.slack.com/client/T0ACMEHQ1/C0SUPPORT1/thread/C0SUPPORT1-{ts(3)}"
+    )
+    # No link carries a run of 13 digits or more (the documented p<ts> permalink would).
+    assert not any(re.search(r"[0-9]{13,}", f["link"] or "") for f in doc["findings"])
     assert f["resource"]["channel"] == "C0SUPPORT1" and f["resource"]["container"] == "#support"
     assert f["atRestEncryption"] == "service_managed"
     # No write method, and the private channel was never asked for its history.
@@ -183,3 +206,30 @@ def test_slack_errors_by_code_and_rate_limits(tmp_path: Path) -> None:
     o.fail["conversations.list"] = "missing_scope"
     bad = scan(o, settings(tmp_path))
     assert bad["discovery"]["listErrors"] == {"slack_channel": "missing_scope"}
+
+
+def test_message_and_file_links() -> None:
+    team, chan = "T0ACMEHQ1", "C0SUPPORT1"
+    base = f"https://app.slack.com/client/{team}/{chan}"
+    one = "1759147200.000100"
+    assert message_link(team, chan, {"ts": one}) == f"{base}/thread/{chan}-{one}"
+    # A reply opens its thread, by the first message's ts.
+    reply = {"ts": "1759147300.000200", "thread_ts": one}
+    assert message_link(team, chan, reply) == f"{base}/thread/{chan}-{one}"
+    # No ts: the channel.
+    assert message_link(team, chan, {}) == base
+    # A listed file: the message that shared it in this channel, from its shares.
+    shared = {"shares": {"private": {chan: [{"ts": "1759147300.000200", "thread_ts": one}]}}}
+    assert shared_link(team, chan, shared) == f"{base}/thread/{chan}-{one}"
+    elsewhere = {"shares": {"public": {"C0OTHER001": [{"ts": one}]}}}
+    unlinked: list[dict[str, Any]] = [
+        {},
+        {"shares": None},
+        elsewhere,
+        {"shares": {"public": {chan: [{}]}}},
+    ]
+    for f in unlinked:
+        assert shared_link(team, chan, f) == base
+    # Its permalink is never the link: another host, and it names the file and a person.
+    permalink = {"permalink": "https://acme.slack.com/files/U0ALICE01/F0X/a.pdf"}
+    assert shared_link(team, chan, permalink) == base

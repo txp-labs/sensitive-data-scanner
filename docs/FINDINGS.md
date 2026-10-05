@@ -612,7 +612,7 @@ masked or not.
 | `itemId`, `itemHash` | The vendor's id for the item, masked like a key, and its SHA-256 (two ids that mask alike stay two findings) |
 | `part` | `message` (a subject and body), `attachment`, `file`, `reply`, `issue` (a Jira issue's summary, description and comments), `page` (a Confluence page's title, body and comments) |
 | `name`, `column` | A file's or attachment's name, masked like a key; for a table file, the column |
-| `link` | The item in the vendor's own web app, built from ids only (a message in Outlook on the web, a SharePoint or OneDrive file by its unique id, a Teams channel, a Google Drive file by its id, a Slack channel, a Jira issue by its key, a Confluence page by its id; Gmail and Slack direct messages have none); `null` when an id it carries had to be masked |
+| `link` | The item in the vendor's own web app, built from ids only (a message in Outlook on the web, a SharePoint or OneDrive file by its unique id, a Teams channel, a Google Drive file by its id, a Slack message, a Jira issue by its key, a Confluence page by its id; Gmail and Slack direct messages have none). A Slack message opens in its thread pane, `https://app.slack.com/client/<team>/<channel>/thread/<channel>-<ts>`: a thread reply by its thread's `thread_ts`, a file by the message that shared it, a message with no ts by its channel (`https://app.slack.com/client/<team>/<channel>`); `null` when an id it carries had to be masked |
 
 ### A DynamoDB finding
 

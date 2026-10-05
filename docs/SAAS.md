@@ -397,9 +397,27 @@ importer) `api.slack.com` only.
 
 Slack encrypts its data with its own keys (`service_managed`); with **Slack
 Enterprise Key Management**, set `SLACK_EKM_KEY_ID` to your key's id: findings
-say `customer_managed_key`, with its hash. Findings link to the channel in
-Slack (`https://app.slack.com/client/<team>/<channel>`); a direct message has
-no link.
+say `customer_managed_key`, with its hash.
+
+**Links.** A finding links to the exact message in Slack's web app, opened in
+its thread pane:
+`https://app.slack.com/client/<team>/<channel>/thread/<channel>-<ts>`, with the
+team id from `auth.test` and the message's `ts` as Slack gives it, dot
+included. A thread reply links to its thread (its `thread_ts`, the first
+message's ts). A file links to the message that shared it: the message it was
+read with, or, for a file read again by a rescan, the share in that channel
+that `files.list` returns. With no ts, the link is the channel
+(`https://app.slack.com/client/<team>/<channel>`). A direct message has no
+link. No scope is added and no call is made for a link.
+
+Why not Slack's documented permalink
+(`https://<workspace>.slack.com/archives/<channel>/p<ts without the dot>`, what
+`chat.getPermalink` returns, with `?thread_ts=<ts>&cid=<channel>` for a reply):
+its `p` part is a 16-digit run. The scanner masks every run of 13 digits or
+more in what it writes ([FINDINGS.md](FINDINGS.md)), so a link carrying one
+would be dropped, and a reader's own leak guard can take a 16-digit run for a
+card number. A file's `permalink` is not used either: it names the file and
+the person who shared it, on the workspace's own host.
 
 ## Atlassian (Jira and Confluence Cloud)
 
@@ -525,7 +543,7 @@ store, `ownerHash`. A finding's `link` opens the item in the vendor's own web
 app, built from ids only, and is `null` when an id it carries had to be
 masked: a message in Outlook on the web (its owner or a delegate opens it), a
 SharePoint or OneDrive file by its unique id, a Teams channel, a Google Drive
-file by its id, a Slack channel, a Jira issue by its key, a Confluence page
+file by its id, a Slack message (in its thread pane; [Links](#what-is-read)), a Jira issue by its key, a Confluence page
 by its id.
 
 ## Settings

@@ -73,8 +73,50 @@ SLACK_DENIED = frozenset(
 
 
 def channel_link(team: str, channel: str) -> Link:
+    """The channel in Slack's web app: the fallback when a message or file has no link."""
     q = urllib.parse.quote
     return Link(f"https://app.slack.com/client/{q(team)}/{q(channel)}", (team, channel))
+
+
+def message_link(team: str, channel: str, msg: dict[str, Any]) -> Link:
+    """A message in Slack's web app, opened in its thread pane.
+
+    `https://app.slack.com/client/<team>/<channel>/thread/<channel>-<ts>`: a thread
+    reply opens its thread (by `thread_ts`, the first message's ts), and any other
+    message opens on its own. The ts keeps its dot. Slack's documented permalink
+    (`https://<workspace>.slack.com/archives/<channel>/p<ts without the dot>`,
+    `chat.getPermalink`) is a 16-digit run: a 13+ digit run is masked here
+    (`redact_digits`), and a reader's leak guard may take one for a card number, so
+    that form is never written. Built from ids only; without a ts, the channel.
+    """
+    root = str(msg.get("thread_ts") or msg.get("ts") or "")
+    if not root:
+        return channel_link(team, channel)
+    q = urllib.parse.quote
+    return Link(
+        f"https://app.slack.com/client/{q(team)}/{q(channel)}/thread/{q(channel)}-{q(root)}",
+        (team, channel, root),
+    )
+
+
+def shared_link(team: str, channel: str, f: dict[str, Any]) -> Link:
+    """A file listed by `files.list` (the rescans, #67): the message that shared it in this
+    channel, from the file's own `shares` (already in the listing, no other call), else the
+    channel.
+
+    The file's `permalink` (`https://<workspace>.slack.com/files/<user>/<file>/<name>`) is
+    not used: the schema holds a Slack link to `app.slack.com`, and it would name the file
+    and the person who shared it. A file read with its message takes that message's link.
+    """
+    shares = f.get("shares")
+    for scope in ("public", "private"):
+        group = shares.get(scope) if isinstance(shares, dict) else None
+        found = group.get(channel) if isinstance(group, dict) else None
+        if isinstance(found, list):
+            for share in found:
+                if isinstance(share, dict) and share.get("ts"):
+                    return message_link(team, channel, share)
+    return channel_link(team, channel)
 
 
 def message_text(msg: dict[str, Any]) -> str:
@@ -198,8 +240,14 @@ class _Messages:
                     # past the budget (a thread cut here is not read again).
                     if not r.room():
                         return
+                    # Its link opens the thread it was read from.
                     self.message(
-                        reply, r, channel=channel, container=container, link=link, part="reply"
+                        {"thread_ts": thread, **reply},
+                        r,
+                        channel=channel,
+                        container=container,
+                        link=link,
+                        part="reply",
                     )
         except Exception as err:  # the thread's first message still counts
             r.cov.unreadable += 1
@@ -229,10 +277,13 @@ class _Messages:
         resource = saas_item(
             VENDOR, self.service, self.tenant, item_id, part, container=container, channel=channel
         )
-        findings = r.text(text, resource, link) if text else []
+        # The exact message, or its thread, and its files with it; a conversation with no
+        # link (direct messages) gives its messages none.
+        here = None if link is None else message_link(self.team, channel, msg)
+        findings = r.text(text, resource, here) if text else []
         for f in msg.get("files") or []:
             if isinstance(f, dict):
-                findings.extend(self.file(f, r, channel=channel, container=container, link=link))
+                findings.extend(self.file(f, r, channel=channel, container=container, link=here))
         r.store.replace_location(location, findings)
 
     # The read path (`slack_read.py`, the `adapter:<kind>` component, #67).
@@ -362,7 +413,6 @@ class ChannelSource(_Messages):
         """The channel's files in the look-back (#67), a page at a time; `at` is the cursor of
         the page where a pass stopped."""
         channel = self.channel.channel_id
-        link = channel_link(self.team, channel)
         params = {"channel": channel, "ts_from": f"{floor:.0f}", "limit": "200"}
         cursor = str(at) if isinstance(at, str) and at else None
         for page, nxt, _ in self.api.pages("files.list", "files", params, cursor=cursor):
@@ -389,7 +439,7 @@ class ChannelSource(_Messages):
                             r,
                             channel=channel,
                             container=self.channel.name,
-                            link=link,
+                            link=shared_link(self.team, channel, f),
                         ),
                     )
                 )
