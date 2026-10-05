@@ -89,6 +89,13 @@ wrong setting is reported by a fixed code, never by its value.
 - `SLACK_AUDIT_TOKEN_FILE`, `SLACK_DLP_AUDIT_ACTIONS` (#55): an org-level token
   with `auditlogs:read`, and the audit actions Slack's DLP records; needed for
   `SCAN_MODE_SLACK` `vendor` or `both`.
+- `SLACK_JOIN_PUBLIC_CHANNELS` (#139): `off` (the default) or `on`. On, and with
+  the app's opt-in `channels:join` scope (the auto-join manifest), the scanner
+  joins each public, non-archived channel it would read that its bot is not in,
+  before reading it: **the one setting that writes** (a join), and every join is
+  in the run summary (`joinedByScanner`). Never a private, archived or Slack
+  Connect channel. Set in the deployment only: Mermera's settings never set it
+  (docs/mermera-config.md).
 
 **Modes** (#55): `SCAN_MODE_M365`, `SCAN_MODE_GOOGLE_WORKSPACE`,
 `SCAN_MODE_SLACK` (each defaults to `SCAN_MODE`, which defaults to
@@ -261,6 +268,8 @@ class SlackSettings:
     # #55: the Audit Logs API's org token, and the DLP actions read from it.
     audit_token: Secret | None = field(default=None, repr=False)
     dlp_actions: tuple[str, ...] = ()
+    # #139: join the public channels the bot is not in (`SLACK_JOIN_PUBLIC_CHANNELS`, off).
+    join_public: bool = False
 
     def __repr__(self) -> str:
         return f"SlackSettings(channels={len(self.channels)})"
@@ -585,7 +594,8 @@ def _slack(e: Mapping[str, str]) -> SlackSettings | None:
     actions = _list(e.get("SLACK_DLP_AUDIT_ACTIONS")) or DLP_ACTIONS
     if any(not re.match(r"^[a-z][a-z0-9_]{2,80}$", a) for a in actions):
         raise ConfigError("slack_dlp_audit_actions")
-    return SlackSettings(Secret(token), channels, ekm, audit, actions)
+    join = _toggle(e.get("SLACK_JOIN_PUBLIC_CHANNELS"), "off", "slack_join_public_channels")
+    return SlackSettings(Secret(token), channels, ekm, audit, actions, join)
 
 
 def _atlassian(e: Mapping[str, str]) -> AtlassianSettings | None:

@@ -1,4 +1,4 @@
-# Findings, schema version 1.13
+# Findings, schema version 1.14
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.13"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.14"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -149,6 +149,13 @@ value shows up in findings, events, logs, exception messages or object reprs.
   `configPull` ([mermera-config.md](mermera-config.md)). All additive. An Azure
   Archive-tier blob, counted under `skipped.archive_tier` before, is
   `archived.needs_rehydration` from 1.13.
+- Version 1.14 ([#139](https://github.com/txp-labs/sensitive-data-scanner/issues/139))
+  adds `joinedByScanner` on a Slack channel's store in the run summary: the
+  channel the scanner joined itself, with `SLACK_JOIN_PUBLIC_CHANNELS` on and
+  the app's opt-in `channels:join` scope (`action: joined_by_scanner`,
+  `channelId`, `joinedAt`). The one change the scanner makes in a customer's
+  tenant, recorded on every run that makes it ([SAAS.md](SAAS.md#slack)).
+  All additive.
 
 ## Sources and modes (1.8)
 
@@ -932,6 +939,7 @@ coverage gap is visible rather than silent.
 | `storageClasses` | (1.13, #109) An S3 bucket's, Azure container's or Cloud Storage bucket's objects per storage class or tier, over its last complete listing pass (`storageClassesPartial: true`: the first pass so far): `objects`, `bytes`, `read`, and when not read `reason` (`archive_class`, `cold_tier`, `needs_restore`, `needs_rehydration`, or `not_implemented` for a hook switched on) and `toggle`. Classes are the provider's names (`STANDARD_IA`, `GLACIER_IR`, `DEEP_ARCHIVE`; `GLACIER_RESTORED` for a restored copy; `INTELLIGENT_TIERING_ARCHIVE_ACCESS`, `INTELLIGENT_TIERING_DEEP_ARCHIVE_ACCESS`; Azure's `Hot`, `Cool`, `Cold`, `Archive`, `Premium`; Cloud Storage's `STANDARD`, `NEARLINE`, `COLDLINE`, `ARCHIVE`). From the listing only |
 | `costEstimate` | (1.13, #109) What reading every object once would cost, for the classes that charge per byte and that the scanner can read now or with their setting on: `currency` (`USD`), `retrievalPerGb` and `requestsPer1k` by class, `estimatedToScanUsd` (the classes read now), `byClass` (each priced class, read or not), `priceDate`, `region`, and `regionFallback` when the region was priced as the platform's fallback. Classes that need a restore or rehydration have none. [COST.md](COST.md#reading-cold-storage-classes) |
 | `backlog` | More to read on the next run |
+| `joinedByScanner` | (1.14, #139) A Slack channel the scanner joined this run, before reading it (`SLACK_JOIN_PUBLIC_CHANNELS` on, `channels:join` held): `action` (`joined_by_scanner`), `channelId` and `joinedAt`. Present only on the run that joined it; later runs read the channel as a member. A join it could not make leaves the store `skipped`, `not_a_member`, with Slack's code in `error` (`missing_scope:channels:join` when the app lacks the scope) and `toggle: SLACK_JOIN_PUBLIC_CHANNELS` ([SAAS.md](SAAS.md#slack)) |
 | `logGroupClass`, `tableStatus`, `catalogObject` | Why an `unsupported` store is unsupported (`catalogObject`: `view`, `not_s3`, `resource_link`) |
 | `location` | A Glue table's S3 location, `bucket/prefix`, masked |
 | `lakeFormation` | The Glue table is registered with Lake Formation |

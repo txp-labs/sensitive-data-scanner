@@ -16,7 +16,9 @@ from jsonschema import Draft202012Validator
 from aws_fixtures import shared_detector
 from office_fixtures import xlsx
 from sensitive_data_core.findings import key_hash
+from sensitive_data_core.report import report_html
 from sensitive_data_core.state import FileState
+from sensitive_data_saas.clients import Clients
 from sensitive_data_saas.config import ConfigError, read_settings
 from sensitive_data_saas.resources import tenant_hash
 from sensitive_data_saas.runner import run_scan
@@ -233,3 +235,147 @@ def test_message_and_file_links() -> None:
     # Its permalink is never the link: another host, and it names the file and a person.
     permalink = {"permalink": "https://acme.slack.com/files/U0ALICE01/F0X/a.pdf"}
     assert shared_link(team, chan, permalink) == base
+
+
+# ------------------------------------------------------------------ the opt-in join (#139)
+
+
+def joining_org() -> SlackOrg:
+    """The org, plus a public channel of each kind the bot is not in."""
+    o = org()
+    lobby = Chan("C0LOBBY01", "lobby", member=False)
+    lobby.messages = [{"ts": ts(2), "text": f"my card is {printed(CARDS['visa'])}"}]
+    o.channels[lobby.id] = lobby
+    o.channels["C0OLDNEWS"] = Chan("C0OLDNEWS", "old-news", member=False, archived=True)
+    o.channels["C0PARTNER"] = Chan("C0PARTNER", "partner-acme", member=False, ext_shared=True)
+    o.channels["C0PENDING"] = Chan(
+        "C0PENDING", "pending-share", member=False, pending_ext_shared=True
+    )
+    o.channels["C0FINANCE"] = Chan("C0FINANCE", "finance", member=False)
+    return o
+
+
+def joins_posted(o: SlackOrg) -> list[Any]:
+    return [c for c in o.calls if c[0] != "GET" or c[1].endswith("conversations.join")]
+
+
+@pytest.mark.parametrize("value", [None, "off", ""])
+def test_join_off_never_calls_join(tmp_path: Path, value: str | None) -> None:
+    """Off (the default): the scanner never calls conversations.join, and every public
+    channel the bot is not in is `not_a_member`, exactly as before #139."""
+    o = joining_org()
+    o.scopes = "channels:read,groups:read,channels:history,groups:history,files:read,channels:join"
+    extra = {} if value is None else {"SLACK_JOIN_PUBLIC_CHANNELS": value}
+    s = settings(tmp_path, **extra)
+    assert s.slack is not None and s.slack.join_public is False
+    doc = scan(o, s)
+    assert joins_posted(o) == [] and o.joins == []
+    by = stores(doc)
+    for name in ("#lobby", "#old-news", "#partner-acme", "#pending-share", "#finance"):
+        store = by[("slack_channel", name)]
+        assert store == {k: v for k, v in store.items() if k != "toggle"}, name
+        assert (store["status"], store["reason"]) == ("skipped", "not_a_member"), name
+        assert "error" not in store and "joinedByScanner" not in store, name
+    assert "What the scanner changed" not in report_html(doc)
+
+
+def test_join_off_reports_exactly_what_unset_reports(tmp_path: Path) -> None:
+    a, b = joining_org(), joining_org()
+    unset = scan(a, settings(tmp_path))
+    off = scan(b, settings(tmp_path, SLACK_JOIN_PUBLIC_CHANNELS="off"))
+    for doc in (unset, off):
+        doc.pop("runId"), doc.pop("startedAt"), doc.pop("finishedAt")
+    assert json.dumps(unset, sort_keys=True) == json.dumps(off, sort_keys=True)
+    assert a.calls == b.calls
+
+
+def test_join_on_joins_public_channels_only_and_records_each(tmp_path: Path) -> None:
+    o = joining_org()
+    o.scopes = "channels:read,groups:read,channels:history,groups:history,files:read,channels:join"
+    s = settings(tmp_path, SLACK_JOIN_PUBLIC_CHANNELS="on", DISCOVER_DENY="slack_channel:#finance")
+    doc = scan(o, s)
+    # Only the public, live, unshared channel the rules allow; never private, archived,
+    # Slack Connect (shared or pending), or denied.
+    assert o.joins == ["C0LOBBY01"]
+    (post,) = joins_posted(o)
+    assert post[0] == "POST"
+    by = stores(doc)
+    lobby = by[("slack_channel", "#lobby")]
+    assert lobby["status"] == "scanned"
+    assert lobby["joinedByScanner"] == {
+        "action": "joined_by_scanner",
+        "channelId": "C0LOBBY01",
+        "joinedAt": "2026-09-21T14:13:20Z",  # the fake clients' wall clock, 1_790_000_000
+    }
+    # Read this run.
+    assert any(
+        f["resource"]["channel"] == "C0LOBBY01" and f["class"] == "card" for f in doc["findings"]
+    )
+    for name in ("#hr-private", "#old-news", "#partner-acme", "#pending-share"):
+        store = by[("slack_channel", name)]
+        assert (store["status"], store["reason"]) == ("skipped", "not_a_member"), name
+        assert "joinedByScanner" not in store, name
+    assert by[("slack_channel", "#finance")]["reason"] == "denied"
+    assert "joinedByScanner" not in by[("slack_channel", "#support")]  # already a member
+    # The next run reads it as a member, and records no new join.
+    again = scan(o, s)
+    assert o.joins == ["C0LOBBY01"]
+    assert "joinedByScanner" not in stores(again)[("slack_channel", "#lobby")]
+
+
+def test_join_honors_slack_channels(tmp_path: Path) -> None:
+    o = joining_org()
+    s = settings(tmp_path, SLACK_JOIN_PUBLIC_CHANNELS="on", SLACK_CHANNELS="C0SUPPORT1")
+    scan(o, s)
+    assert o.joins == []
+
+
+def test_join_without_the_scope_named_by_slack_falls_back_to_invite_only(tmp_path: Path) -> None:
+    """Slack names the token's scopes and channels:join is not one: nothing is tried."""
+    o = joining_org()
+    o.scopes = "channels:read,groups:read,channels:history,groups:history,files:read"
+    o.can_join = False
+    doc = scan(o, settings(tmp_path, SLACK_JOIN_PUBLIC_CHANNELS="on"))
+    assert joins_posted(o) == []
+    lobby = stores(doc)[("slack_channel", "#lobby")]
+    assert (lobby["status"], lobby["reason"], lobby["error"], lobby["toggle"]) == (
+        "skipped",
+        "not_a_member",
+        "missing_scope:channels:join",
+        "SLACK_JOIN_PUBLIC_CHANNELS",
+    )
+    assert stores(doc)[("slack_channel", "#support")]["status"] == "scanned"
+
+
+def test_join_without_the_scope_unnamed_stops_at_the_first_refusal(tmp_path: Path) -> None:
+    """No `x-oauth-scopes` header: the first join's missing_scope stops every other try."""
+    o = joining_org()
+    o.channels["C0SECOND1"] = Chan("C0SECOND1", "second", member=False)
+    o.can_join = False
+    doc = scan(o, settings(tmp_path, SLACK_JOIN_PUBLIC_CHANNELS="on"))
+    assert len(joins_posted(o)) == 1
+    by = stores(doc)
+    for name in ("#lobby", "#second"):
+        assert by[("slack_channel", name)]["error"] == "missing_scope:channels:join", name
+    assert by[("slack_channel", "#support")]["status"] == "scanned"
+
+
+def test_join_is_paced_to_slacks_tier(tmp_path: Path) -> None:
+    o = joining_org()
+    o.channels["C0SECOND1"] = Chan("C0SECOND1", "second", member=False)
+    waits: list[float] = []
+    s = settings(tmp_path, SLACK_JOIN_PUBLIC_CHANNELS="on")
+    clock = iter(float(n) / 10 for n in range(10_000))
+    clients = Clients(
+        s, session=o, sleep=waits.append, clock=lambda: next(clock), wall=lambda: 1.79e9
+    )
+    doc, failed = run_scan(s, clients, detector=DETECTOR, now=lambda: NOW)
+    assert failed == 0
+    valid(doc)
+    assert sorted(o.joins) == ["C0FINANCE", "C0LOBBY01", "C0SECOND1"]
+    # One join every 1.2 seconds at most (Tier 3): each wait tops the gap up to it.
+    assert len(waits) == 2 and all(0 < w <= 1.2 for w in waits)
+    # report.html says what the scanner changed; a run that joined nothing says nothing.
+    page = report_html(doc)
+    assert "What the scanner changed" in page and "C0LOBBY01" in page
+    assert "What the scanner changed" not in report_html(scan(org(), settings(tmp_path)))

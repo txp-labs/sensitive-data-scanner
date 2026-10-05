@@ -1,4 +1,4 @@
-"""Slack's Web API, read-only: a token from a mounted file, GETs, and Slack's own errors.
+"""Slack's Web API: a token from a mounted file, GETs, one opt-in join, and Slack's own errors.
 
 The customer installs a Slack app of its own with **read scopes only**
 (docs/SAAS.md) and gives the container its token in a file
@@ -10,6 +10,13 @@ Enterprise Grid, an org-level token (`xoxp-`) with `discovery:read`.
   Discovery API's `discovery.*.list` and `discovery.conversations.history`);
   a file's content is fetched from `files.slack.com` with the token, the one
   other host the token is ever sent to.
+- **The one write**, opt-in (#139): `conversations.join`, a POST, made only by
+  `join` and only when `SLACK_JOIN_PUBLIC_CHANNELS` is on and the app holds
+  `channels:join` (the auto-join manifest). It is paced to Slack's Tier 3
+  (`JOIN_INTERVAL`), and posts nothing to the channel itself.
+- The scopes the token holds are read from Slack's `x-oauth-scopes` header
+  when Slack sends it (`granted`), so a missing `channels:join` is named
+  before any join is tried.
 - Slack answers most failures with HTTP 200 and `{"ok": false, "error": ...}`:
   that `error` (`missing_scope`, `not_in_channel`, `channel_not_found`) names
   the `SaasError`; nothing else of the answer is kept.
@@ -29,6 +36,17 @@ from .http import Http, SaasError
 API = "https://slack.com/api"
 HOSTS = frozenset({"slack.com", "files.slack.com", "api.slack.com"})
 MAX_PAGES = 10_000
+# conversations.join is Tier 3 (50+ a minute): one join every 1.2 seconds stays under it.
+JOIN_INTERVAL = 1.2
+
+
+def granted_scopes(resp: Any) -> frozenset[str] | None:
+    """The scopes Slack says the token holds (`x-oauth-scopes`), or None when not sent."""
+    headers = getattr(resp, "headers", None) or {}
+    for k, v in dict(headers).items():
+        if str(k).lower() == "x-oauth-scopes":
+            return frozenset(s.strip() for s in str(v).split(",") if s.strip())
+    return None
 
 
 def slack_error(resp: Any) -> SaasError:
@@ -42,11 +60,13 @@ def slack_error(resp: Any) -> SaasError:
 
 
 class Slack:
-    """GETs on Slack's Web API with one token."""
+    """GETs on Slack's Web API with one token, and the opt-in join (#139)."""
 
     def __init__(self, http: Http, token: Secret) -> None:
         self.http = http
         self._token = token
+        # The token's scopes, from the last answer that named them (None: never named).
+        self.granted: frozenset[str] | None = None
 
     def __repr__(self) -> str:
         return "Slack(***)"
@@ -61,11 +81,28 @@ class Slack:
         resp = self.http.call(
             "GET", url, params=params, headers=self._head(url), error_of=slack_error
         )
+        scopes = granted_scopes(resp)
+        if scopes is not None:
+            self.granted = scopes
         body = resp.json()
         if not isinstance(body, dict) or not body.get("ok"):
             failed = slack_error(resp)
             raise failed
         return body
+
+    def join(self, channel: str) -> None:
+        """Join a public channel (`conversations.join`, `channels:join`): the one write,
+        made only when `SLACK_JOIN_PUBLIC_CHANNELS` is on (#139). Raises SaasError with
+        Slack's code (`missing_scope`, `is_archived`, `method_not_supported_for_channel_type`)."""
+        self.http.pace("conversations.join", JOIN_INTERVAL)
+        url = f"{API}/conversations.join"
+        resp = self.http.call(
+            "POST", url, data={"channel": channel}, headers=self._head(url), error_of=slack_error
+        )
+        body = resp.json()
+        if not isinstance(body, dict) or not body.get("ok"):
+            failed = slack_error(resp)
+            raise failed
 
     def pages(
         self,

@@ -42,6 +42,8 @@ data:
   M365_MAIL_SCOPE_CHECK: ""
   M365_SITES: ""
   SLACK_TOKEN_FILE: /run/secrets/sds/slack-token
+  # Slack auto-join (#139, docs/SAAS.md > Choose your manifest): off, the default, never joins a channel. on joins every public channel the bot is not in, and needs the auto-join manifest's channels:join. Set here only: Mermera never sets it.
+  SLACK_JOIN_PUBLIC_CHANNELS: "off"
   # The limitations' toggles (docs/limitations.md): empty leaves each to Mermera's setting, else its default, on (#109, docs/mermera-config.md).
   M365_MAIL: ""
   LINK_VENDOR_ALERTS_BY_LOCATION: ""

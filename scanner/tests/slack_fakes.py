@@ -3,9 +3,10 @@
 One HTTPS session answers Slack's read methods (`auth.test`,
 `conversations.list`, `conversations.history`, `conversations.replies`, the
 Discovery API's list and history) and file downloads from `files.slack.com`.
-Like Slack, a failure is HTTP 200 with `{"ok": false, "error": ...}`. **It has
-no method that writes**: any other method, or any request that is not a GET,
-fails the test.
+Like Slack, a failure is HTTP 200 with `{"ok": false, "error": ...}`. **Its one
+method that writes is `conversations.join`** (a POST, #139), which the scanner may
+call only with `SLACK_JOIN_PUBLIC_CHANNELS` on; every join is recorded in `joins`.
+Any other method, or any other request that is not a GET, fails the test.
 """
 
 from __future__ import annotations
@@ -48,6 +49,9 @@ class Chan:
     name: str
     private: bool = False
     member: bool = True
+    archived: bool = False
+    ext_shared: bool = False
+    pending_ext_shared: bool = False
     messages: list[dict[str, Any]] = field(default_factory=list)
     replies: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
@@ -67,6 +71,11 @@ class SlackOrg:
         # #55: the Audit Logs API's entries.
         self.audit: list[dict[str, Any]] = []
         self.audit_queries: list[dict[str, Any]] = []
+        # #139: the token's scopes, as Slack's `x-oauth-scopes` header names them (None: no
+        # header), whether the app holds channels:join, and every channel joined.
+        self.scopes: str | None = None
+        self.can_join = True
+        self.joins: list[str] = []
 
     def __repr__(self) -> str:
         return "SlackOrg()"
@@ -88,8 +97,10 @@ class SlackOrg:
     ) -> Resp:
         headers = headers or {}
         self.calls.append((method, url, params, headers))
-        assert method == "GET", "the scanner never writes"
         parts = urllib.parse.urlsplit(url)
+        if method == "POST" and url == "https://slack.com/api/conversations.join":
+            return self._join(dict(data or {}), headers)
+        assert method == "GET", "the scanner never writes, but for the opt-in join"
         if parts.hostname == "api.slack.com":
             assert headers.get("Authorization") == f"Bearer {AUDIT}"
             assert parts.path == "/audit/v1/logs"
@@ -119,6 +130,21 @@ class SlackOrg:
             return Resp(200, {"ok": False, "error": self.fail[name], "warning": "details for you"})
         return self._route(name, q)
 
+    def _join(self, form: dict[str, Any], headers: dict[str, str]) -> Resp:
+        assert headers.get("Authorization") == f"Bearer {BOT}"
+        if not self.can_join:
+            return Resp(200, {"ok": False, "error": "missing_scope", "needed": "channels:join"})
+        c = self.channels.get(str(form.get("channel")))
+        if c is None:
+            return Resp(200, {"ok": False, "error": "channel_not_found"})
+        if c.private:
+            return Resp(200, {"ok": False, "error": "method_not_supported_for_channel_type"})
+        if c.archived:
+            return Resp(200, {"ok": False, "error": "is_archived"})
+        self.joins.append(c.id)
+        c.member = True
+        return Resp(200, {"ok": True, "channel": {"id": c.id}})
+
     def _page(self, key: str, rows: list[Any], q: dict[str, Any], **extra: Any) -> Resp:
         start = int(q.get("cursor") or 0)
         body: dict[str, Any] = {"ok": True, key: rows[start : start + self.per_page], **extra}
@@ -135,10 +161,20 @@ class SlackOrg:
 
     def _route(self, name: str, q: dict[str, Any]) -> Resp:
         if name == "auth.test":
-            return Resp(200, {"ok": True, "team_id": TEAM, "enterprise_id": ORG, "team": "Acme"})
+            head = {"x-oauth-scopes": self.scopes} if self.scopes is not None else None
+            body = {"ok": True, "team_id": TEAM, "enterprise_id": ORG, "team": "Acme"}
+            return Resp(200, body, headers=head)
         if name == "conversations.list":
             rows = [
-                {"id": c.id, "name": c.name, "is_private": c.private, "is_member": c.member}
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "is_private": c.private,
+                    "is_member": c.member,
+                    "is_archived": c.archived,
+                    "is_ext_shared": c.ext_shared,
+                    "is_pending_ext_shared": c.pending_ext_shared,
+                }
                 for c in self.channels.values()
             ]
             return self._page("channels", rows, q)

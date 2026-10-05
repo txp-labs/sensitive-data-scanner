@@ -11,7 +11,9 @@ only read (`tests/test_saas_scopes.py`, with the release).
   delegation grants the service account's client id, and the scanner requests
   per user.
 - **Slack**: the scopes of the customer's own Slack app (its manifest), which
-  its token carries.
+  its token carries. One more, `channels:join`, is **not** requested: it is in
+  the auto-join manifest only, for the one opt-in write
+  (`SLACK_JOIN_PUBLIC_CHANNELS`, #139), and listed apart in `OPT_IN_WRITES`.
 """
 
 from __future__ import annotations
@@ -47,6 +49,10 @@ SLACK_DISCOVERY = ("discovery:read",)
 # #55, SCAN_MODE_SLACK vendor or both: the Audit Logs API's DLP events (an org token).
 SLACK_AUDIT = ("auditlogs:read",)
 
+# #139, SLACK_JOIN_PUBLIC_CHANNELS on: join public channels. A write, so never in REQUESTED:
+# only in the auto-join manifest (deploy/saas/slack/slack-manifest-auto-join.yaml).
+SLACK_JOIN = ("channels:join",)
+
 # Atlassian OAuth 2.0 (3LO) classic scopes (an API token has none: it reads what its
 # read-only service account may browse).
 ATLASSIAN_JIRA = ("read:jira-work",)
@@ -77,3 +83,6 @@ REQUESTED: dict[str, tuple[str, ...]] = {
     "slack": (*SLACK_CHANNELS, *SLACK_FILES, *SLACK_DISCOVERY, *SLACK_AUDIT),
     "atlassian": (*ATLASSIAN_JIRA, *ATLASSIAN_CONFLUENCE, *ATLASSIAN_OFFLINE),
 }
+
+# Scopes that write, each behind its own opt-in setting, never requested by default (#139).
+OPT_IN_WRITES: dict[str, tuple[str, ...]] = {"slack": SLACK_JOIN}

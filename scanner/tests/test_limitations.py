@@ -83,6 +83,7 @@ TOGGLES = (
     Toggle("D2", "saas", "LINK_VENDOR_ALERTS_BY_LOCATION", True, ""),
     Toggle("D3", "saas", "M365_MAIL", True, ""),
     Toggle("D4", "saas", "ATLASSIAN_AUTH_MODE", "token", ""),
+    Toggle("D6", "saas", "SLACK_JOIN_PUBLIC_CHANNELS", False, ""),
 )
 # The rows with no setting, and why (docs/limitations.md says the same).
 NO_TOGGLE = {
@@ -133,6 +134,8 @@ def saas(tmp_path: Path, **env: str) -> Any:
     secret.write_text("made-up")
     gws_key = tmp_path / "gws-key.json"
     gws_key.write_text("{}")
+    slack_token = tmp_path / "slack-token"
+    slack_token.write_text("xoxb-made-up-bot-token-0000000000")
     return saas_settings(
         {
             "SCANNER_SITE": "x",
@@ -147,6 +150,7 @@ def saas(tmp_path: Path, **env: str) -> Any:
             "ATLASSIAN_SITE": "acme.atlassian.net",
             "ATLASSIAN_EMAIL": "sds@acme.example",
             "ATLASSIAN_API_TOKEN_FILE": str(secret),
+            "SLACK_TOKEN_FILE": str(slack_token),
             **env,
         }
     )
@@ -240,6 +244,7 @@ def test_saas_defaults(tmp_path: Path) -> None:
         "LINK_VENDOR_ALERTS_BY_LOCATION": s.link_by_location,
         "M365_MAIL": s.m365.mail_read,
         "ATLASSIAN_AUTH_MODE": "token",
+        "SLACK_JOIN_PUBLIC_CHANNELS": s.slack.join_public,
     }
     assert got == {t.env: t.default for t in TOGGLES if t.platform == "saas"}
 

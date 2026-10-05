@@ -45,7 +45,7 @@ User-Agent: sensitive-data-scanner/<version>
   exactly as the URL has it (the path parameter Mermera signs over). There is
   no body. Mermera accepts a
   signature within 300 seconds of its clock.
-- **`schemaVersion`** is the findings schema the runner writes (`1.13` from
+- **`schemaVersion`** is the findings schema the runner writes (`1.14` from
   this release): advisory, unsigned. Mermera may answer 422 for a major it
   does not accept.
 - One attempt per run, 10-second timeout, no retry inside the run: the next
