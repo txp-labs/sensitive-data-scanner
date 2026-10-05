@@ -369,7 +369,9 @@ settings:
 
 Put the bot token (`xoxb-…`) in a file on a mounted secret volume and set
 `SLACK_TOKEN_FILE`. `SLACK_TOKEN` or `SLACK_BOT_TOKEN` in the environment is
-refused. `SLACK_CHANNELS` limits the scan to named channel ids. A channel
+refused. The token stays in your environment: it lives in your own secret
+store and reaches the container only as that file. Every deploy example wires
+it ([Deploying: the Slack token](#the-slack-token-in-each-example)). `SLACK_CHANNELS` limits the scan to named channel ids. A channel
 the bot is not a member of is `not_a_member`.
 
 **Direct messages** are readable only through Slack's **Discovery API**, on
@@ -625,6 +627,23 @@ itself to.
 | Azure Container Apps | `deploy/saas/azure-container-apps.yaml` (`az containerapp job create --yaml`), a scheduled job | the job's managed identity (`M365_FEDERATED_TOKEN=azure`) | Key Vault references mounted as a secret volume | a file on an Azure Files share |
 | Google Cloud Run | `deploy/saas/cloud-run.yaml` (`gcloud run jobs replace`), scheduled by Cloud Scheduler | the job's service account: `GWS_CREDENTIAL=gcp` signs Google Workspace's delegation keylessly | Secret Manager secrets mounted as files | a file on a Cloud Storage volume |
 | Kubernetes | `deploy/saas/kubernetes.yaml`, a CronJob (`concurrencyPolicy: Forbid`) | a projected service account token for Entra (`M365_FEDERATED_TOKEN=file:…`) | a Secret volume | a file on a persistent volume |
+
+### The Slack token in each example
+
+([#123](https://github.com/txp-labs/sensitive-data-scanner/issues/123))
+The Slack app's token never leaves your environment: it is a secret in your
+own store, given to the container as a file, and `SLACK_TOKEN_FILE` is that
+file's path. Mermera never asks for it. Slack's org-level audit token
+(`auditlogs:read`, for `SCAN_MODE_SLACK` `vendor` or `both`) goes the same way
+to `SLACK_AUDIT_TOKEN_FILE`. Left out, Slack is off and nothing else changes;
+the identity reads only the secrets named.
+
+| Platform | Where the token lives | How it is wired | `SLACK_TOKEN_FILE` |
+|---|---|---|---|
+| AWS ECS | a Secrets Manager secret (e.g. `sds-saas/slack-token`), the token as plain text | the parameter `SlackTokenSecretArn` (its full ARN): the secrets container copies it, the task role may read only it, and the scanner gets the setting; `SlackAuditTokenSecretArn` the same, to `/run/secrets/sds/slack-audit-token`. Empty (the default), neither is set | `/run/secrets/sds/slack-token` |
+| Azure Container Apps | a Key Vault secret, `sds-slack-token` | the identity gets Key Vault Secrets User on that secret only; uncomment the job secret `slack-token` and its line in the secrets volume, and set the setting (audit: `sds-slack-audit-token`, `slack-audit-token`) | `/run/secrets/sds/slack-token` |
+| Google Cloud Run | a Secret Manager secret, `sds-slack-token` | the job's service account gets Secret Manager Secret Accessor on that secret only; uncomment the `slack` volume (Cloud Run mounts one secret per directory, so it is its own, at `/run/secrets/slack`) and set the setting (audit: `sds-slack-audit-token` at `/run/secrets/slack-audit/slack-audit-token`) | `/run/secrets/slack/slack-token` |
+| Kubernetes | the key `slack-token` in the Secret `sds-saas` | already mounted and set | `/run/secrets/sds/slack-token` |
 
 A strict test (`scanner/tests/test_saas_scopes.py`) holds the package, these
 docs and the examples to read-only grants: every permission or scope the

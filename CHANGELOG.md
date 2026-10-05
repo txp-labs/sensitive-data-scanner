@@ -7,6 +7,18 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Feature
+- **Every SaaS deploy example wires the Slack token from your own secret store**
+  ([#123](https://github.com/txp-labs/sensitive-data-scanner/issues/123)): the
+  ECS template takes optional `SlackTokenSecretArn` and `SlackAuditTokenSecretArn`
+  (full Secrets Manager ARNs; empty, the default, changes nothing): the secrets
+  container copies each to `/run/secrets/sds/slack-token` or
+  `slack-audit-token`, the task role may read only those secrets, and the
+  scanner gets `SLACK_TOKEN_FILE` / `SLACK_AUDIT_TOKEN_FILE`. The Azure Container
+  Apps and Cloud Run examples carry the Key Vault and Secret Manager secret, its
+  one-secret grant and the setting, ready to uncomment (Cloud Run's file is
+  `/run/secrets/slack/slack-token`: it mounts one secret per directory). The
+  token never leaves the customer's environment and never enters the
+  environment variables ([SAAS.md](docs/SAAS.md#the-slack-token-in-each-example)).
 - **Slack findings link to the message, not just the channel**
   ([txp-labs/mermera-attestation-app#1395](https://github.com/txp-labs/mermera-attestation-app/issues/1395)):
   a finding in a Slack message opens that message in Slack's web app, in its

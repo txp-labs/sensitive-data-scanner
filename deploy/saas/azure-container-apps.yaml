@@ -8,6 +8,15 @@
 #   principal id, audience api://AzureADTokenExchange). No secret.
 # - Secrets come from Key Vault (the identity holds Key Vault Secrets User on
 #   those secrets) and are mounted as files, never environment variables.
+# - Slack (optional): the Slack app's token stays in your Key Vault, as the
+#   secret sds-slack-token. Grant the identity Key Vault Secrets User on that one
+#   secret, not the vault:
+#     az role assignment create --assignee <principal id> --role "Key Vault Secrets User" \
+#       --scope <vault resource id>/secrets/sds-slack-token
+#   then uncomment the two slack-token lines below and set SLACK_TOKEN_FILE to
+#   /run/secrets/sds/slack-token. Left as is, Slack is off. Slack's org-level
+#   audit token (SCAN_MODE_SLACK vendor or both) is the same, as
+#   sds-slack-audit-token, slack-audit-token and SLACK_AUDIT_TOKEN_FILE.
 # - The state is a file on an Azure Files share (an environment storage mount).
 # - One run at a time: parallelism 1, no retries, a replica timeout below the
 #   schedule's interval.
@@ -27,6 +36,8 @@ properties:
       - name: push-key
         keyVaultUrl: https://<vault>.vault.azure.net/secrets/sds-push-key
         identity: system
+      # - { name: slack-token, keyVaultUrl: "https://<vault>.vault.azure.net/secrets/sds-slack-token", identity: system }
+      # - { name: slack-audit-token, keyVaultUrl: "https://<vault>.vault.azure.net/secrets/sds-slack-audit-token", identity: system }
   template:
     containers:
       - name: scanner
@@ -49,6 +60,9 @@ properties:
           - { name: STATE_LOCATION, value: /state/sds-saas-state.json }
           - { name: FINDINGS_HTTPS_URL, value: https://collector.example/findings }
           - { name: FINDINGS_HMAC_KEY_FILE, value: /run/secrets/sds/push-key }
+          # Slack: /run/secrets/sds/slack-token (and slack-audit-token) once the secrets above are uncommented; empty, off.
+          - { name: SLACK_TOKEN_FILE, value: "" }
+          - { name: SLACK_AUDIT_TOKEN_FILE, value: "" }
         volumeMounts:
           - { volumeName: secrets, mountPath: /run/secrets/sds }
           - { volumeName: state, mountPath: /state }
@@ -57,6 +71,8 @@ properties:
         storageType: Secret
         secrets:
           - { secretRef: push-key, path: push-key }
+          # - { secretRef: slack-token, path: slack-token }
+          # - { secretRef: slack-audit-token, path: slack-audit-token }
       - name: state
         storageType: AzureFile
         storageName: sds-saas-state
