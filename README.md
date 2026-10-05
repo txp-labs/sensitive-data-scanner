@@ -190,7 +190,7 @@ Jira and Confluence have no detection of their own to import: scanner only.
 | Azure | `deploy/azure/` (Bicep at a management group): a Container Apps job with a managed identity | [docs/AZURE.md](docs/AZURE.md#deploying) |
 | Google Cloud | `deploy/gcp/` (Terraform at an organization or folders): a Cloud Run job with its own service account | [docs/GCP.md](docs/GCP.md#deploying) |
 | Databases anywhere | a container next to your databases: docker, Kubernetes, ECS or Azure Container Instances | [docs/DATABASES.md](docs/DATABASES.md#deploying-it) |
-| SaaS | a container in your own environment: examples for ECS, Container Apps, Cloud Run and Kubernetes | [docs/SAAS.md](docs/SAAS.md#deploying) |
+| SaaS | a container in your own environment: examples for ECS, Container Apps, Cloud Run and Kubernetes, each giving it the Slack token from your own secret store as a file | [docs/SAAS.md](docs/SAAS.md#deploying) |
 
 To run the AWS scanner by hand, invoke the function asynchronously
 (`aws lambda invoke --invocation-type Event ...`). A synchronous invoke runs

@@ -78,6 +78,29 @@ Parameters:
   PushKeySecretArn:
     Type: String
     Description: A Secrets Manager secret holding the push's HMAC key (32 characters or more).
+  SlackTokenSecretArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$"
+    Description: >-
+      (Optional; empty, the default, leaves Slack off.) The full ARN of a Secrets
+      Manager secret of yours (e.g. sds-saas/slack-token) holding the Slack app's
+      token as plain text. It is copied to /run/secrets/sds/slack-token and
+      SLACK_TOKEN_FILE is set to it; the task role may read only this secret. The
+      token stays in your account (docs/SAAS.md, Slack).
+  SlackAuditTokenSecretArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$"
+    Description: >-
+      (Optional; empty, the default, leaves it unset.) The full ARN of a Secrets
+      Manager secret holding Slack's org-level audit token (auditlogs:read, for
+      SCAN_MODE_SLACK vendor or both) as plain text. It is copied to
+      /run/secrets/sds/slack-audit-token and SLACK_AUDIT_TOKEN_FILE is set to it.
+
+Conditions:
+  HasSlackToken: !Not [!Equals [!Ref SlackTokenSecretArn, ""]]
+  HasSlackAuditToken: !Not [!Equals [!Ref SlackAuditTokenSecretArn, ""]]
 
 Resources:
   LogGroup:
@@ -122,7 +145,10 @@ Resources:
               - Sid: ReadOwnSecrets
                 Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Ref PushKeySecretArn
+                Resource:
+                  - !Ref PushKeySecretArn
+                  - !If [HasSlackToken, !Ref SlackTokenSecretArn, !Ref AWS::NoValue]
+                  - !If [HasSlackAuditToken, !Ref SlackAuditTokenSecretArn, !Ref AWS::NoValue]
               - Sid: OwnState
                 Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
@@ -146,7 +172,8 @@ Resources:
         - Name: secrets
       ContainerDefinitions:
         # Writes each secret to a file on the task-local volume, then exits. The scanner's
-        # own image (it carries boto3), as the task role.
+        # own image (it carries boto3), as the task role. SDS_SECRETS is file=ARN pairs;
+        # an optional secret left empty is an empty entry, skipped.
         - Name: secrets
           Image: !Ref Image
           Essential: false
@@ -155,10 +182,14 @@ Resources:
             - >-
               import boto3,os;c=boto3.client('secretsmanager');
               [open('/run/secrets/sds/'+n,'w').write(c.get_secret_value(SecretId=a)['SecretString'])
-              for n,a in (x.split('=',1) for x in os.environ['SDS_SECRETS'].split(','))]
+              for n,a in (x.split('=',1) for x in os.environ['SDS_SECRETS'].split(',') if x)]
           Environment:
             - Name: SDS_SECRETS
-              Value: !Sub push-key=${PushKeySecretArn}
+              Value: !Join
+                - ","
+                - - !Sub push-key=${PushKeySecretArn}
+                  - !If [HasSlackToken, !Sub "slack-token=${SlackTokenSecretArn}", ""]
+                  - !If [HasSlackAuditToken, !Sub "slack-audit-token=${SlackAuditTokenSecretArn}", ""]
           MountPoints:
             - SourceVolume: secrets
               ContainerPath: /run/secrets/sds
@@ -198,6 +229,11 @@ Resources:
             - { Name: STATE_LOCATION, Value: !Sub "s3://${StateBucket}/${StateKey}" }
             - { Name: FINDINGS_HTTPS_URL, Value: !Ref FindingsHttpsUrl }
             - { Name: FINDINGS_HMAC_KEY_FILE, Value: /run/secrets/sds/push-key }
+            # Empty (no secret given) leaves Slack off, and the audit token unset.
+            - Name: SLACK_TOKEN_FILE
+              Value: !If [HasSlackToken, /run/secrets/sds/slack-token, ""]
+            - Name: SLACK_AUDIT_TOKEN_FILE
+              Value: !If [HasSlackAuditToken, /run/secrets/sds/slack-audit-token, ""]
           LogConfiguration:
             LogDriver: awslogs
             Options:

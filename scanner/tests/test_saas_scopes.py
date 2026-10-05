@@ -344,3 +344,54 @@ def test_the_ecs_template_holds_only_its_own_actions() -> None:
                 if a not in {"sts:GetWebIdentityToken", "sts:AssumeRole"}:
                     assert st.get("Resource") != "*", a
     assert set(actions) <= allowed, set(actions) - allowed
+
+
+def test_every_deploy_example_wires_the_slack_tokens_as_files() -> None:
+    """#123: each example gives the scanner its Slack tokens from the customer's own
+    secret store, as files; ECS only when a secret is given, reading only it."""
+    paths = {
+        "ecs.yaml": "/run/secrets/sds/slack-token",
+        "kubernetes.yaml": "/run/secrets/sds/slack-token",
+        "azure-container-apps.yaml": "/run/secrets/sds/slack-token",
+        "cloud-run.yaml": "/run/secrets/slack/slack-token",
+    }
+    for name, path in paths.items():
+        envs: dict[str, str] = {}
+        for doc in _load(DEPLOY / name):
+            envs.update(_envs(doc))
+        assert "SLACK_TOKEN_FILE" in envs, name
+        assert path in (DEPLOY / name).read_text(), name
+        for refused in ("SLACK_TOKEN", "SLACK_BOT_TOKEN", "SLACK_AUDIT_TOKEN"):
+            assert refused not in envs, f"{name}: {refused}"
+
+    (doc,) = _load(DEPLOY / "ecs.yaml")
+    params = doc["Parameters"]
+    for p in ("SlackTokenSecretArn", "SlackAuditTokenSecretArn"):
+        assert params[p]["Default"] == "", p
+    scanner, fetcher = (
+        next(
+            c
+            for c in doc["Resources"]["TaskDefinition"]["Properties"]["ContainerDefinitions"]
+            if c["Name"] == n
+        )
+        for n in ("scanner", "secrets")
+    )
+    env = {e["Name"]: e["Value"] for e in scanner["Environment"]}
+    assert env["SLACK_TOKEN_FILE"] == ["HasSlackToken", "/run/secrets/sds/slack-token", ""]
+    assert env["SLACK_AUDIT_TOKEN_FILE"] == [
+        "HasSlackAuditToken",
+        "/run/secrets/sds/slack-audit-token",
+        "",
+    ]
+    fetch = str(fetcher["Environment"])
+    assert "slack-token=${SlackTokenSecretArn}" in fetch
+    assert "slack-audit-token=${SlackAuditTokenSecretArn}" in fetch
+    statements = doc["Resources"]["TaskRole"]["Properties"]["Policies"][0]["PolicyDocument"][
+        "Statement"
+    ]
+    (read,) = (s for s in statements if s["Sid"] == "ReadOwnSecrets")
+    assert read["Resource"] == [
+        "PushKeySecretArn",
+        ["HasSlackToken", "SlackTokenSecretArn", "AWS::NoValue"],
+        ["HasSlackAuditToken", "SlackAuditTokenSecretArn", "AWS::NoValue"],
+    ]

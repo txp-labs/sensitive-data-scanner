@@ -10,6 +10,18 @@
 #   account (GWS_CREDENTIAL=gcp). No key.
 # - Secrets are Secret Manager secrets mounted as files (the job's service
 #   account holds Secret Manager Secret Accessor on them).
+# - Slack (optional): the Slack app's token stays in your Secret Manager, as the
+#   secret sds-slack-token. Grant the job's service account access to that one
+#   secret only:
+#     gcloud secrets add-iam-policy-binding sds-slack-token \
+#       --member serviceAccount:sds-saas@<project>.iam.gserviceaccount.com \
+#       --role roles/secretmanager.secretAccessor
+#   then uncomment the slack lines below and set SLACK_TOKEN_FILE to
+#   /run/secrets/slack/slack-token. Cloud Run mounts one secret per directory,
+#   so it is its own volume beside the push key's. Left as is, Slack is off.
+#   Slack's org-level audit token (SCAN_MODE_SLACK vendor or both) is the same,
+#   as sds-slack-audit-token at /run/secrets/slack-audit/slack-audit-token for
+#   SLACK_AUDIT_TOKEN_FILE.
 # - The state is a file on a Cloud Storage volume (the job's own bucket).
 # - One task, no retries.
 apiVersion: run.googleapis.com/v1
@@ -47,8 +59,13 @@ spec:
                 - { name: STATE_LOCATION, value: /state/sds-saas-state.json }
                 - { name: FINDINGS_HTTPS_URL, value: https://collector.example/findings }
                 - { name: FINDINGS_HMAC_KEY_FILE, value: /run/secrets/sds/push-key }
+                # Slack: /run/secrets/slack/slack-token (and /run/secrets/slack-audit/slack-audit-token) once the volumes below are uncommented; empty, off.
+                - { name: SLACK_TOKEN_FILE, value: "" }
+                - { name: SLACK_AUDIT_TOKEN_FILE, value: "" }
               volumeMounts:
                 - { name: secrets, mountPath: /run/secrets/sds }
+                # - { name: slack, mountPath: /run/secrets/slack }
+                # - { name: slack-audit, mountPath: /run/secrets/slack-audit }
                 - { name: state, mountPath: /state }
           volumes:
             - name: secrets
@@ -56,6 +73,16 @@ spec:
                 secretName: sds-push-key
                 items:
                   - { key: latest, path: push-key }
+            # - name: slack
+            #   secret:
+            #     secretName: sds-slack-token
+            #     items:
+            #       - { key: latest, path: slack-token }
+            # - name: slack-audit
+            #   secret:
+            #     secretName: sds-slack-audit-token
+            #     items:
+            #       - { key: latest, path: slack-audit-token }
             - name: state
               csi:
                 driver: gcsfuse.run.googleapis.com
