@@ -97,6 +97,17 @@ Parameters:
       Manager secret holding Slack's org-level audit token (auditlogs:read, for
       SCAN_MODE_SLACK vendor or both) as plain text. It is copied to
       /run/secrets/sds/slack-audit-token and SLACK_AUDIT_TOKEN_FILE is set to it.
+  SlackJoinPublicChannels:
+    Type: String
+    AllowedValues: ["off", "on"]
+    Default: "off"
+    Description: >-
+      SLACK_JOIN_PUBLIC_CHANNELS (#139). off, the default, never joins a Slack
+      channel: the bot reads only the channels it was invited to (the
+      invite-only manifest). on joins every public, non-archived channel the
+      bot is not in, then reads it; it posts nothing. It needs the auto-join
+      manifest's channels:join scope (docs/SAAS.md, Choose your manifest).
+      Set here only: Mermera never sets it.
 
 Conditions:
   HasSlackToken: !Not [!Equals [!Ref SlackTokenSecretArn, ""]]
@@ -234,6 +245,7 @@ Resources:
               Value: !If [HasSlackToken, /run/secrets/sds/slack-token, ""]
             - Name: SLACK_AUDIT_TOKEN_FILE
               Value: !If [HasSlackAuditToken, /run/secrets/sds/slack-audit-token, ""]
+            - { Name: SLACK_JOIN_PUBLIC_CHANNELS, Value: !Ref SlackJoinPublicChannels }
           LogConfiguration:
             LogDriver: awslogs
             Options:

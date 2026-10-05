@@ -7,6 +7,25 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Feature
+- **Slack: opt-in auto-join of public channels, and a manifest for each choice**
+  ([#139](https://github.com/txp-labs/sensitive-data-scanner/issues/139)): the
+  new setting `SLACK_JOIN_PUBLIC_CHANNELS` (`off`, the default; set in the
+  deployment only, never by Mermera) joins each public, non-archived channel
+  the bot is not in (`conversations.join`, paced to Slack's Tier 3), then reads
+  it. Never a private, archived or Slack Connect channel, and never one
+  `SLACK_CHANNELS` or the allow and deny rules leave out. Each join is in the
+  run summary (findings schema **1.14**: `joinedByScanner`, with `action:
+  joined_by_scanner`, `channelId`, `joinedAt`) and in `report.html` under
+  *What the scanner changed*. On without the `channels:join` scope, nothing is
+  joined: the channels stay `not_a_member` with `missing_scope:channels:join`
+  and `toggle: SLACK_JOIN_PUBLIC_CHANNELS`, and the run goes on. Off, the
+  scanner never calls `conversations.join`. The Slack app's manifest is now two
+  files side by side, `deploy/saas/slack/slack-manifest-invite-only.yaml` (the
+  read-only manifest, unchanged) and `slack-manifest-auto-join.yaml` (the same
+  plus `channels:join`), with a "Choose your manifest" table in
+  [SAAS.md](docs/SAAS.md#choose-your-manifest). This is the scanner's one
+  write, opt-in: SAAS.md, limitations.md (D6) and THREAT-MODEL.md say so. The
+  four SaaS deploy examples set it `off` (ECS: `SlackJoinPublicChannels`).
 - **Every SaaS deploy example wires the Slack token from your own secret store**
   ([#123](https://github.com/txp-labs/sensitive-data-scanner/issues/123)): the
   ECS template takes optional `SlackTokenSecretArn` and `SlackAuditTokenSecretArn`

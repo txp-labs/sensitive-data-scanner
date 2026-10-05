@@ -5,8 +5,11 @@
 - Every scope-like string in the package, docs/SAAS.md and the deploy examples
   is on those lists too: a scope cannot be added in one place and slip past
   the list.
-- The package sends only GETs to the vendors, except the named token exchanges;
-  no PUT, PATCH or DELETE anywhere; Slack only its read methods.
+- The package sends only GETs to the vendors, except the named token exchanges
+  and the one opt-in write, Slack's `conversations.join` (#139); no PUT, PATCH or
+  DELETE anywhere; Slack only its read methods, and that join.
+- The two Slack manifests (`deploy/saas/slack/`): invite-only reads only, and
+  auto-join is it plus `channels:join` and nothing else; docs/SAAS.md shows both.
 - The deploy examples set no secret in the environment, only settings the
   code reads, and the ECS template's roles hold only the actions named here.
 """
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import re
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +31,9 @@ REPO = SCANNER.parent
 SAAS = SCANNER / "saas" / "src" / "sensitive_data_saas"
 DOCS = REPO / "docs" / "SAAS.md"
 DEPLOY = REPO / "deploy" / "saas"
+MANIFESTS = DEPLOY / "slack"
+INVITE_ONLY = MANIFESTS / "slack-manifest-invite-only.yaml"
+AUTO_JOIN = MANIFESTS / "slack-manifest-auto-join.yaml"
 
 # The read-only scopes each vendor may be asked for. Adding one here is the review.
 ALLOWED: dict[str, frozenset[str]] = {
@@ -108,10 +115,17 @@ NAMED_EXCEPTIONS = {
         "change (docs/SAAS.md)"
     ),
 }
-# Scopes named only to say the scanner never holds them: `channels:join` (it never joins a
-# Slack channel), and `Sites.FullControl.All`, which the docs name as what the *admin's own*
-# tool holds for the one-time `Sites.Selected` grant. Never requested, never in a manifest.
-NAMED_NEVER = frozenset({"channels:join", "Sites.FullControl.All"})
+# Scopes named only to say the scanner never holds them: `Sites.FullControl.All`, which the
+# docs name as what the *admin's own* tool holds for the one-time `Sites.Selected` grant.
+# Never requested, never in a manifest.
+NAMED_NEVER = frozenset({"Sites.FullControl.All"})
+# Scopes that write, each behind an opt-in setting, never requested (scopes.OPT_IN_WRITES).
+OPT_IN_WRITES = {
+    "channels:join": (
+        "SLACK_JOIN_PUBLIC_CHANNELS (#139): join the public channels the bot is not in; only "
+        "in the auto-join manifest, off by default, never set by Mermera"
+    ),
+}
 # The only POSTs: the token exchanges, by function.
 TOKEN_POSTS = {
     ("entra.py", "token"),
@@ -120,6 +134,8 @@ TOKEN_POSTS = {
     ("google.py", "token"),
     ("atlassian.py", "header"),
 }
+# The one other POST: Slack's opt-in join (#139), in the client's `join` only.
+JOIN_POSTS = {("slack.py", "join")}
 SLACK_METHODS = frozenset(
     {
         "auth.test",
@@ -146,6 +162,10 @@ SECRET_ENVS = frozenset(
 def test_every_requested_scope_reads() -> None:
     assert set(scopes.REQUESTED) == set(ALLOWED)
     assert not NAMED_NEVER & set().union(*scopes.REQUESTED.values())
+    # The opt-in writes are never requested, and are exactly the ones named here.
+    assert scopes.OPT_IN_WRITES == {"slack": ("channels:join",)}
+    assert set().union(*map(set, scopes.OPT_IN_WRITES.values())) == set(OPT_IN_WRITES)
+    assert not set(OPT_IN_WRITES) & set().union(*scopes.REQUESTED.values())
     for vendor, requested in scopes.REQUESTED.items():
         for scope in requested:
             assert scope in ALLOWED[vendor], (vendor, scope)
@@ -166,6 +186,7 @@ def _texts() -> dict[str, str]:
     out = {p.name: p.read_text() for p in sorted(SAAS.rglob("*.py"))}
     out["SAAS.md"] = DOCS.read_text()
     out.update({f"deploy/{p.name}": p.read_text() for p in sorted(DEPLOY.glob("*.yaml"))})
+    out.update({f"deploy/slack/{p.name}": p.read_text() for p in sorted(MANIFESTS.glob("*"))})
     return out
 
 
@@ -181,19 +202,54 @@ def test_every_scope_mentioned_anywhere_is_on_the_list() -> None:
                 ):
                     continue
                 found += 1
-                if scope in NAMED_NEVER:
+                if scope in NAMED_NEVER or scope in OPT_IN_WRITES:
                     continue
                 assert scope in every or scope.rstrip(".") in every, f"{name}: {scope}"
     assert found > 20
 
 
-def test_the_slack_manifest_holds_only_read_scopes() -> None:
-    text = DOCS.read_text()
-    manifest = re.search(r"```yaml\n(display_information:.*?)```", text, re.S)
-    assert manifest
-    doc = yaml.safe_load(manifest[1])
-    bot = doc["oauth_config"]["scopes"]["bot"]
+def _bot_scopes(path: Path) -> list[str]:
+    doc = yaml.safe_load(path.read_text())
+    bot: list[str] = doc["oauth_config"]["scopes"]["bot"]
+    return bot
+
+
+def test_the_invite_only_manifest_holds_only_read_scopes() -> None:
+    bot = _bot_scopes(INVITE_ONLY)
     assert set(bot) <= ALLOWED["slack"] and "channels:join" not in bot
+    assert set(bot) == set(scopes.SLACK_CHANNELS) | set(scopes.SLACK_FILES)
+
+
+def test_the_two_manifests_differ_by_channels_join_only() -> None:
+    """#139: auto-join is invite-only plus `channels:join`, and nothing else: the same
+    document but for that one scope, and the same text but for that one line."""
+    invite, auto = (yaml.safe_load(p.read_text()) for p in (INVITE_ONLY, AUTO_JOIN))
+    assert _bot_scopes(AUTO_JOIN) == [*_bot_scopes(INVITE_ONLY), "channels:join"]
+    auto["oauth_config"]["scopes"]["bot"].remove("channels:join")
+    assert auto == invite
+    a, b = INVITE_ONLY.read_text().splitlines(), AUTO_JOIN.read_text().splitlines()
+    extra = [line for line in b if line not in a]
+    assert extra == ["      - channels:join"] and [x for x in b if x != extra[0]] == a
+    assert sorted(p.name for p in MANIFESTS.iterdir()) == [AUTO_JOIN.name, INVITE_ONLY.name]
+
+
+def test_saas_md_shows_both_manifests_word_for_word() -> None:
+    text = DOCS.read_text()
+    blocks = [
+        textwrap.dedent(m[1])
+        for m in re.finditer(
+            r"```yaml\n((?:[ ]*display_information:.*?\n)(?:.*?\n)*?)[ ]*```", text
+        )
+    ]
+    assert blocks == [INVITE_ONLY.read_text(), AUTO_JOIN.read_text()]
+    # The table names both files, and the setting.
+    table = text[text.index("### Choose your manifest") :]
+    for needle in (
+        "deploy/saas/slack/slack-manifest-invite-only.yaml",
+        "deploy/saas/slack/slack-manifest-auto-join.yaml",
+        "SLACK_JOIN_PUBLIC_CHANNELS",
+    ):
+        assert needle in table, needle
 
 
 def _calls() -> list[tuple[str, str, ast.Call]]:
@@ -220,7 +276,7 @@ def test_only_gets_go_to_the_vendors_but_the_token_exchanges() -> None:
                 assert method in ("GET", "POST"), f"{file}:{fn} {method}"
                 if method == "POST":
                     posts.add((file, fn))
-    assert posts == TOKEN_POSTS
+    assert posts == TOKEN_POSTS | JOIN_POSTS
     for path in sorted(SAAS.rglob("*.py")):
         text = path.read_text()
         for verb in ('"PUT"', '"PATCH"', '"DELETE"'):
@@ -238,6 +294,18 @@ def test_slack_is_asked_only_its_read_methods() -> None:
             if isinstance(first, ast.Constant):
                 names.add(first.value)
     assert names and names <= SLACK_METHODS, names - SLACK_METHODS
+
+
+def test_the_one_slack_write_is_the_opt_in_join() -> None:
+    """#139: `conversations.join` is named only in the client's `join`; the only call of it
+    is the adapter's `Joiner.join`, and a `Joiner` is made only with the setting on."""
+    named = [(file, fn) for file, fn, call in _calls() if "conversations.join" in ast.unparse(call)]
+    assert named == [("slack.py", "join")], named
+    joins = [(file, fn) for file, fn, call in _calls() if ast.unparse(call.func) == "self.api.join"]
+    assert joins == [("slack.py", "join")], joins
+    source = (SAAS / "sources" / "slack.py").read_text()
+    made = [line.strip() for line in source.splitlines() if "Joiner(ctx)" in line]
+    assert made == ["joiner = Joiner(ctx) if sl.join_public and bot else None"], made
 
 
 def _read_names() -> str:

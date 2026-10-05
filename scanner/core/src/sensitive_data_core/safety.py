@@ -81,6 +81,10 @@ EVENTS: Final = frozenset(
         # The standalone report (#117): report.html and findings.csv beside the findings
         # document could not be written (by error name); the findings document was.
         "report.failed",
+        # The opt-in Slack join (#139, SLACK_JOIN_PUBLIC_CHANNELS): a channel joined (by
+        # kind only; the store's joinedByScanner names it), or the app lacks channels:join.
+        "slack.joined",
+        "slack.join_scope_missing",
     }
 )
 

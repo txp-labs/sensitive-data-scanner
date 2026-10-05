@@ -646,6 +646,37 @@ def _not_read(doc: Mapping[str, Any]) -> str:
     )
 
 
+def _changed(doc: Mapping[str, Any]) -> str:
+    """(1.14, #139) What the scanner changed in the tenant: the Slack channels it joined.
+    Nothing at all when it changed nothing, the one case before 1.14."""
+    rows = []
+    for s in _stores(doc):
+        joined = s.get("joinedByScanner")
+        if not isinstance(joined, dict):
+            continue
+        rows.append(
+            [
+                _loc(esc(s.get("name"))),
+                _code(joined.get("channelId")),
+                esc(joined.get("action")),
+                esc(joined.get("joinedAt")),
+            ]
+        )
+    if not rows:
+        return ""
+    return (
+        '<h2 id="changed">What the scanner changed</h2>'
+        "<p>With <code>SLACK_JOIN_PUBLIC_CHANNELS</code> on, the scanner joined these public "
+        "Slack channels before reading them. It posted nothing; Slack shows each join to "
+        "the channel's members and records it in its audit logs.</p>"
+        + _table(
+            "Slack channels joined by the scanner",
+            [("Channel", False), ("Channel id", False), ("Change", False), ("When", False)],
+            rows,
+        )
+    )
+
+
 def _by_type(doc: Mapping[str, Any]) -> str:
     findings = list(doc.get("findings") or [])
     totals = doc.get("totals") or {}
@@ -914,6 +945,7 @@ def report_html(doc: Mapping[str, Any], *, cta: bool = True) -> str:
         f'(<a href="{REPO_URL}/blob/main/docs/limitations.md">every setting and its '
         "default</a>).</p>"
         f"{_not_read(doc)}"
+        f"{_changed(doc)}"
         '<h2 id="by-type">Findings by data type</h2>'
         f"{_by_type(doc)}"
         '<h2 id="by-store">Findings by store</h2>'

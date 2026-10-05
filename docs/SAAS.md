@@ -18,9 +18,15 @@ coverage summary as the cloud scanners (the cloud-neutral core,
 `scanner/core`), in its own package (`scanner/saas`, `sensitive_data_saas`)
 and its own image (`docker build --target saas`).
 
-- **Read-only grants.** Each vendor's app holds only permissions that read.
-  The scanner has no call that writes: nothing is marked read, moved, shared,
-  labeled or changed.
+- **Read-only grants, with one opt-in exception.** Each vendor's app holds
+  only permissions that read, and the scanner makes no call that writes:
+  nothing is marked read, moved, shared, labeled or changed. **The one
+  exception is opt-in and off by default**: with `SLACK_JOIN_PUBLIC_CHANNELS`
+  on and the Slack app installed from the auto-join manifest (`channels:join`),
+  the scanner joins the public Slack channels its bot is not in, so it can
+  read them ([Choose your manifest](#choose-your-manifest)). It posts nothing,
+  and every join is in the run summary (`joinedByScanner`). Nothing else
+  writes.
 - **No vendor SDK.** Every vendor is called over HTTPS with `requests`; tokens
   go only to the vendor's own API host.
 - **Secrets stay out of the environment.** A certificate or a workload
@@ -336,38 +342,124 @@ read (counted by kind).
 
 ## Slack
 
+### Choose your manifest
+
+A bot reads only the channels it is a member of. Pick how it gets into them
+**before you create the app**; you can switch later.
+
+| | Invite-only (default) | Auto-join public channels |
+|---|---|---|
+| Manifest file | [`deploy/saas/slack/slack-manifest-invite-only.yaml`](../deploy/saas/slack/slack-manifest-invite-only.yaml) | [`deploy/saas/slack/slack-manifest-auto-join.yaml`](../deploy/saas/slack/slack-manifest-auto-join.yaml) |
+| Scopes | `channels:read`, `groups:read`, `channels:history`, `groups:history`, `files:read` (read only) | The same five, plus `channels:join`. Nothing else |
+| What the bot can change | Nothing | It joins public channels; it posts nothing |
+| Private channels | Read only once you `/invite` the bot | The same: still need `/invite` (a bot cannot join a private channel) |
+| Setting | `SLACK_JOIN_PUBLIC_CHANNELS` unset or `off` (the default) | `SLACK_JOIN_PUBLIC_CHANNELS=on`, in your deployment (Mermera never sets it) |
+| Who should choose it | Everyone to start, and anyone who wants to decide channel by channel what the scanner reads | A workspace that wants every public channel covered without inviting the bot to each, and is fine with the bot appearing in each one |
+
+**Joining is visible.** Slack shows each join to the channel's members as a
+join message ("Sensitive data scanner joined #channel"), the bot is listed among the
+channel's members, and Slack records the join in its audit logs. The scanner
+posts nothing else, and never leaves a channel it joined.
+
+**What auto-join never does**: join a private channel, an archived channel or
+a Slack Connect channel (one shared with another organization, or pending such
+a share), or a channel that `SLACK_CHANNELS` or the `DISCOVER_ALLOW` /
+`DISCOVER_DENY` rules leave out. Those stay `not_a_member` until you invite
+the bot. Joins are paced to Slack's rate tier for `conversations.join`
+(Tier 3); a channel the run had no time to join is joined on the next.
+
+**What the run summary says.** A channel joined this run is read this run, and
+its store carries `joinedByScanner`: `action: joined_by_scanner`, the
+channel id and `joinedAt` ([FINDINGS.md](FINDINGS.md)); `report.html` lists
+them under *What the scanner changed*. With the setting on and an app that
+lacks `channels:join` (the invite-only manifest), nothing is joined: each
+public channel the bot is not in stays `not_a_member`, with the error
+`missing_scope:channels:join` and `toggle: SLACK_JOIN_PUBLIC_CHANNELS`, and the
+run goes on, invite-only. With the setting off, the scanner never calls
+`conversations.join`.
+
+#### Invite-only: set up
+
+1. **Your apps > Create New App > From an app manifest**, pick the workspace,
+   and paste the invite-only manifest:
+
+   ```yaml
+   display_information:
+     name: Sensitive data scanner
+   features:
+     bot_user:
+       display_name: Sensitive data scanner
+   oauth_config:
+     scopes:
+       bot:
+         - channels:read
+         - groups:read
+         - channels:history
+         - groups:history
+         - files:read
+   settings:
+     org_deploy_enabled: false
+     socket_mode_enabled: false
+   ```
+
+2. **Install to Workspace**, and copy the **Bot User OAuth Token** (`xoxb-…`)
+   into your own secret store ([the token](#the-slack-token-in-each-example)).
+3. In each channel to scan, public or private: `/invite @Sensitive data scanner`.
+4. Leave `SLACK_JOIN_PUBLIC_CHANNELS` unset (or `off`).
+
+#### Auto-join public channels: set up
+
+1. **Your apps > Create New App > From an app manifest**, pick the workspace,
+   and paste the auto-join manifest (the invite-only one plus `channels:join`):
+
+   ```yaml
+   display_information:
+     name: Sensitive data scanner
+   features:
+     bot_user:
+       display_name: Sensitive data scanner
+   oauth_config:
+     scopes:
+       bot:
+         - channels:read
+         - groups:read
+         - channels:history
+         - groups:history
+         - files:read
+         - channels:join
+   settings:
+     org_deploy_enabled: false
+     socket_mode_enabled: false
+   ```
+
+2. **Install to Workspace**, and copy the **Bot User OAuth Token** into your
+   own secret store, as above.
+3. Set `SLACK_JOIN_PUBLIC_CHANNELS=on` in the scanner's deployment (the ECS
+   parameter `SlackJoinPublicChannels`; the other examples' environment).
+4. Private channels: still `/invite @Sensitive data scanner` in each one to scan.
+
+#### Switching later
+
+- **Invite-only to auto-join**: in the app's settings, **OAuth & Permissions
+  > Scopes > Bot Token Scopes**, add `channels:join` (or replace the manifest
+  under **App Manifest** with the auto-join one), then **reinstall the app**
+  to the workspace: Slack applies a new scope only on reinstall. The token
+  normally stays the same; if Slack issues a new one, update your secret.
+  Then set `SLACK_JOIN_PUBLIC_CHANNELS=on`.
+- **Auto-join to invite-only**: set `SLACK_JOIN_PUBLIC_CHANNELS=off` first
+  (that alone stops every join), then remove `channels:join` and reinstall.
+  The bot stays in the channels it joined, and keeps reading them; remove it
+  from a channel (`/remove @Sensitive data scanner`) to stop that.
+
+### Consent: a Slack app of your own
+
 | Kind (`DISCOVER`) | Store | Read with (the app's scopes) | Default |
 |---|---|---|---|
-| `slack_channel` (`slack`) | A public or private channel | `channels:read`, `groups:read` (to list), `channels:history`, `groups:history`, `files:read` | read, in the channels the app's bot is a member of |
+| `slack_channel` (`slack`) | A public or private channel | `channels:read`, `groups:read` (to list), `channels:history`, `groups:history`, `files:read` | read, in the channels the app's bot is a member of (with auto-join, also the public channels it joins) |
 | `slack_dm` (`dms`) | Direct and group messages, one store per organization | `discovery:read` (the Discovery API, Enterprise Grid only) | **off**: name it in `DISCOVER` |
 
-### Consent: a Slack app of your own, read scopes only
-
-Create an app from this manifest (**Your apps > Create New App > From an app
-manifest**), install it to the workspace, and invite its bot to the channels
-to scan (`/invite @Sensitive data scanner`). The scanner never joins a channel
-itself: `channels:join` would be a write, and is not in the manifest.
-
-```yaml
-display_information:
-  name: Sensitive data scanner
-features:
-  bot_user:
-    display_name: Sensitive data scanner
-oauth_config:
-  scopes:
-    bot:
-      - channels:read
-      - groups:read
-      - channels:history
-      - groups:history
-      - files:read
-settings:
-  org_deploy_enabled: false
-  socket_mode_enabled: false
-```
-
-Put the bot token (`xoxb-…`) in a file on a mounted secret volume and set
+The app is yours, in your workspace, created from one of the two manifests
+above. Put the bot token (`xoxb-…`) in a file on a mounted secret volume and set
 `SLACK_TOKEN_FILE`. `SLACK_TOKEN` or `SLACK_BOT_TOKEN` in the environment is
 refused. The token stays in your environment: it lives in your own secret
 store and reaches the container only as that file. Every deploy example wires
@@ -586,6 +678,7 @@ by its id.
 | `SLACK_TOKEN_FILE` | | The Slack app's token, in a file; set to scan Slack |
 | `SLACK_CHANNELS` | every channel the token lists | Channel ids to read |
 | `SLACK_EKM_KEY_ID` | | Your Slack EKM key's id |
+| `SLACK_JOIN_PUBLIC_CHANNELS` | off | (#139) On, with the auto-join manifest's `channels:join`: join each public channel the bot is not in, then read it ([Choose your manifest](#choose-your-manifest)). **The one setting that writes.** The deployment only: Mermera never sets it |
 | `ATLASSIAN_SITE` | | Your Cloud site (`acme.atlassian.net`); set to scan Jira and Confluence |
 | `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN_FILE` | | A read-only account's address and API token (file) |
 | `ATLASSIAN_AUTH_MODE` | `token` | (#105) `token` (the API token, recommended) or `oauth` (3LO); the other mode's settings are refused (`atlassian_auth_mode`) |
@@ -649,7 +742,8 @@ A strict test (`scanner/tests/test_saas_scopes.py`) holds the package, these
 docs and the examples to read-only grants: every permission or scope the
 scanner requests, or that any of them names, is on its vendor's list of scopes
 that only read (below); the package sends only GETs to the vendors except the
-named token exchanges, and Slack only its read methods; the examples set no
+named token exchanges, and Slack only its read methods (and, behind
+`SLACK_JOIN_PUBLIC_CHANNELS`, the one `conversations.join` POST); the examples set no
 secret in the environment and only settings the code reads; and the ECS
 template's roles hold only their own actions.
 
@@ -660,6 +754,10 @@ template's roles hold only their own actions.
 | Microsoft 365 (Graph, application) | `User.Read.All`, `GroupMember.Read.All`, `Mail.Read` (scoped by Exchange), `Files.Read.All`, `Sites.Selected`, `Sites.Read.All`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read.All`; `SecurityAlert.Read.All` (Purview DLP's alerts, `vendor` or `both` only) |
 | Google Workspace (domain-wide delegation) | `https://www.googleapis.com/auth/gmail.readonly`, `https://www.googleapis.com/auth/drive.readonly`, `https://www.googleapis.com/auth/admin.directory.user.readonly`, `https://www.googleapis.com/auth/admin.directory.group.member.readonly`; and the keyless signer's own token, `https://www.googleapis.com/auth/iam` (IAM Credentials' `signJwt` only); `https://www.googleapis.com/auth/apps.alerts` (the Alert Center, `vendor` or `both` only; held to View by the administrator's role) |
 | Slack (the app's bot) | `channels:read`, `groups:read`, `channels:history`, `groups:history`, `files:read`; `discovery:read` (Enterprise Grid, opt-in); `auditlogs:read` (an org token, `vendor` or `both` only) |
+
+**The one scope that writes**, never requested by default: Slack's
+`channels:join`, only in the auto-join manifest and used only with
+`SLACK_JOIN_PUBLIC_CHANNELS` on ([Choose your manifest](#choose-your-manifest)).
 | Atlassian (OAuth 2.0 3LO) | `read:jira-work`, `read:confluence-content.all`, `read:confluence-space.summary`, `readonly:content.attachment:confluence`, `offline_access`; or an API token of an account with *Browse projects* and *View* only |
 
 ## Running it

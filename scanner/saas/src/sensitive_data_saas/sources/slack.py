@@ -4,7 +4,18 @@
 only: `channels:read` and `groups:read` (to list channels), `channels:history`
 and `groups:history` (messages), `files:read` (files). A bot reads only the
 channels it is a member of: a bot token in a channel it was not invited to is
-`not_a_member` (the scanner never joins one; `channels:join` would be a write).
+`not_a_member`.
+
+**Auto-join, opt-in** (#139): with `SLACK_JOIN_PUBLIC_CHANNELS` on and the app's
+`channels:join` scope (the auto-join manifest), discovery joins each public
+channel the bot is not in, before it is read: never a private channel (a bot
+cannot join one), an archived one, or a Slack Connect channel (shared with
+another organization, or pending), and never one `SLACK_CHANNELS` or the allow
+and deny rules leave out. Each join is recorded on its store
+(`joinedByScanner`: `joined_by_scanner`, the channel id and the time). Without
+the scope, nothing is joined: the channels stay `not_a_member` with the error
+`missing_scope:channels:join` and the setting named in `toggle`. Off (the
+default), the scanner never calls `conversations.join`.
 
 **Channels** (`slack_channel`, one store per channel, `#name` masked):
 `conversations.history` from the newest message down to what the last
@@ -66,6 +77,9 @@ from .base import (
 from .slack_read import VENDOR
 
 _TEAM = "slack.team"
+JOIN_SETTING = "SLACK_JOIN_PUBLIC_CHANNELS"
+JOIN_SCOPE = "channels:join"
+JOINED = "joined_by_scanner"
 NOT_MEMBER = frozenset({"not_in_channel"})
 SLACK_DENIED = frozenset(
     {"missing_scope", "not_allowed_token_type", "invalid_auth", "not_authed", "account_inactive"}
@@ -296,6 +310,64 @@ class _Messages:
         return gap if cov.scanned == 0 else None
 
 
+def joinable(c: dict[str, Any]) -> bool:
+    """A channel the opt-in join may enter: public, not archived, not Slack Connect (#139).
+
+    Private channels (a bot must be invited), archived ones (Slack refuses), direct
+    messages, and channels shared with another organization or pending such a share
+    (`is_ext_shared`, `is_pending_ext_shared`) are never joined: they stay `not_a_member`.
+    """
+    return not any(
+        c.get(k)
+        for k in ("is_private", "is_group", "is_im", "is_mpim", "is_archived", "is_ext_shared")
+    ) and not c.get("is_pending_ext_shared")
+
+
+class Joiner:
+    """The opt-in join (#139): one per discovery, on only with `SLACK_JOIN_PUBLIC_CHANNELS`."""
+
+    def __init__(self, ctx: Context) -> None:
+        self.api: Slack = ctx.clients.slack
+        self.clients = ctx.clients
+        granted = self.api.granted
+        # Slack named the token's scopes (auth.test's header) and channels:join is not one:
+        # nothing is tried. Not named: the first join's `missing_scope` says so.
+        self.missing = granted is not None and JOIN_SCOPE not in granted
+        self.stopped = False  # Slack throttled the joins past the run: the rest wait
+        self.joined = 0
+
+    def join(self, store: Store, channel: str) -> bool:
+        """Join `channel` for `store`. True when the bot is now a member; False leaves the
+        store `not_a_member`, with why in `error` (and the setting in `toggle`)."""
+        if self.missing:
+            store.skip("not_a_member", f"missing_scope:{JOIN_SCOPE}", toggle=JOIN_SETTING)
+            return False
+        if self.stopped:
+            store.skip("not_a_member", "Throttled", toggle=JOIN_SETTING)
+            return False
+        try:
+            self.api.join(channel)
+        except Exception as err:  # Slack's code only, never its message
+            name = error_name(err)
+            if name == "missing_scope":
+                self.missing = True
+                name = f"missing_scope:{JOIN_SCOPE}"
+                log_event("slack.join_scope_missing", setting=JOIN_SETTING)
+            elif name == "Throttled":
+                self.stopped = True
+            store.skip("not_a_member", name, toggle=JOIN_SETTING)
+            return False
+        at = _dt.datetime.fromtimestamp(self.clients.now(), _dt.UTC)
+        store.extra["joinedByScanner"] = {
+            "action": JOINED,
+            "channelId": channel,
+            "joinedAt": at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        }
+        self.joined += 1
+        log_event("slack.joined", kind="slack_channel")
+        return True
+
+
 class ChannelAdapter:
     kind = "slack_channel"
 
@@ -306,6 +378,8 @@ class ChannelAdapter:
         _, tenant = team_of(ctx)
         bot = sl.token.reveal().startswith("xoxb-")
         wanted = set(sl.channels)
+        # #139: off (the default), there is no joiner and nothing below calls a join.
+        joiner = Joiner(ctx) if sl.join_public and bot else None
         for page, _, _ in ctx.clients.slack.pages(
             "conversations.list",
             "channels",
@@ -326,9 +400,15 @@ class ChannelAdapter:
                 store.table = Channel(cid, name)
                 out.stores.append(store)
                 if bot and not c.get("is_member"):
-                    store.skip("not_a_member")
-                    continue
-                if not apply_rules(store, ctx.settings.allow, ctx.settings.deny):
+                    if joiner is None or not joinable(c):
+                        store.skip("not_a_member")
+                        continue
+                    # The rules first: a channel they leave out is never joined.
+                    if not apply_rules(store, ctx.settings.allow, ctx.settings.deny):
+                        continue
+                    if not joiner.join(store, cid):
+                        continue
+                elif not apply_rules(store, ctx.settings.allow, ctx.settings.deny):
                     continue
                 pct, _ = ctx.settings.sampling_for(self.kind, store.name, None)
                 store.sample_percent = pct if pct is not None else ctx.settings.sample_percent

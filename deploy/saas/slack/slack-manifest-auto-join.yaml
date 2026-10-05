@@ -1,0 +1,17 @@
+display_information:
+  name: Sensitive data scanner
+features:
+  bot_user:
+    display_name: Sensitive data scanner
+oauth_config:
+  scopes:
+    bot:
+      - channels:read
+      - groups:read
+      - channels:history
+      - groups:history
+      - files:read
+      - channels:join
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false

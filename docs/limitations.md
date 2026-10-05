@@ -1,7 +1,10 @@
 # Intentional limitations, and the setting for each
 
 The scanner reads with read-only access and never writes to a customer's
-stores. Some data cannot be read that way, costs money to read, or needs a
+stores, with **one opt-in exception**: with `SLACK_JOIN_PUBLIC_CHANNELS` on and
+the Slack app's `channels:join` scope, it joins the public Slack channels its
+bot was not invited to (D6). It posts nothing, and every join is in the run
+summary. Some data cannot be read that way, costs money to read, or needs a
 grant we judge most customers should not give by default. Each of those is a
 **deliberate limitation**. This page lists every one, on every platform
 ([#105](https://github.com/txp-labs/sensitive-data-scanner/issues/105)):
@@ -76,6 +79,7 @@ Azure Files (C6) is listed under Azure above.
 | D3 | Mail is read only once the scanner proves the mail grant is scoped: a mailbox outside the scope (`M365_MAIL_SCOPE_CHECK`) must be refused. The app holds no `Application.Read.All` | `M365_MAIL` (the scope check is always on) | on (read per the grant) | Off: each mailbox `skipped`, `read_not_configured`, `toggle: M365_MAIL`. Without a proved scope: `scope_unverified` or `unscoped_grant` |
 | D4 | Atlassian: an API token of a read-only service account is recommended; OAuth 2.0 (3LO) rotates its refresh token, so its token file must be writable | `ATLASSIAN_AUTH_MODE`: `token` or `oauth` | `token` | Not a gap: the other mode's settings are refused (`atlassian_auth_mode`), so neither is used by accident |
 | D5 | Customer-managed keys (Microsoft 365 Customer Key, Slack EKM, Atlassian BYOK) cannot be seen through read-only APIs: the customer declares them | `M365_CUSTOMER_KEY_ID`, `SLACK_EKM_KEY_ID`, `ATLASSIAN_BYOK_KEY_ID` | none | Not a gap: findings say `service_managed` unless a key is declared, then `customer_managed_key` with its hash |
+| D6 | Slack public channels the app's bot was not invited to are not read: a bot reads only the channels it is a member of, and joining one is a write (the bot appears in the member list, Slack posts "<bot> joined #channel" and records it in its audit logs). The invite-only manifest has no `channels:join` ([SAAS.md](SAAS.md#choose-your-manifest)) | `SLACK_JOIN_PUBLIC_CHANNELS` (the deployment only: Mermera never sets it), with the auto-join manifest | **off** | `skipped`, `not_a_member`. On, with `channels:join`: joined, read, and recorded on the store as `joinedByScanner`; without it: `not_a_member`, `error: missing_scope:channels:join`, `toggle: SLACK_JOIN_PUBLIC_CHANNELS`, and nothing is joined. Private, archived and Slack Connect channels are never joined: they stay `not_a_member` (invite the bot) |
 | | Opt-in kinds (Teams channels and chats, Slack DMs) | `DISCOVER` | off | `skipped`, `read_not_configured`, `toggle: DISCOVER` (one store per kind, named `*`) |
 
 ## Databases anywhere (the databases container)

@@ -56,6 +56,10 @@ class Clients:
     def __repr__(self) -> str:
         return "Clients()"
 
+    def now(self) -> float:
+        """The wall clock (seconds since the epoch), as the clients keep it."""
+        return self._wall()
+
     @property
     def http(self) -> Http:
         if self._http is None:

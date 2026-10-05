@@ -63,6 +63,8 @@ properties:
           # Slack: /run/secrets/sds/slack-token (and slack-audit-token) once the secrets above are uncommented; empty, off.
           - { name: SLACK_TOKEN_FILE, value: "" }
           - { name: SLACK_AUDIT_TOKEN_FILE, value: "" }
+          # Slack auto-join (#139, docs/SAAS.md > Choose your manifest): off, the default, never joins a channel. on joins every public channel the bot is not in, and needs the auto-join manifest's channels:join. Set here only: Mermera never sets it.
+          - { name: SLACK_JOIN_PUBLIC_CHANNELS, value: "off" }
         volumeMounts:
           - { volumeName: secrets, mountPath: /run/secrets/sds }
           - { volumeName: state, mountPath: /state }

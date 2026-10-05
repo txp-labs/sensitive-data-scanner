@@ -108,6 +108,8 @@ class Http:
         # The run's deadline (the clock's time); a wait past it is `Throttled`.
         self.deadline: float | None = None
         self.throttled = 0
+        # `pace`: when each paced kind of call was last made (the clock's time).
+        self._paced: dict[str, float] = {}
 
     def __repr__(self) -> str:
         return "Http()"
@@ -120,6 +122,18 @@ class Http:
         self.throttled += 1
         log_event("source.throttled", seconds=round(seconds, 1))
         self._sleep(seconds)
+
+    def pace(self, key: str, interval: float) -> None:
+        """At most one `key` call every `interval` seconds (a vendor's per-method rate tier,
+        kept to before it answers 429). A wait past the run's deadline is `Throttled`."""
+        last = self._paced.get(key)
+        now = self._clock()
+        if last is not None and now - last < interval:
+            wait = interval - (now - last)
+            if self.deadline is not None and now + wait >= self.deadline:
+                raise Throttled()
+            self._sleep(wait)
+        self._paced[key] = self._clock()
 
     def call(
         self,
