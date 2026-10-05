@@ -6,6 +6,19 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- **Slack findings link to the message, not just the channel**
+  ([txp-labs/mermera-attestation-app#1395](https://github.com/txp-labs/mermera-attestation-app/issues/1395)):
+  a finding in a Slack message opens that message in Slack's web app, in its
+  thread pane (`https://app.slack.com/client/<team>/<channel>/thread/<channel>-<ts>`);
+  a thread reply opens its thread (`thread_ts`); a file opens the message that
+  shared it (for a rescanned file, its share in the channel from `files.list`);
+  with no ts, the channel, as before. No new scope and no new call. Slack's
+  `archives/<channel>/p<ts>` permalink is not used: its 16-digit run would be
+  masked, and could read as a card number to a leak guard
+  ([SAAS.md](docs/SAAS.md#what-is-read)). The schema's `link` description says so;
+  `schemaVersion` stays 1.13 (the link's pattern is unchanged).
+
 ## 0.6.0 — 2026-10-01
 
 ### Breaking

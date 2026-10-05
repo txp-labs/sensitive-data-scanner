@@ -161,7 +161,14 @@ class SlackOrg:
             for m in c.messages:
                 if float(m["ts"]) >= floor:
                     for f in m.get("files") or []:
-                        seen.setdefault(str(f["id"]), f)
+                        # Like Slack, each file says where it was shared: the channel and
+                        # the message's ts (and its thread's, for a reply).
+                        share = {
+                            "ts": m["ts"],
+                            **({"thread_ts": m["thread_ts"]} if "thread_ts" in m else {}),
+                        }
+                        scope = "private" if c.private else "public"
+                        seen.setdefault(str(f["id"]), {**f, "shares": {scope: {c.id: [share]}}})
             return self._page("files", [seen[k] for k in sorted(seen)], q)
         if name == "discovery.conversations.list":
             if not self.grid:
