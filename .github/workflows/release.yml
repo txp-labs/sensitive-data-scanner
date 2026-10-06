@@ -94,7 +94,7 @@ jobs:
             && uv build --wheel --package sensitive-data-scanner-saas --out-dir ../out)
           mkdir -p sbom-src && (cd sbom-src && unzip -q ../out/*-lambda-*.zip)
       - name: SBOM of the Lambda zip (SPDX)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           path: sbom-src
           format: spdx-json
@@ -140,7 +140,7 @@ jobs:
           sbom: false
           tags: ghcr.io/txp-labs/sensitive-data-scanner:${{ needs.verify.outputs.version }}
       - name: SBOM of the image (SPDX)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ghcr.io/txp-labs/sensitive-data-scanner@${{ steps.push.outputs.digest }}
           format: spdx-json
@@ -201,7 +201,7 @@ jobs:
           sbom: false
           tags: ghcr.io/txp-labs/sensitive-data-scanner-databases:${{ needs.verify.outputs.version }}
       - name: SBOM of the image (SPDX)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ghcr.io/txp-labs/sensitive-data-scanner-databases@${{ steps.push.outputs.digest }}
           format: spdx-json
@@ -262,7 +262,7 @@ jobs:
           sbom: false
           tags: ghcr.io/txp-labs/sensitive-data-scanner-azure:${{ needs.verify.outputs.version }}
       - name: SBOM of the image (SPDX)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ghcr.io/txp-labs/sensitive-data-scanner-azure@${{ steps.push.outputs.digest }}
           format: spdx-json
@@ -324,7 +324,7 @@ jobs:
           sbom: false
           tags: ghcr.io/txp-labs/sensitive-data-scanner-gcp:${{ needs.verify.outputs.version }}
       - name: SBOM of the image (SPDX)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ghcr.io/txp-labs/sensitive-data-scanner-gcp@${{ steps.push.outputs.digest }}
           format: spdx-json
@@ -385,7 +385,7 @@ jobs:
           sbom: false
           tags: ghcr.io/txp-labs/sensitive-data-scanner-saas:${{ needs.verify.outputs.version }}
       - name: SBOM of the image (SPDX)
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ghcr.io/txp-labs/sensitive-data-scanner-saas@${{ steps.push.outputs.digest }}
           format: spdx-json
