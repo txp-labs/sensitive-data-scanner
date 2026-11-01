@@ -1,6 +1,6 @@
 """The findings contract: what the scanner writes, and nothing else.
 
-A findings document (schema `sensitive-data-scanner.findings`, version 1.14,
+A findings document (schema `sensitive-data-scanner.findings`, version 1.15,
 JSON Schema in schema/findings.schema.json) says, for one run in one account
 and region, which locations hold which classes of sensitive data, how many,
 how confident, where in the item, and how much was scanned. It never holds
@@ -23,10 +23,11 @@ from typing import Any
 from . import __version__
 from .engine.spec import SPEC_VERSION
 from .safety import redact_digits
+from .scope import health_data_declared, scope_hints
 from .storage_classes import ClassInventory
 
 FINDINGS_SCHEMA = "sensitive-data-scanner.findings"
-FINDINGS_SCHEMA_VERSION = "1.14"
+FINDINGS_SCHEMA_VERSION = "1.15"
 EVENT_SOURCE = "sensitive-data-scanner"
 EVENT_DETAIL_TYPE = "Findings v1"
 
@@ -377,6 +378,7 @@ def findings_document(
     scan_mode: Mapping[str, str] | None = None,
     vendor_coverage: list[dict[str, Any]] | None = None,
     settings: Mapping[str, Any] | None = None,
+    health_data: bool | None = None,
 ) -> dict[str, Any]:
     """The findings document. An AWS run names its account and region; a run of another
     platform (1.4: `platform`, such as `database`) names the `site` it runs in instead.
@@ -387,7 +389,12 @@ def findings_document(
 
     (1.13, #109) `settings` is the run's settings report (`runner_config.Report.as_json`):
     `settingsSource`, each Mermera-settable setting's effective value and where it came
-    from, and `configPull`, how the pull of Mermera's settings went."""
+    from, and `configPull`, how the pull of Mermera's settings went.
+
+    (1.15) `scopeHints`: the rules and laws the findings may bring into scope, from every
+    finding, kept or not (`scope.scope_hints`). `health_data` is whether the deployment
+    holds health information; None reads `HEALTH_DATA` from the environment, the same for
+    every runner."""
     for f in findings:
         f.setdefault("source", "scanner")
     ranked = sorted(findings, key=lambda f: (-_CONF_RANK[f["severity"]], -f["count"], f["id"]))
@@ -419,6 +426,10 @@ def findings_document(
         "findingsTotal": len(findings),
         "findingsTruncated": len(findings) > len(kept),
         "totals": dict(sorted(totals.items())),
+        "scopeHints": scope_hints(
+            findings,
+            health_data=health_data_declared() if health_data is None else health_data,
+        ),
     }
     if discovery is not None:
         doc["discovery"] = discovery

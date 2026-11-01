@@ -33,7 +33,8 @@ leave it**: where, what kind, how many and how sure. Never a value.
 Deploy it into one AWS account and region with one click, run it once, and
 open `report.html`: what was scanned and what was not (and why), and where
 card numbers, Social Security numbers and other sensitive data are, by store
-and location. Never a value.
+and location, and what the findings may mean: the rules and laws, such as
+PCI DSS, they may bring into scope. Never a value.
 [docs/QUICKSTART.md](docs/QUICKSTART.md) has every step, including the run
 and the cleanup.
 
@@ -116,6 +117,13 @@ The findings contract is a versioned JSON Schema
 ([docs/FINDINGS.md](docs/FINDINGS.md)). Each finding names the store and
 item, the class, count, confidence and offsets, the storage encryption the
 data sat under, and for card data a PCI DSS note for your assessor.
+
+**What the findings may mean.** Each run also says which rules and laws its
+findings may bring into scope, and what leaving the data in place may mean:
+card numbers suggest PCI DSS, Social Security numbers US breach-notification
+laws, and, when you set `HEALTH_DATA` on because the account holds health
+information, HIPAA. A hint for your assessor or counsel, never a verdict
+([docs/FINDINGS.md](docs/FINDINGS.md#what-the-findings-may-mean-115)).
 
 ## The scanner, your vendor's tool, or both
 

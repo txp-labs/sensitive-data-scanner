@@ -125,6 +125,8 @@ def test_the_templates_default_to_this_release_and_its_signing() -> None:
 def test_the_report_settings_reach_the_function() -> None:
     env = SCANNER["Resources"]["Function"]["Properties"]["Environment"]["Variables"]
     assert env["REPORT_CTA"] == {"Ref": "ReportCta"}
+    assert env["HEALTH_DATA"] == {"Ref": "HealthData"}
+    assert SCANNER["Parameters"]["HealthData"]["Default"] == "off"
     assert env["MAX_BYTES_PER_RUN"] == {"Ref": "MaxBytesPerRun"}
     # Empty: the scanner decides (on, unless connected to Mermera); true and false override.
     assert SCANNER["Parameters"]["ReportCta"]["Default"] == ""

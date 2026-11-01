@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/txp-labs/sensitive-data-scanner/schema/findings.schema.json",
-  "title": "Sensitive-data scanner findings, version 1.14",
+  "title": "Sensitive-data scanner findings, version 1.15",
   "description": "What one scan found in one account and region, or (1.4) in one site of the databases runner, or (1.6) in the Azure subscriptions of one site, or (1.7) in the Google Cloud projects of one site, or (1.8) in the SaaS tenants of one site: locations, classes, counts, confidence, offsets and coverage. Never a value. The same object is the detail of a 'Findings v1' EventBridge event, with 'part' and 'parts' added.",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schema": { "const": "sensitive-data-scanner.findings" },
-    "schemaVersion": { "const": "1.14" },
+    "schemaVersion": { "const": "1.15" },
     "scannerVersion": { "type": "string", "maxLength": 32 },
     "specVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
@@ -48,6 +48,33 @@
       "additionalProperties": { "type": "integer", "minimum": 0 }
     },
     "discovery": { "$ref": "#/$defs/discovery" },
+    "scopeHints": {
+      "description": "(1.15) The rules and laws the findings may bring into scope, and what leaving the data in place may mean: guidance for the people who decide (an assessor, counsel), never a verdict. From the classes found, every finding counted whether or not the document kept it. healthData: the deployment said it holds health information (HEALTH_DATA on); only then is HIPAA suggested, since the scanner detects no health information. Each hint: framework (pci_dss, us_breach_notification, hipaa), its name, the classes found that raise it, how many locations hold them and how many of those are not encrypted at rest (atRestEncryption none), and three sentences: mayApply, ifLeft and decidedBy. The sentences are the scanner's own constants and never hold a value, a name or a location (docs/FINDINGS.md).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["healthData", "hints"],
+      "properties": {
+        "healthData": { "type": "boolean" },
+        "hints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["framework", "name", "classes", "locations", "unencryptedLocations", "mayApply", "ifLeft", "decidedBy"],
+            "properties": {
+              "framework": { "enum": ["pci_dss", "us_breach_notification", "hipaa"] },
+              "name": { "type": "string", "maxLength": 80 },
+              "classes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/class" } },
+              "locations": { "type": "integer", "minimum": 1 },
+              "unencryptedLocations": { "type": "integer", "minimum": 0 },
+              "mayApply": { "type": "string", "maxLength": 1000 },
+              "ifLeft": { "type": "string", "maxLength": 1000 },
+              "decidedBy": { "type": "string", "maxLength": 1000 }
+            }
+          }
+        }
+      }
+    },
     "scanMode": {
       "description": "The mode each platform ran in (1.8, #55): scanner (this scanner reads), vendor (the vendor's own detection, imported), or both.",
       "type": "object",

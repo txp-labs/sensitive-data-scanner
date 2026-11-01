@@ -1,6 +1,6 @@
 {
   "schema": "sensitive-data-scanner.findings",
-  "schemaVersion": "1.14",
+  "schemaVersion": "1.15",
   "scannerVersion": "0.5.0",
   "specVersion": "0.7",
   "runId": "20260929T060000Z-1a2b3c4d",
@@ -360,6 +360,37 @@
     "dob": 120,
     "us_ssn": 4,
     "us_ssn_last4": 2
+  },
+  "scopeHints": {
+    "healthData": false,
+    "hints": [
+      {
+        "framework": "pci_dss",
+        "name": "PCI DSS",
+        "classes": [
+          "card"
+        ],
+        "locations": 2,
+        "unencryptedLocations": 0,
+        "mayApply": "Payment card data was found. PCI DSS may apply to the systems that store it, to the systems that wrote it there, such as a contact center or an application, and to the systems connected to them.",
+        "ifLeft": "Left in place, every system and person that can read these locations may count as part of your cardholder data environment, which widens what an assessment covers. Removing the data, or masking it where it is written, can keep them out.",
+        "decidedBy": "Your Qualified Security Assessor (QSA) or acquiring bank decides whether PCI DSS applies, and to which systems."
+      },
+      {
+        "framework": "us_breach_notification",
+        "name": "US breach-notification laws",
+        "classes": [
+          "us_ssn",
+          "account_number",
+          "card"
+        ],
+        "locations": 5,
+        "unencryptedLocations": 0,
+        "mayApply": "Social Security numbers, ITINs, account numbers or card numbers were found. US state breach-notification laws generally treat a Social Security number or ITIN kept with a person's name as personal information, and an account or card number too when it is kept with the code or password that opens the account. If they were exposed, you may have to notify the people affected and, in some states, regulators. If your business is a financial institution under the Gramm-Leach-Bliley Act, which includes lenders and tax preparers, the FTC Safeguards Rule may also apply.",
+        "ifLeft": "Left in place, each copy is one more place an exposure could start, and one more place to search and report on if one happens. Many of these laws ease the duty to notify when the exposed data was encrypted and the key was not exposed with it.",
+        "decidedBy": "Your legal counsel decides which laws apply. It depends on where the people affected live, not only on where your business is."
+      }
+    ]
   },
   "discovery": {
     "stores": [
