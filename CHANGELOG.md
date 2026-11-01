@@ -6,6 +6,8 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-01
+
 ### Feature
 - **What the findings may mean**
   ([#145](https://github.com/txp-labs/sensitive-data-scanner/issues/145)): each run says which rules and laws its
