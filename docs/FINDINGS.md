@@ -1,4 +1,4 @@
-# Findings, schema version 1.14
+# Findings, schema version 1.15
 
 The scanner reports **findings only**: which locations hold which classes of
 sensitive data, how many, how confident, where in the item, and how much it
@@ -8,7 +8,7 @@ value shows up in findings, events, logs, exception messages or object reprs.
 
 - JSON Schema: [`schema/findings.schema.json`](../schema/findings.schema.json)
   (it also ships inside the Python package).
-- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.14"`.
+- `schema`: `"sensitive-data-scanner.findings"`, `schemaVersion`: `"1.15"`.
 - Version 1.1 (scanner 0.2.0) adds the DynamoDB source: the `dynamodb_item`
   resource and format, and the `dynamodb` coverage kind. Nothing in 1.0 changed,
   so a 1.0 consumer that ignores what it does not know keeps working.
@@ -155,6 +155,11 @@ value shows up in findings, events, logs, exception messages or object reprs.
   the app's opt-in `channels:join` scope (`action: joined_by_scanner`,
   `channelId`, `joinedAt`). The one change the scanner makes in a customer's
   tenant, recorded on every run that makes it ([SAAS.md](SAAS.md#slack)).
+  All additive.
+- Version 1.15 adds `scopeHints` on the document: the rules and laws the
+  findings may bring into scope (PCI DSS, US breach-notification laws, and
+  HIPAA when the deployment sets `HEALTH_DATA` on), and what leaving the data
+  in place may mean ([What the findings may mean](#what-the-findings-may-mean-115)).
   All additive.
 
 ## Sources and modes (1.8)
@@ -872,6 +877,50 @@ hash.
 
 A `card` finding under `none` or `unknown` carries no note: its storage
 encryption is not what makes it a question for the assessor.
+
+### What the findings may mean (1.15)
+
+The document says which rules and laws its findings may bring into scope, and
+what leaving the data in place may mean. **A hint, never a verdict, and not
+legal advice:** it comes only from the kinds of data found, never from what
+the business does, and each one names who decides. `report.html` shows the
+same hints right after its summary, under *What these findings may mean*.
+
+```json
+"scopeHints": {
+  "healthData": false,
+  "hints": [
+    {
+      "framework": "pci_dss",
+      "name": "PCI DSS",
+      "classes": ["card", "cvv"],
+      "locations": 3,
+      "unencryptedLocations": 1,
+      "mayApply": "Payment card data was found. PCI DSS may apply to … Card verification codes or PINs were also found. PCI DSS does not allow keeping these after a payment is authorized, even encrypted (requirement 3.3.1).",
+      "ifLeft": "Left in place, every system and person that can read these locations may count as part of your cardholder data environment, …",
+      "decidedBy": "Your Qualified Security Assessor (QSA) or acquiring bank decides whether PCI DSS applies, and to which systems."
+    }
+  ]
+}
+```
+
+| `framework` | Raised by | What it says |
+|---|---|---|
+| `pci_dss` | `card`, `cvv`, `pin` | PCI DSS may apply to the systems that store the card data, that wrote it there (a contact center, an application) and that connect to them; left in place, they may count as part of the cardholder data environment. A `cvv` or `pin` adds that PCI DSS never allows keeping these after authorization, even encrypted (3.3.1). Decided by the QSA or acquiring bank |
+| `us_breach_notification` | `us_ssn`, `us_itin`, `account_number`, `card` | US state breach-notification laws may require notifying the people affected, and some regulators, if the data were exposed; the FTC Safeguards Rule may apply to a financial institution under the Gramm-Leach-Bliley Act. Many of these laws ease notification for data that was encrypted when exposed. Decided by counsel |
+| `hipaa` | `us_ssn`, `dob`, `account_number`, only with `healthData` | Kept with health information, these are protected health information under HIPAA for a covered entity or business associate; an exposure may have to be reported to the people affected and to HHS. Decided by the privacy officer or counsel |
+
+| Field | Meaning |
+|---|---|
+| `healthData` | The deployment said it holds health information: `HEALTH_DATA` `on` (AWS: the `HealthData` parameter; any other runner: the variable in its environment). The scanner detects no health information, so HIPAA is never suggested without it. With it off and a class HIPAA would name found, the report says how to turn it on |
+| `framework`, `name` | The rule or law, as an id and in words |
+| `classes` | The classes found that raise it, in the order above |
+| `locations` | How many findings hold those classes, every finding counted, kept in `findings` or not |
+| `unencryptedLocations` | How many of those sat under `atRestEncryption: none` |
+| `mayApply`, `ifLeft`, `decidedBy` | The scanner's own sentences: what may apply, what leaving the data in place may mean, and who decides. Constants: never a value, a name or a location |
+
+A rule whose classes were not found has no hint; a run that found nothing has
+`hints: []`. `HEALTH_DATA` changes no read and no finding.
 
 ### Coverage
 

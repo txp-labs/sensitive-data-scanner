@@ -45,7 +45,7 @@ Metadata:
         Parameters:
           [FindingsEventBusArn, ScheduleExpression, MaxBytesPerRun, MemorySize, LogRetentionInDays, FindingsRetentionDays]
       - Label: { default: "The standalone report (findings/report.html, #117)" }
-        Parameters: [ReportCta]
+        Parameters: [ReportCta, HealthData]
       - Label: { default: "Settings from Mermera (docs/mermera-config.md, #109)" }
         Parameters: [FindingsHttpsUrl, FindingsHmacKey]
 
@@ -438,6 +438,14 @@ Parameters:
       invitation to Mermera's early access. Empty (the default): yes, unless
       the scanner is connected to Mermera (FindingsHttpsUrl set, or a settings
       pull succeeded). true or false: always, or never.
+  HealthData:
+    Type: String
+    AllowedValues: ["off", "on"]
+    Default: "off"
+    Description: >-
+      HEALTH_DATA - whether this account holds health information. The scanner
+      detects none itself, so the report suggests HIPAA only when this is on
+      (findings schema 1.15, docs/FINDINGS.md). It changes no read.
   MemorySize:
     Type: Number
     Default: 3008
@@ -1843,6 +1851,7 @@ Resources:
           FINDINGS_HTTPS_URL: !Ref FindingsHttpsUrl
           MAX_BYTES_PER_RUN: !Ref MaxBytesPerRun
           REPORT_CTA: !Ref ReportCta
+          HEALTH_DATA: !Ref HealthData
           # The key's secret ARN only (#109): the key itself is never in the environment.
           FINDINGS_HMAC_KEY_SECRET: !If [HasMermeraKey, !Ref MermeraKeySecret, ""]
           # #109: what this role was granted, so a setting Mermera turns on that needs more

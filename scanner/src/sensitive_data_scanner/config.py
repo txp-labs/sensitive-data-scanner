@@ -602,6 +602,9 @@ class Config:
     # call to action for Mermera's early access. REPORT_CTA true or false decides; unset (None)
     # shows it unless the run is connected to Mermera (`report_cta_on`).
     report_cta: bool | None = None
+    # 1.15: the account holds health information (HEALTH_DATA, off by default), so the
+    # report's hints name HIPAA too. The scanner detects none itself; it changes no read.
+    health_data: bool = False
     settings_report: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
@@ -812,6 +815,7 @@ def read_config(env: Mapping[str, str] | None = None) -> Config:
         ),
         own_secret_arn=_own_secret(e.get("FINDINGS_HMAC_KEY_SECRET")),
         report_cta=_bool(e.get("REPORT_CTA")) if (e.get("REPORT_CTA") or "").strip() else None,
+        health_data=_bool(e.get("HEALTH_DATA")),
     )
     if config.eventbridge_replay and not (
         config.eventbridge_replay_queue_url and config.eventbridge_replay_queue_arn

@@ -5,7 +5,8 @@ spreadsheet a person filters, with no Mermera and no other tool:
 
 - `report.html`: one self-contained file. Inline CSS, no script, no font, no
   image and no request of any kind (its Content-Security-Policy forbids them),
-  readable offline, printable, light and dark. It shows what was scanned and
+  readable offline, printable, light and dark. It shows what the findings may
+  mean (the rules and laws they may bring into scope, schema 1.15), what was scanned and
   what was not, and why (each gap with the setting that would read it), the
   findings by data type, by store and by location, the storage-class inventory
   and cost-to-scan estimate (schema 1.13), the scanner version, the run and the
@@ -35,6 +36,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .safety import redact_digits
+from .scope import DISCLAIMER, HEALTH_CLASSES, scope_hints
 
 REPORT_HTML = "report.html"
 FINDINGS_CSV = "findings.csv"
@@ -516,6 +518,48 @@ def _summary(doc: Mapping[str, Any]) -> str:
     return f'<ul class="cards" aria-label="Summary">{lis}</ul>'
 
 
+def _in_sentence(name: str) -> str:
+    """A data type's label inside a sentence: lower case, except an acronym (US, PIN, SSN)."""
+    return name if name[:2].isupper() else name[:1].lower() + name[1:]
+
+
+def _may_mean(doc: Mapping[str, Any]) -> str:
+    """(1.15) The rules and laws the findings may bring into scope, and what leaving the data
+    in place may mean. A document older than 1.15 gets the hints its findings carry, with
+    health information not declared."""
+    findings = list(doc.get("findings") or [])
+    got = doc.get("scopeHints")
+    hints = got if isinstance(got, Mapping) else scope_hints(findings, health_data=False)
+    parts = [f"<p>{esc(DISCLAIMER)}</p>"]
+    for h in hints.get("hints") or []:
+        names = [_in_sentence(label(str(c))) for c in h.get("classes") or []]
+        classes = esc(
+            ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else "".join(names)
+        )
+        n = int(h.get("locations") or 0)
+        where_ = f"{num(n)} {'location holds' if n == 1 else 'locations hold'} {classes}"
+        unencrypted = int(h.get("unencryptedLocations") or 0)
+        if unencrypted:
+            verb = "is" if unencrypted == 1 else "are"
+            where_ += f"; {num(unencrypted)} of them {verb} not encrypted at rest"
+        parts.append(
+            f"<h3>{esc(h.get('name'))}</h3>"
+            f"<p>{esc(h.get('mayApply'))}</p>"
+            f"<p>{where_}.</p>"
+            f"<p><strong>If the data stays:</strong> {esc(h.get('ifLeft'))}</p>"
+            f'<p class="muted">{esc(h.get("decidedBy"))}</p>'
+        )
+    if not hints.get("hints"):
+        parts.append('<p class="muted">No finding suggests a rule or law.</p>')
+    if not hints.get("healthData") and any(f.get("class") in HEALTH_CLASSES for f in findings):
+        parts.append(
+            '<p class="muted">The scanner does not detect health information, so it never '
+            "suggests HIPAA on its own. If this environment holds health information, set "
+            "<code>HEALTH_DATA</code> to <code>on</code> and the next report adds it.</p>"
+        )
+    return "".join(parts)
+
+
 def _gaps(cov: list[Mapping[str, Any]]) -> list[list[str]]:
     rows: list[list[str]] = []
     skipped: dict[str, int] = {}
@@ -937,6 +981,8 @@ def report_html(doc: Mapping[str, Any], *, cta: bool = True) -> str:
         "</header><main>"
         '<h2 id="summary">Summary</h2>'
         f"{_summary(doc)}"
+        '<h2 id="may-mean">What these findings may mean</h2>'
+        f"{_may_mean(doc)}"
         '<h2 id="scanned">What was scanned</h2>'
         f"{_scanned(doc)}"
         '<h2 id="not-read">What was not read, and why</h2>'

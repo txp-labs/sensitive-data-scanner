@@ -118,7 +118,10 @@ The report holds no value, but it does name your buckets, keys, tables and
 log groups: treat the link, which anyone holding it can open until it
 expires, like the report itself.
 
-It shows what was scanned and what was not (each gap with the setting that
+It shows what the findings may mean (the rules and laws, such as PCI DSS,
+they may bring into scope, and what leaving the data in place may mean; set
+the `HealthData` parameter to `on` if the account holds health information, so
+HIPAA is included), what was scanned and what was not (each gap with the setting that
 would read it), the findings by data type, by store and by location (each
 with a link into your own console), the storage classes and what reading the
 cold ones would cost, and the scanner version and run. Each run replaces it

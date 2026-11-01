@@ -687,6 +687,7 @@ def run_scan(
             scan_mode={"aws": mode},
             vendor_coverage=[v.as_json() for v in vendor_coverage] if importer else None,
             settings=config.settings_report,
+            health_data=config.health_data,
         )
         new_state: dict[str, Any] = {
             "version": STATE_VERSION,

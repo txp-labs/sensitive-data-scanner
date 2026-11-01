@@ -7,6 +7,20 @@ bumps the minor version. Spec changes are listed under **Spec**.
 ## Unreleased
 
 ### Feature
+- **What the findings may mean**
+  ([#145](https://github.com/txp-labs/sensitive-data-scanner/issues/145)): each run says which rules and laws its
+  findings may bring into scope, and what leaving the data in place may mean
+  (findings schema **1.15**: `scopeHints`; `report.html`: *What these findings
+  may mean*, right after the summary). Card data suggests PCI DSS, and a card
+  verification code or PIN adds that PCI DSS never allows keeping it after
+  authorization; Social Security numbers, ITINs, account and card numbers
+  suggest US breach-notification laws (and the FTC Safeguards Rule for a
+  financial institution). HIPAA only with the new setting `HEALTH_DATA` (`off`,
+  the default; AWS: the `HealthData` parameter), since the scanner detects no
+  health information; with it off, a report holding SSNs or dates of birth
+  says how to turn it on. Each hint counts its locations, and those not
+  encrypted at rest, and names who decides: a hint, never a verdict, and not
+  legal advice ([FINDINGS.md](docs/FINDINGS.md#what-the-findings-may-mean-115)).
 - **Slack: opt-in auto-join of public channels, and a manifest for each choice**
   ([#139](https://github.com/txp-labs/sensitive-data-scanner/issues/139)): the
   new setting `SLACK_JOIN_PUBLIC_CHANNELS` (`off`, the default; set in the
