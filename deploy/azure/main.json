@@ -5,8 +5,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
-      "templateHash": "3082032689301773951"
+      "version": "0.48.1.52935",
+      "templateHash": "16822245676886107676"
     }
   },
   "parameters": {
@@ -161,6 +161,13 @@
         "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: a container whose last complete pass listed at least this many blobs is named in the run summary (recommendation: blob_inventory); 0 never names one."
       }
     },
+    "healthData": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "HEALTH_DATA (1.15): whether these accounts hold health information. The scanner detects none itself, so the report suggests HIPAA only when this is on. It changes no read."
+      }
+    },
     "findingsRetentionDays": {
       "type": "int",
       "defaultValue": 90,
@@ -243,8 +250,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "13048503866275887107"
+              "version": "0.48.1.52935",
+              "templateHash": "15664758201545179813"
             }
           },
           "parameters": {
@@ -335,6 +342,9 @@
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
+          "healthData": {
+            "value": "[parameters('healthData')]"
+          },
           "findingsRetentionDays": {
             "value": "[parameters('findingsRetentionDays')]"
           },
@@ -361,8 +371,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "10350486322093056314"
+              "version": "0.48.1.52935",
+              "templateHash": "621832648234058259"
             }
           },
           "parameters": {
@@ -467,6 +477,13 @@
               "minValue": 0,
               "metadata": {
                 "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container's last complete pass listed that name it in the run summary; 0 never."
+              }
+            },
+            "healthData": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "HEALTH_DATA (1.15): the report suggests HIPAA only when on."
               }
             },
             "findingsHttpsUrl": {
@@ -643,7 +660,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(equals(parameters('readKeyVaultSecrets'), null()), '', if(equals(parameters('readKeyVaultSecrets'), true()), 'on', 'off'))), createObject('name', 'AZURE_FILES_READ', 'value', if(equals(parameters('readFileShares'), null()), '', if(equals(parameters('readFileShares'), true()), 'on', 'off'))), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(equals(parameters('readLogAnalytics'), null()), '', if(equals(parameters('readLogAnalytics'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(equals(parameters('readDiskSnapshots'), null()), '', if(equals(parameters('readDiskSnapshots'), true()), 'on', 'off'))), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(equals(parameters('assignCosmosReaderPolicy'), null()), '', if(equals(parameters('assignCosmosReaderPolicy'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_COLD_TIER', 'value', if(equals(parameters('readColdTier'), null()), '', if(equals(parameters('readColdTier'), true()), 'on', 'off'))), createObject('name', 'AZURE_REHYDRATE_ARCHIVE', 'value', if(equals(parameters('rehydrateArchive'), null()), '', if(equals(parameters('rehydrateArchive'), true()), 'on', 'off'))), createObject('name', 'IAM_GRANTS', 'value', join(concat(createArray('none'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray('KEYVAULT_SECRETS_READ'), createArray()), if(equals(parameters('readFileShares'), true()), createArray('AZURE_FILES_READ'), createArray())), ',')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(equals(parameters('readKeyVaultSecrets'), null()), '', if(equals(parameters('readKeyVaultSecrets'), true()), 'on', 'off'))), createObject('name', 'AZURE_FILES_READ', 'value', if(equals(parameters('readFileShares'), null()), '', if(equals(parameters('readFileShares'), true()), 'on', 'off'))), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(equals(parameters('readLogAnalytics'), null()), '', if(equals(parameters('readLogAnalytics'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(equals(parameters('readDiskSnapshots'), null()), '', if(equals(parameters('readDiskSnapshots'), true()), 'on', 'off'))), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(equals(parameters('assignCosmosReaderPolicy'), null()), '', if(equals(parameters('assignCosmosReaderPolicy'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_COLD_TIER', 'value', if(equals(parameters('readColdTier'), null()), '', if(equals(parameters('readColdTier'), true()), 'on', 'off'))), createObject('name', 'AZURE_REHYDRATE_ARCHIVE', 'value', if(equals(parameters('rehydrateArchive'), null()), '', if(equals(parameters('rehydrateArchive'), true()), 'on', 'off'))), createObject('name', 'IAM_GRANTS', 'value', join(concat(createArray('none'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray('KEYVAULT_SECRETS_READ'), createArray()), if(equals(parameters('readFileShares'), true()), createArray('AZURE_FILES_READ'), createArray())), ',')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'HEALTH_DATA', 'value', if(parameters('healthData'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
@@ -719,8 +736,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "13048503866275887107"
+              "version": "0.48.1.52935",
+              "templateHash": "15664758201545179813"
             }
           },
           "parameters": {
@@ -817,6 +834,9 @@
           "blobInventoryMinObjects": {
             "value": "[parameters('blobInventoryMinObjects')]"
           },
+          "healthData": {
+            "value": "[parameters('healthData')]"
+          },
           "findingsRetentionDays": {
             "value": "[parameters('findingsRetentionDays')]"
           },
@@ -840,8 +860,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "10350486322093056314"
+              "version": "0.48.1.52935",
+              "templateHash": "621832648234058259"
             }
           },
           "parameters": {
@@ -946,6 +966,13 @@
               "minValue": 0,
               "metadata": {
                 "description": "AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container's last complete pass listed that name it in the run summary; 0 never."
+              }
+            },
+            "healthData": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "HEALTH_DATA (1.15): the report suggests HIPAA only when on."
               }
             },
             "findingsHttpsUrl": {
@@ -1122,7 +1149,7 @@
                         "cpu": "[json('1.0')]",
                         "memory": "2Gi"
                       },
-                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(equals(parameters('readKeyVaultSecrets'), null()), '', if(equals(parameters('readKeyVaultSecrets'), true()), 'on', 'off'))), createObject('name', 'AZURE_FILES_READ', 'value', if(equals(parameters('readFileShares'), null()), '', if(equals(parameters('readFileShares'), true()), 'on', 'off'))), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(equals(parameters('readLogAnalytics'), null()), '', if(equals(parameters('readLogAnalytics'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(equals(parameters('readDiskSnapshots'), null()), '', if(equals(parameters('readDiskSnapshots'), true()), 'on', 'off'))), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(equals(parameters('assignCosmosReaderPolicy'), null()), '', if(equals(parameters('assignCosmosReaderPolicy'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_COLD_TIER', 'value', if(equals(parameters('readColdTier'), null()), '', if(equals(parameters('readColdTier'), true()), 'on', 'off'))), createObject('name', 'AZURE_REHYDRATE_ARCHIVE', 'value', if(equals(parameters('rehydrateArchive'), null()), '', if(equals(parameters('rehydrateArchive'), true()), 'on', 'off'))), createObject('name', 'IAM_GRANTS', 'value', join(concat(createArray('none'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray('KEYVAULT_SECRETS_READ'), createArray()), if(equals(parameters('readFileShares'), true()), createArray('AZURE_FILES_READ'), createArray())), ',')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
+                      "env": "[concat(filter(createArray(createObject('name', 'SCANNER_SITE', 'value', parameters('site')), createObject('name', 'AZURE_MANAGEMENT_GROUP', 'value', parameters('managementGroup')), createObject('name', 'AZURE_SUBSCRIPTIONS', 'value', join(parameters('subscriptionIds'), ',')), createObject('name', 'STATE_CONTAINER_URL', 'value', format('{0}{1}', reference('state').primaryEndpoints.blob, variables('stateContainerName'))), createObject('name', 'DISCOVER', 'value', parameters('discover')), createObject('name', 'AZURE_DB_READ', 'value', parameters('readDatabases')), createObject('name', 'AZURE_DB_PRINCIPAL', 'value', if(empty(parameters('readDatabases')), '', parameters('jobName'))), createObject('name', 'KEYVAULT_SECRETS_READ', 'value', if(equals(parameters('readKeyVaultSecrets'), null()), '', if(equals(parameters('readKeyVaultSecrets'), true()), 'on', 'off'))), createObject('name', 'AZURE_FILES_READ', 'value', if(equals(parameters('readFileShares'), null()), '', if(equals(parameters('readFileShares'), true()), 'on', 'off'))), createObject('name', 'AZURE_LOG_ANALYTICS', 'value', if(equals(parameters('readLogAnalytics'), null()), '', if(equals(parameters('readLogAnalytics'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_SNAPSHOTS', 'value', if(equals(parameters('readDiskSnapshots'), null()), '', if(equals(parameters('readDiskSnapshots'), true()), 'on', 'off'))), createObject('name', 'AZURE_COSMOS_READER_POLICY', 'value', if(equals(parameters('assignCosmosReaderPolicy'), null()), '', if(equals(parameters('assignCosmosReaderPolicy'), true()), 'on', 'off'))), createObject('name', 'AZURE_READ_COLD_TIER', 'value', if(equals(parameters('readColdTier'), null()), '', if(equals(parameters('readColdTier'), true()), 'on', 'off'))), createObject('name', 'AZURE_REHYDRATE_ARCHIVE', 'value', if(equals(parameters('rehydrateArchive'), null()), '', if(equals(parameters('rehydrateArchive'), true()), 'on', 'off'))), createObject('name', 'IAM_GRANTS', 'value', join(concat(createArray('none'), if(equals(parameters('readKeyVaultSecrets'), true()), createArray('KEYVAULT_SECRETS_READ'), createArray()), if(equals(parameters('readFileShares'), true()), createArray('AZURE_FILES_READ'), createArray())), ',')), createObject('name', 'AZURE_BLOB_INVENTORY_MIN_OBJECTS', 'value', string(parameters('blobInventoryMinObjects'))), createObject('name', 'HEALTH_DATA', 'value', if(parameters('healthData'), 'on', 'off')), createObject('name', 'FINDINGS_EVENT_GRID_ENDPOINT', 'value', parameters('findingsEventGridEndpoint'))), lambda('s', not(empty(lambdaVariables('s').value)))), variables('pushEnv'))]"
                     }
                   ]
                 }
@@ -1195,8 +1222,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "4182979936167021088"
+              "version": "0.48.1.52935",
+              "templateHash": "8477492742938695846"
             }
           },
           "parameters": {
@@ -1260,8 +1287,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "16787977761516115870"
+              "version": "0.48.1.52935",
+              "templateHash": "11863200021454413269"
             }
           },
           "parameters": {

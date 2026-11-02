@@ -191,6 +191,12 @@ variable "state_bucket_name" {
   default     = ""
 }
 
+variable "health_data" {
+  description = "HEALTH_DATA (1.15): whether these accounts hold health information. The scanner detects none itself, so the report suggests HIPAA only when this is on. It changes no read."
+  type        = bool
+  default     = false
+}
+
 variable "findings_retention_days" {
   description = "Days the state bucket keeps per-run files (findings/runs/), including noncurrent versions; 0 keeps them forever (#119; replaces runs_retention_days). Template-only: not settable from Mermera."
   type        = number

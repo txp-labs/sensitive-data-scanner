@@ -309,7 +309,9 @@ def test_the_one_slack_write_is_the_opt_in_join() -> None:
 
 
 def _read_names() -> str:
-    return "\n".join(p.read_text() for p in sorted(SAAS.rglob("*.py")))
+    # HEALTH_DATA (1.15) is read by the core, where the scope hints are built.
+    scope = SCANNER / "core" / "src" / "sensitive_data_core" / "scope.py"
+    return "\n".join(p.read_text() for p in [*sorted(SAAS.rglob("*.py")), scope])
 
 
 def _envs(doc: Any) -> dict[str, str]:

@@ -39,6 +39,8 @@ param rehydrateArchive bool?
 @description('AZURE_BLOB_INVENTORY_MIN_OBJECTS: the blobs a container\'s last complete pass listed that name it in the run summary; 0 never.')
 @minValue(0)
 param blobInventoryMinObjects int = 1000000
+@description('HEALTH_DATA (1.15): the report suggests HIPAA only when on.')
+param healthData bool = false
 @secure()
 param findingsHttpsUrl string = ''
 @secure()
@@ -248,6 +250,10 @@ var settings = filter(
     {
       name: 'AZURE_BLOB_INVENTORY_MIN_OBJECTS'
       value: string(blobInventoryMinObjects)
+    }
+    {
+      name: 'HEALTH_DATA'
+      value: healthData ? 'on' : 'off'
     }
     {
       name: 'FINDINGS_EVENT_GRID_ENDPOINT'
