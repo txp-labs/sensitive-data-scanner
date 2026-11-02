@@ -128,6 +128,7 @@ locals {
     SCAN_MODE                 = var.scan_mode == null ? "" : var.scan_mode
     SDP_LOCATIONS             = local.vendor_mode ? join(",", var.sdp_locations) : ""
     GCS_INVENTORY_MIN_OBJECTS = tostring(var.gcs_inventory_min_objects)
+    HEALTH_DATA               = var.health_data ? "on" : "off"
     # The grants this deployment made (#109), so a setting Mermera turns on that needs a
     # role the service account lacks is reported gate: iam, never tried.
     IAM_GRANTS = join(",", concat(["none"], local.grants))

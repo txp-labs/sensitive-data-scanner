@@ -64,6 +64,8 @@ param findingsEventGridEndpoint string = ''
 @minValue(0)
 @maxValue(10000000000)
 param blobInventoryMinObjects int = 1000000
+@description('HEALTH_DATA (1.15): whether these accounts hold health information. The scanner detects none itself, so the report suggests HIPAA only when this is on. It changes no read.')
+param healthData bool = false
 @description('Days the job\'s state container keeps per-run files (findings/runs/) and their versions; 0 keeps them forever (#119). Template-only: not settable from Mermera.')
 @minValue(0)
 @maxValue(36500)
@@ -124,6 +126,7 @@ module centralJob 'modules/job.bicep' = if (central) {
     readColdTier: readColdTier
     rehydrateArchive: rehydrateArchive
     blobInventoryMinObjects: blobInventoryMinObjects
+    healthData: healthData
     findingsRetentionDays: findingsRetentionDays
     findingsHttpsUrl: findingsHttpsUrl
     findingsHmacKey: findingsHmacKey
@@ -184,6 +187,7 @@ module jobs 'modules/job.bicep' = [
     readColdTier: readColdTier
     rehydrateArchive: rehydrateArchive
       blobInventoryMinObjects: blobInventoryMinObjects
+      healthData: healthData
       findingsRetentionDays: findingsRetentionDays
       findingsHttpsUrl: findingsHttpsUrl
       findingsHmacKey: findingsHmacKey

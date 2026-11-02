@@ -6,6 +6,13 @@ bumps the minor version. Spec changes are listed under **Spec**.
 
 ## Unreleased
 
+### Feature
+- **`HEALTH_DATA` in every deploy template.** The Azure template takes
+  `healthData`, the Google Cloud module `health_data`, the SaaS ECS template
+  `HealthData`, and the Cloud Run, Container Apps and Kubernetes examples set
+  `HEALTH_DATA` (off, the default). In 0.7.0 only the AWS template had it; the
+  other runners already read the variable.
+
 ## 0.7.0 — 2026-11-01
 
 ### Feature

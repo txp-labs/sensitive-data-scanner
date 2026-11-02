@@ -24,6 +24,8 @@ REPO = Path(__file__).resolve().parents[2]
 DEPLOY = REPO / "deploy" / "gcp"
 CONFIG = REPO / "scanner" / "gcp" / "src" / "sensitive_data_gcp" / "config.py"
 RUNNER_CONFIG = REPO / "scanner" / "core" / "src" / "sensitive_data_core" / "runner_config.py"
+# HEALTH_DATA (1.15) is read by the core, where the scope hints are built.
+SCOPE = REPO / "scanner" / "core" / "src" / "sensitive_data_core" / "scope.py"
 
 # A permission reads when its verb (the last part) is one of these.
 READ_VERBS = frozenset(
@@ -276,7 +278,7 @@ def test_the_job_runs_as_the_scanner_account_and_every_setting_it_sets_is_read()
     names |= set(re.findall(r'"(FINDINGS_[A-Z_]+)"', source))
     assert {"SCANNER_SITE", "STATE_BUCKET", "FINDINGS_HTTPS_URL", "FINDINGS_HMAC_KEY"} <= names
     # IAM_GRANTS (#109) is read by the core's settings pull, beside the platform's config.
-    config = CONFIG.read_text() + RUNNER_CONFIG.read_text()
+    config = CONFIG.read_text() + RUNNER_CONFIG.read_text() + SCOPE.read_text()
     for name in names:
         assert f'"{name}"' in config, name
     image = t["variable"]["image"]

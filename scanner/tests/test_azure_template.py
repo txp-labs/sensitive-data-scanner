@@ -25,6 +25,8 @@ TEMPLATE = REPO / "deploy" / "azure" / "main.json"
 BICEP = REPO / "deploy" / "azure"
 CONFIG = REPO / "scanner" / "azure" / "src" / "sensitive_data_azure" / "config.py"
 RUNNER_CONFIG = REPO / "scanner" / "core" / "src" / "sensitive_data_core" / "runner_config.py"
+# HEALTH_DATA (1.15) is read by the core, where the scope hints are built.
+SCOPE = REPO / "scanner" / "core" / "src" / "sensitive_data_core" / "scope.py"
 
 # The built-in roles the template may assign, with their permissions as Azure defines
 # them (Azure built-in roles reference). A role not here fails the test; so does any
@@ -237,7 +239,7 @@ def test_the_job_runs_as_its_system_assigned_identity_with_no_secret_for_azure()
 def test_every_environment_variable_is_one_the_code_reads() -> None:
     names = set(re.findall(r"name: '([A-Z][A-Z0-9_]+)'", bicep("modules/job.bicep")))
     # IAM_GRANTS (#109) is read by the core's settings pull, beside the platform's config.
-    code = CONFIG.read_text() + RUNNER_CONFIG.read_text()
+    code = CONFIG.read_text() + RUNNER_CONFIG.read_text() + SCOPE.read_text()
     assert names >= {"SCANNER_SITE", "STATE_CONTAINER_URL", "AZURE_MANAGEMENT_GROUP"}
     for name in names:
         assert f'"{name}"' in code, name

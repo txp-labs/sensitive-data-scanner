@@ -912,7 +912,7 @@ same hints right after its summary, under *What these findings may mean*.
 
 | Field | Meaning |
 |---|---|
-| `healthData` | The deployment said it holds health information: `HEALTH_DATA` `on` (AWS: the `HealthData` parameter; any other runner: the variable in its environment). The scanner detects no health information, so HIPAA is never suggested without it. With it off and a class HIPAA would name found, the report says how to turn it on |
+| `healthData` | The deployment said it holds health information: `HEALTH_DATA` `on` (AWS and the SaaS ECS template: the `HealthData` parameter; Azure: `healthData`; Google Cloud: `health_data`; the other SaaS examples and the databases runner: the variable in their environment). The scanner detects no health information, so HIPAA is never suggested without it. With it off and a class HIPAA would name found, the report says how to turn it on |
 | `framework`, `name` | The rule or law, as an id and in words |
 | `classes` | The classes found that raise it, in the order above |
 | `locations` | How many findings hold those classes, every finding counted, kept in `findings` or not |

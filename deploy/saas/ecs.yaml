@@ -108,6 +108,14 @@ Parameters:
       bot is not in, then reads it; it posts nothing. It needs the auto-join
       manifest's channels:join scope (docs/SAAS.md, Choose your manifest).
       Set here only: Mermera never sets it.
+  HealthData:
+    Type: String
+    AllowedValues: ["off", "on"]
+    Default: "off"
+    Description: >-
+      HEALTH_DATA (1.15) - whether these services hold health information. The
+      scanner detects none itself, so the report suggests HIPAA only when this
+      is on. It changes no read. Set here only.
 
 Conditions:
   HasSlackToken: !Not [!Equals [!Ref SlackTokenSecretArn, ""]]
@@ -246,6 +254,7 @@ Resources:
             - Name: SLACK_AUDIT_TOKEN_FILE
               Value: !If [HasSlackAuditToken, /run/secrets/sds/slack-audit-token, ""]
             - { Name: SLACK_JOIN_PUBLIC_CHANNELS, Value: !Ref SlackJoinPublicChannels }
+            - { Name: HEALTH_DATA, Value: !Ref HealthData }
           LogConfiguration:
             LogDriver: awslogs
             Options:
